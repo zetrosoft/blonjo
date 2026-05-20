@@ -1,0 +1,104 @@
+version: '3.8'
+
+services:
+  # Database PostgreSQL (+ pgvector)
+  sajen-db:
+    container_name: sajen_postgres_db
+    image: ankane/pgvector:latest
+    platform: linux/arm64
+    environment:
+      POSTGRES_USER: sajen_user
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: blonjo_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - sajen_net
+    restart: unless-stopped
+
+  # Redis Cache & Task Queue
+  sajen-redis:
+    container_name: sajen_redis_cache
+    image: redis:alpine
+    platform: linux/arm64
+    ports:
+      - "6380:6379"
+    networks:
+      - sajen_net
+    restart: unless-stopped
+
+  # Core API Engine (FastAPI)
+  sajen-api:
+    container_name: sajen_backend_api
+    build:
+      context: ./sajen
+    platform: linux/arm64
+    ports:
+      - "8005:8005"
+    environment:
+      - DATABASE_URL=postgresql://sajen_user:secret@sajen-db:5432/blonjo_db
+      - REDIS_URL=redis://sajen-redis:6379/0
+      - CELERY_BROKER_URL=redis://sajen-redis:6379/0
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    depends_on:
+      - sajen-db
+      - sajen-redis
+    networks:
+      - sajen_net
+    volumes:
+      - ./sajen:/app
+      - uploads_data:/app/uploads
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8005", "--reload"]
+    restart: unless-stopped
+
+  # Agentic Worker (Celery, Ollama, Bizeto WA Hub)
+  sajen-worker:
+    container_name: sajen_agentic_worker
+    build:
+      context: ./sajen
+    platform: linux/arm64
+    environment:
+      - DATABASE_URL=postgresql://sajen_user:secret@sajen-db:5432/blonjo_db
+      - REDIS_URL=redis://sajen-redis:6379/0
+      - CELERY_BROKER_URL=redis://sajen-redis:6379/0
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    depends_on:
+      - sajen-api
+      - sajen-redis
+    networks:
+      - sajen_net
+    volumes:
+      - ./sajen:/app
+      - uploads_data:/app/uploads
+    command: ["celery", "-A", "app.core.celery_app", "worker", "--loglevel=info", "--pool=threads", "--concurrency=2"]
+    restart: unless-stopped
+
+  # Frontend Dashboard Admin & Kasir (Bun Engine)
+  blonjo-ui:
+    container_name: blonjo_frontend
+    build:
+      context: ./blonjo
+    platform: linux/arm64
+    ports:
+      - "7500:7500"
+    volumes:
+      - ./blonjo:/app
+      - /app/node_modules
+    networks:
+      - sajen_net
+    environment:
+      - VITE_API_URL=http://localhost:8005/api/v1
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+    command: ["pnpm", "run", "dev", "--host", "0.0.0.0", "--port", "7500"]
+    restart: unless-stopped
+
+networks:
+  sajen_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  uploads_data:

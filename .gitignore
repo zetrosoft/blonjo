@@ -1,0 +1,42 @@
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*.log
+
+# PNPM & Node
+node_modules/
+**/node_modules/
+.pnpm-store/
+**/.pnpm-store/
+dist/
+**/dist/
+.env
+.env.local
+.env.*.local
+
+# Python Cache & Virtual Environments
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+**/.venv/
+venv/
+**/venv/
+ENV/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS-specific
+.vscode/
+.idea/
+
+# Local uploads/logs
+sajen/uploads/
+**/uploads/
