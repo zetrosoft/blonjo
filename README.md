@@ -59,15 +59,15 @@ Salin file `.env.example` menjadi `.env` di masing-masing folder frontend (`blon
 ### Backend Configuration (`sajen/.env`)
 | Variable | Default Value | Deskripsi |
 | :--- | :--- | :--- |
-| `DATABASE_URL` | `postgresql://sajen_user:secret@sajen-db:5432/blonjo_db` | URL koneksi ke PostgreSQL. |
-| `REDIS_URL` | `redis://sajen-redis:6379/0` | URL koneksi Redis untuk cache. |
+| `DATABASE_URL` | `postgresql://<DB_USER>:<SECURE_PASSWORD>@sajen-db:5432/blonjo_db` | URL koneksi ke PostgreSQL (Ganti placeholder dengan kredensial aman). |
+| `REDIS_URL` | `redis://sajen-redis:6379/0` | URL koneksi Redis untuk cache internal. |
 | `CELERY_BROKER_URL` | `redis://sajen-redis:6379/0` | Broker Celery untuk antrean background task. |
-| `OLLAMA_HOST` | `http://host.docker.internal:11434` | Endpoint Ollama untuk local AI embeddings & OCR. |
+| `OLLAMA_HOST` | `http://sajen-ollama:11434` | Endpoint Ollama (Direkomendasikan terisolasi dalam private network Docker). |
 
 ### Frontend Configuration (`blonjo/.env`)
 | Variable | Default Value | Deskripsi |
 | :--- | :--- | :--- |
-| `VITE_API_URL` | `http://localhost:8005/api/v1` | Endpoint backend API yang diakses oleh frontend client. |
+| `VITE_API_URL` | `https://api.yourdomain.com/api/v1` | Endpoint backend API (Wajib gunakan HTTPS/Domain resmi di production). |
 
 ---
 
@@ -156,6 +156,8 @@ Buka peramban Anda dan arahkan ke [http://localhost:7500](http://localhost:7500)
 2.  **Network Isolation:** Koneksi database PostgreSQL dan cache Redis diisolasi penuh di dalam private network internal Docker. Hanya backend API yang diekspos ke publik dengan kontrol CORS yang ketat.
 3.  **Strict RBAC:** Pembagian izin akses super ketat antara peran **Owner/Admin**, **Manager**, dan **Cashier/Staff** untuk melindungi pencatatan keuangan bisnis sensitif.
 4.  **Local-First Privacy:** Data akuntansi retail tetap terjamin kedaulatannya di server pribadi Anda, tanpa adanya pengiriman analitik maupun data transaksi ke cloud luar.
+5.  **HTTPS Reverse Proxy (Wajib Production):** Akses frontend dan backend di lingkungan produksi wajib menggunakan Reverse Proxy (seperti Nginx atau Caddy) untuk menangani enkripsi SSL (HTTPS) demi menghindari pencurian kredensial via penyadapan jaringan (MitM).
+6.  **API Docs Hardening:** Dokumentasi API (Swagger di `/api/docs` dan Redoc di `/api/redoc`) wajib dinonaktifkan di lingkungan produksi melalui pendeteksian variabel lingkungan `ENV=production` untuk mencegah kebocoran skema database.
 
 ---
 
