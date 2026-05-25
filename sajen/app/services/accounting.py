@@ -1,9 +1,8 @@
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
-from app.models.accounting import Account, Transaction, JournalEntry, AccountType, TransactionType
+from app.models.accounting import Account, Transaction, JournalEntry, TransactionType
 from app.schemas.accounting import TransactionCreate
 from datetime import datetime
-from decimal import Decimal
 
 def _validate_double_entry(entries: list[JournalEntry]) -> bool:
     """Ensure debits and credits match exactly."""
@@ -11,16 +10,19 @@ def _validate_double_entry(entries: list[JournalEntry]) -> bool:
     total_credit = sum(entry.credit for entry in entries)
     return total_debit == total_credit
 
-def _generate_reference_no(db: Session, trans_type: TransactionType) -> str:
-    """Generate a simple sequential reference number like PUR-2026-0001"""
+def _generate_reference_no(db: Session, trans_type: TransactionType, tenant_id: int) -> str:
+    """Generate a simple sequential reference number like PUR-2026-0001 isolated per tenant"""
     prefix = trans_type.name[:3].upper()
     year = datetime.now().year
     
-    # Very basic sequence generation (in production, use a dedicated sequence table)
-    count = db.query(Transaction).filter(Transaction.transaction_type == trans_type).count()
+    # Sequence generation filtered by tenant_id
+    count = db.query(Transaction).filter(
+        Transaction.tenant_id == tenant_id,
+        Transaction.transaction_type == trans_type
+    ).count()
     return f"{prefix}-{year}-{(count + 1):04d}"
 
-def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, user_id: int) -> Transaction:
+def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, user_id: int, tenant_id: int) -> Transaction:
     """
     Core business logic: Creates a transaction header and its double-entry journal lines.
     Validates that the journal entries balance before committing.
@@ -44,9 +46,10 @@ def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, us
         )
 
     # 2. Create Transaction Header
-    ref_no = trans_in.reference_no or _generate_reference_no(db, trans_in.transaction_type)
+    ref_no = trans_in.reference_no or _generate_reference_no(db, trans_in.transaction_type, tenant_id)
     
     db_transaction = Transaction(
+        tenant_id=tenant_id,
         transaction_date=trans_in.transaction_date,
         reference_no=ref_no,
         description=trans_in.description,
@@ -59,11 +62,14 @@ def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, us
 
     # 3. Create Journal Entries
     for entry_in in trans_in.entries:
-        # Validate account exists
-        account = db.query(Account).filter(Account.id == entry_in.account_id).first()
+        # Validate account exists and belongs to the same tenant
+        account = db.query(Account).filter(
+            Account.id == entry_in.account_id,
+            Account.tenant_id == tenant_id
+        ).first()
         if not account:
             db.rollback()
-            raise HTTPException(status_code=404, detail=f"Account ID {entry_in.account_id} not found")
+            raise HTTPException(status_code=404, detail=f"Account ID {entry_in.account_id} not found or belongs to another tenant.")
             
         db_entry = JournalEntry(
             transaction_id=db_transaction.id,

@@ -1,168 +1,162 @@
-# BLONJO & SAJEN - Ekosistem Akuntansi Retail & AI untuk UMKM
+# BLONJO & SAJEN - Retail Accounting & AI Ecosystem for SMEs
 
-**BLONJO & SAJEN** adalah ekosistem manajemen keuangan dan retail modern untuk UMKM dengan standar industri tinggi. Platform ini menggabungkan aktivitas transaksi retail riil di garda depan (**BLONJO**) dan kecanggihan mesin otomasi backend asinkronus di balik layar (**SAJEN**). Platform ini mengintegrasikan pembukuan keuangan terstandarisasi **PSAK UMKM**, teknologi **AI OCR** lokal menggunakan **Ollama**, pencarian semantik dengan **pgvector**, serta asisten AI interaktif via **WhatsApp (Bizeto)**.
-
----
-
-## 🚀 Fitur Utama
-
-*   **Double-Entry Accounting (PSAK UMKM):** Pencatatan otomatis untuk Chart of Accounts (COA), Jurnal Umum, Buku Besar, Neraca, hingga Laporan Laba Rugi yang akurat (dikelola oleh **BLONJO**).
-*   **AI OCR & Few-Shot Learning:** Ekstraksi data dari nota belanja secara lokal menggunakan Ollama. Sistem belajar secara cerdas dari setiap koreksi input pengguna untuk meningkatkan akurasi OCR selanjutnya (dikelola secara senyap oleh **SAJEN**).
-*   **Vector Search & Semantic Search:** Pencarian produk cerdas berbasis makna semantik menggunakan ekstensi `pgvector` di PostgreSQL.
-*   **WhatsApp AI Assistant (Bizeto):** Agen penjualan dan FAQ otomatis yang dapat membalas chat pelanggan secara profesional dalam Bahasa Indonesia maupun English.
-*   **Sovereign & Local-First Storage:** Seluruh data sensitif, dokumen, serta model AI disimpan secara mandiri dan aman di infrastruktur lokal tanpa ketergantungan pada SaaS pihak ketiga.
+**BLONJO & SAJEN** is a modern financial and retail management ecosystem for SMEs with high industry standards. The platform combines real-world retail transaction activities at the front-end (**BLONJO**) with sophisticated asynchronous backend automation engines behind the scenes (**SAJEN**). It integrates standardized bookkeeping based on **PSAK UMKM**, local **AI OCR** technology using **Ollama**, semantic search with **pgvector**, and interactive AI assistants via **WhatsApp (Bizeto)**.
 
 ---
 
-## 🛠️ Stack Teknologi
+## 🚀 Key Features
 
-| Komponen | Teknologi | Deskripsi |
+*   **Double-Entry Accounting (PSAK UMKM):** Automated recording for Chart of Accounts (COA), General Journal, General Ledger, Balance Sheet, and accurate Profit & Loss Statements (managed by **BLONJO**).
+*   **AI OCR & Few-Shot Learning:** Data extraction from shopping receipts locally using Ollama. The system intelligently learns from every user input correction to improve future OCR accuracy (silently managed by **SAJEN**).
+*   **Vector Search & Semantic Search:** Intelligent product search based on semantic meaning using the `pgvector` extension in PostgreSQL.
+*   **WhatsApp AI Assistant (Bizeto):** Automated sales agent and FAQ that can reply to customer chats professionally in both Indonesian and English.
+*   **Sovereign & Local-First Storage:** All sensitive data, documents, and AI models are stored independently and securely on local infrastructure without dependence on third-party SaaS.
+
+---
+
+## 🛠️ Tech Stack
+
+| Component | Technology | Description |
 | :--- | :--- | :--- |
-| **Frontend (BLONJO)** | React, TypeScript, Vite, Tailwind CSS, shadcn/ui, Zustand, react-i18next | UI modern dengan responsive design, transisi super halus, dual-bahasa (ID/EN), serta support Dark/Light mode. |
-| **Backend & Workers (SAJEN)** | Python, FastAPI, SQLAlchemy, Alembic, Celery, Uvicorn | REST API berkinerja tinggi berbasis asynchronous programming dengan parsing data cepat via Pydantic. |
-| **Database & Cache** | PostgreSQL (+ pgvector), Redis | Penyimpanan relasional terstruktur terintegrasi pencarian vektor serta task queue asinkronus yang andal. |
-| **Artificial Intelligence** | Ollama (Local AI & Embeddings) | Inferensi AI mandiri tanpa API Key eksternal untuk OCR nota belanja dan pencarian semantik. |
+| **Frontend (BLONJO)** | React, TypeScript, Vite, Tailwind CSS, shadcn/ui, Zustand, react-i18next | Modern UI with responsive design, smooth transitions, dual-language (ID/EN) support, and Dark/Light mode. |
+| **Backend & Workers (SAJEN)** | Python, FastAPI, SQLAlchemy, Alembic, Celery, Uvicorn | High-performance REST API based on asynchronous programming with fast data parsing via Pydantic. |
+| **Database & Cache** | PostgreSQL (+ pgvector), Redis | Structured relational storage integrated with vector search and reliable asynchronous task queues. |
+| **Artificial Intelligence** | Ollama (Local AI & Embeddings) | Sovereign AI inference without external API keys for receipt OCR and semantic search. |
 
 ---
 
-## 📁 Struktur Proyek
+## 📁 Project Structure
 
 ```text
 blonjo-sajen/
-├── docs/                   # Dokumentasi Arsitektur Sistem & Database
-├── sajen/                  # FastAPI Application (Python) - Sisi Backend & AI
+├── sajen/                  # FastAPI Application (Python) - Backend & AI side
 │   ├── app/
-│   │   ├── core/           # Konfigurasi, Keamanan, dan Engine Database
+│   │   ├── core/           # Configuration, Security, and Database Engine
 │   │   ├── api/            # API Route Handlers (v1)
-│   │   ├── models/         # SQLAlchemy / SQLModel Definisi Tabel
+│   │   ├── models/         # SQLAlchemy / SQLModel Table Definitions
 │   │   ├── schemas/        # Pydantic Validation Schemas
 │   │   ├── services/       # Business Logic (Accounting, OCR, AI)
 │   │   └── workers/        # Celery Background Task Definitions
 │   ├── migrations/         # Alembic Database Migrations
-│   └── pyproject.toml      # Manajemen Dependensi Python (UV)
-├── blonjo/                 # React + Vite Application - Sisi Frontend & UI
+│   └── pyproject.toml      # Python Dependency Management (UV)
+├── blonjo/                 # React + Vite Application - Frontend & UI side
 │   ├── src/
 │   │   ├── components/     # Reusable UI Components (shadcn/ui)
 │   │   ├── store/          # Zustand State Management
 │   │   └── pages/          # Layout & Dashboard Views
-│   └── package.json        # Node Dependensi (Dijalankan dengan Bun)
-├── docker-compose.yml      # Orkestrasi Docker (API, DB, Redis, Worker)
-└── README.md               # Dokumentasi Utama Proyek
+│   └── package.json        # Node Dependencies (Run with Bun)
+├── docker-compose.yml      # Docker Orchestration (API, DB, Redis, Worker)
+└── README.md               # Main Project Documentation
 ```
 
 ---
 
-## ⚙️ Variabel Lingkungan (Environment Variables)
+## ⚙️ Environment Variables
 
-Salin file `.env.example` menjadi `.env` di masing-masing folder frontend (`blonjo`) dan backend (`sajen`). Berikut adalah parameter penting yang digunakan:
+Copy the `.env.example` file to `.env` in both the frontend (`blonjo`) and backend (`sajen`) folders. Below are the key parameters used:
 
 ### Backend Configuration (`sajen/.env`)
-| Variable | Default Value | Deskripsi |
+| Variable | Default Value | Description |
 | :--- | :--- | :--- |
-| `DATABASE_URL` | `postgresql://<DB_USER>:<SECURE_PASSWORD>@sajen-db:5432/blonjo_db` | URL koneksi ke PostgreSQL (Ganti placeholder dengan kredensial aman). |
-| `REDIS_URL` | `redis://sajen-redis:6379/0` | URL koneksi Redis untuk cache internal. |
-| `CELERY_BROKER_URL` | `redis://sajen-redis:6379/0` | Broker Celery untuk antrean background task. |
-| `OLLAMA_HOST` | `http://sajen-ollama:11434` | Endpoint Ollama (Direkomendasikan terisolasi dalam private network Docker). |
+| `DATABASE_URL` | `postgresql://<DB_USER>:<SECURE_PASSWORD>@sajen-db:5432/blonjo_db` | PostgreSQL connection URL (Replace placeholders with secure credentials). |
+| `REDIS_URL` | `redis://sajen-redis:6379/0` | Redis connection URL for internal cache. |
+| `CELERY_BROKER_URL` | `redis://sajen-redis:6379/0` | Celery Broker for background task queues. |
+| `OLLAMA_HOST` | `http://sajen-ollama:11434` | Ollama endpoint (Recommended to be isolated within a private Docker network). |
 
 ### Frontend Configuration (`blonjo/.env`)
-| Variable | Default Value | Deskripsi |
+| Variable | Default Value | Description |
 | :--- | :--- | :--- |
-| `VITE_API_URL` | `https://api.yourdomain.com/api/v1` | Endpoint backend API (Wajib gunakan HTTPS/Domain resmi di production). |
+| `VITE_API_URL` | `https://api.yourdomain.com/api/v1` | Backend API endpoint (HTTPS/Official domain required in production). |
 
 ---
 
-## 📦 Panduan Instalasi & Eksekusi
+## 📦 Installation & Execution Guide
 
-### Metode A: Menggunakan Docker Compose (Direkomendasikan)
-Metode ini adalah cara paling praktis untuk menjalankan seluruh ekosistem aplikasi beserta semua dependensinya (Database, Cache, API, Workers, dan Frontend) dalam satu perintah terisolasi.
+### Method A: Using Docker Compose (Recommended)
+This method is the most practical way to run the entire application ecosystem and all its dependencies (Database, Cache, API, Workers, and Frontend) in a single isolated command.
 
-1.  **Pastikan Docker Desktop sudah berjalan di perangkat Anda.**
-2.  **Jalankan aplikasi menggunakan Docker Compose:**
+1.  **Ensure Docker Desktop is running on your device.**
+2.  **Run the application using Docker Compose:**
     ```bash
     docker-compose up --build
     ```
-3.  **Akses Layanan:**
+3.  **Access Services:**
     *   **Frontend Dashboard (BLONJO):** [http://localhost:7500](http://localhost:7500)
     *   **Backend API Documentation (SAJEN Swagger):** [http://localhost:8005/api/docs](http://localhost:8005/api/docs)
-    *   **Backend API Alternative Docs (SAJEN Redoc):** [http://localhost:8005/api/redoc](http://localhost:8005/api/redoc)
 
 ---
 
-### Metode B: Menjalankan Secara Lokal (Untuk Development)
-Jika Anda ingin melakukan debugging atau pengembangan kode secara real-time, jalankan masing-masing servis secara manual:
+### Method B: Running Locally (For Development)
+If you wish to debug or develop code in real-time, run each service manually:
 
-#### 1. Prasyarat Sistem
-*   **Node.js** & **Bun** (Pengelola paket frontend wajib)
-*   **Python 3.11+** dengan **uv** (Untuk dependensi backend super cepat)
-*   **PostgreSQL** (Wajib terpasang modul `pgvector`)
-*   **Redis** berjalan di port `6380` (Atau sesuaikan dengan `.env`)
-*   **Ollama** terinstal secara lokal dan servernya aktif.
+#### 1. System Prerequisites
+*   **Node.js** & **Bun** (Required frontend package manager)
+*   **Python 3.11+** with **uv** (For super-fast backend dependencies)
+*   **PostgreSQL** (Must have the `pgvector` module installed)
+*   **Redis** running on port `6380` (Or adjust according to `.env`)
+*   **Ollama** installed locally and the server is active.
 
-#### 2. Setup Database PostgreSQL (+ pgvector)
-Pastikan database Anda sudah memiliki modul pgvector terinstal secara global atau di-enable pada database target:
+#### 2. PostgreSQL Setup (+ pgvector)
+Ensure your database has the pgvector module installed globally or enabled on the target database:
 ```sql
 CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-#### 3. Setup Backend API & Workers (SAJEN)
-Gunakan pengelola paket **uv** untuk menginstal modul Python secara efisien:
+#### 3. Backend API & Workers Setup (SAJEN)
+Use the **uv** package manager to install Python modules efficiently:
 ```bash
-# Masuk ke direktori sajen
 cd sajen
-
-# Buat virtual environment & aktifkan
 uv venv
 source .venv/bin/activate
-
-# Install semua dependensi
 uv pip install -e .
-
-# Jalankan migrasi database
 alembic upgrade head
-
-# Jalankan seeding data awal Chart of Accounts (COA)
 python -m app.seed_coa
-
-# Jalankan server FastAPI backend
 uvicorn app.main:app --host 0.0.0.0 --port 8005 --reload
 ```
 
-Di terminal terpisah, pastikan virtual environment tetap aktif dan jalankan Celery Worker untuk pemrosesan OCR:
+In a separate terminal, ensure the virtual environment remains active and run the Celery Worker for OCR processing:
 ```bash
 cd sajen
 source .venv/bin/activate
 celery -A app.core.celery_app worker --loglevel=info --pool=threads --concurrency=2
 ```
 
-#### 4. Setup Frontend React (BLONJO)
-Sesuai aturan kerja proyek, kita **wajib** menggunakan **Bun** untuk mengelola paket dan menjalankan frontend secara lokal:
+#### 4. Frontend React Setup (BLONJO)
+According to project rules, we **must** use **Bun** to manage packages and run the frontend locally:
 ```bash
-# Masuk ke direktori blonjo
 cd blonjo
-
-# Install dependensi menggunakan Bun
 bun install
-
-# Jalankan server development frontend
 bun run dev --port 7500
 ```
-Buka peramban Anda dan arahkan ke [http://localhost:7500](http://localhost:7500) untuk mengakses dasbor admin **Blonjo**.
+Open your browser and navigate to [http://localhost:7500](http://localhost:7500) to access the **Blonjo** admin dashboard.
 
 ---
 
-## 🔒 Standar Keamanan & Docker Best Practices
+## 🔒 Security Standards & Docker Best Practices
 
-1.  **Non-Root Execution:** Seluruh container Docker berjalan di bawah user non-root demi memitigasi risiko pembajakan akses host kernel (container escape).
-2.  **Network Isolation:** Koneksi database PostgreSQL dan cache Redis diisolasi penuh di dalam private network internal Docker. Hanya backend API yang diekspos ke publik dengan kontrol CORS yang ketat.
-3.  **Strict RBAC:** Pembagian izin akses super ketat antara peran **Owner/Admin**, **Manager**, dan **Cashier/Staff** untuk melindungi pencatatan keuangan bisnis sensitif.
-4.  **Local-First Privacy:** Data akuntansi retail tetap terjamin kedaulatannya di server pribadi Anda, tanpa adanya pengiriman analitik maupun data transaksi ke cloud luar.
-5.  **HTTPS Reverse Proxy (Wajib Production):** Akses frontend dan backend di lingkungan produksi wajib menggunakan Reverse Proxy (seperti Nginx atau Caddy) untuk menangani enkripsi SSL (HTTPS) demi menghindari pencurian kredensial via penyadapan jaringan (MitM).
-6.  **API Docs Hardening:** Dokumentasi API (Swagger di `/api/docs` dan Redoc di `/api/redoc`) wajib dinonaktifkan di lingkungan produksi melalui pendeteksian variabel lingkungan `ENV=production` untuk mencegah kebocoran skema database.
+1.  **Non-Root Execution:** All Docker containers run under a non-root user to mitigate the risk of kernel host hijacking (container escape).
+2.  **Network Isolation:** PostgreSQL and Redis connections are fully isolated within the internal private Docker network. Only the API backend is exposed publicly with strict CORS controls.
+3.  **Strict RBAC:** Highly restrictive access permission levels between **Owner/Admin**, **Manager**, and **Cashier/Staff** roles to protect sensitive financial business records.
+4.  **Local-First Privacy:** Retail accounting data remains sovereign on your private server, without any analytics or transaction data sent to external clouds.
+5.  **HTTPS Reverse Proxy (Production Mandatory):** Access to frontend and backend in production environments must use a Reverse Proxy (such as Nginx or Caddy) to handle SSL encryption (HTTPS) to prevent credential theft via network sniffing (MitM).
+6.  **API Docs Hardening:** API documentation (Swagger at `/api/docs` and Redoc at `/api/redoc`) must be disabled in production environments by detecting the `ENV=production` environment variable to prevent database schema leaks.
 
 ---
 
-## 🛡️ Aturan Kontribusi & Quality Assurance
+## 🛡️ Contribution Rules & Quality Assurance
 
-*   **Frontend Guidelines:** Wajib mematuhi konfigurasi ESLint & Prettier. Hindari penggunaan pustaka pihak ketiga jika elemen visual tersebut dapat dibangun dengan memanfaatkan primitif **shadcn/ui** atau **Radix UI**.
-*   **Backend Guidelines:** Pastikan kode Anda lolos validasi static analysis menggunakan **Ruff** dan type checker **MyPy** sebelum melakukan commit atau submit Pull Request.
-*   **No Axios:** Komunikasi client-server pada frontend wajib menggunakan native `fetch` dengan memanfaatkan utility error handling yang sudah disediakan, bukan Axios.
+*   **Frontend Guidelines:** Must adhere to ESLint & Prettier configurations. Avoid using third-party libraries if visual elements can be built using **shadcn/ui** or **Radix UI** primitives.
+*   **Backend Guidelines:** Ensure your code passes static analysis validation using **Ruff** and the **MyPy** type checker before committing or submitting a Pull Request.
+*   **No Axios:** Client-server communication on the frontend must use native `fetch` with provided error handling utilities, rather than Axios.
+
+---
+
+## 💰 Support & Donations
+If you find this project valuable for your retail infrastructure or AI implementations, please consider supporting the developer:
+
+[![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg?style=for-the-badge&logo=paypal)](https://www.paypal.com/paypalme/iswanputera)
+
+---
+
+## 📧 Contact & Support
+For technical inquiries, contact the Lead Software Architect or open an issue in the project tracker.

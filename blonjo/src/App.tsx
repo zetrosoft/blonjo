@@ -6,6 +6,7 @@ import Dashboard from './pages/Dashboard';
 import ChartOfAccounts from './pages/ChartOfAccounts';
 import OCRScan from './pages/OCRScan';
 import Transactions from './pages/Transactions';
+import Settings from './pages/Settings';
 import { Toaster } from 'sonner';
 
 export default function App() {
@@ -22,7 +23,7 @@ export default function App() {
           <Route path="/transactions" element={<Transactions />} />
           {/* Future routes will go here */}
           <Route path="/insights" element={<div className="p-4">Insights Page</div>} />
-          <Route path="/settings" element={<div className="p-4">Settings Page</div>} />
+          <Route path="/settings" element={<Settings />} />
         </Route>
       </Routes>
     </>

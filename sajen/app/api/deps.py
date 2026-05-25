@@ -47,8 +47,58 @@ def get_current_user(session: SessionDep, token: TokenDep) -> User:
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 def get_current_active_admin(current_user: CurrentUser) -> User:
-    if current_user.role != UserRole.ADMIN:
+    if current_user.role != UserRole.ADMIN and not current_user.is_superuser:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="The user doesn't have enough privileges"
         )
     return current_user
+
+def check_role(allowed_roles: list[UserRole]):
+    """
+    Dependency to dynamically check if the authenticated user has one of the allowed roles.
+    """
+    def role_checker(current_user: CurrentUser) -> User:
+        if current_user.is_superuser:
+            return current_user
+        if current_user.role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Anda tidak memiliki hak akses yang cukup untuk melakukan tindakan ini."
+            )
+        return current_user
+    return role_checker
+
+def require_saas_owner(current_user: CurrentUser) -> User:
+    """
+    Dependency to ensure the current authenticated user is the system-wide SaaS Superuser (Owner).
+    """
+    if not current_user.is_superuser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tindakan ini hanya dapat dilakukan oleh SaaS Owner."
+        )
+    return current_user
+
+class PermissionChecker:
+    """
+    FastAPI dependency to dynamically check for a specific permission in the user's role set.
+    Allows SaaS Owner bypass automatically.
+    """
+    def __init__(self, required_permission: str):
+        self.required_permission = required_permission
+
+    def __call__(self, current_user: CurrentUser) -> User:
+        if current_user.is_superuser:
+            return current_user
+            
+        # Extract all permission names from all roles assigned to this user
+        user_permissions = {p.name for role in current_user.roles for p in role.permissions}
+        
+        if self.required_permission not in user_permissions:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Anda tidak memiliki izin akses yang diperlukan: {self.required_permission}"
+            )
+        return current_user
+
+

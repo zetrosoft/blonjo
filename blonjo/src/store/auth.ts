@@ -7,6 +7,7 @@ interface User {
   full_name: string | null;
   role: 'admin' | 'manager' | 'cashier';
   preferred_language: string;
+  is_superuser?: boolean;
 }
 
 interface AuthState {

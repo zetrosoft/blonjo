@@ -20,10 +20,17 @@ dependencies = [
     "email-validator>=2.1.0",
     "python-multipart>=0.0.9",
     "ollama>=0.1.7",
+    "pytesseract>=0.3.10",
+    "opencv-python-headless>=4.9.0.80",
+    "shapely>=2.0.3",
+    "pgvector>=0.2.4",
 ]
 
 [tool.uv]
 managed = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
 
 [build-system]
 requires = ["hatchling"]

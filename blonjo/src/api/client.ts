@@ -1,6 +1,6 @@
 import { useAuthStore } from '../store/auth';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8005/api/v1';
+const API_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8005/api/v1';
 
 export class ApiError extends Error {
   status: number;
@@ -15,9 +15,9 @@ export class ApiError extends Error {
 
 export const fetchClient = async (endpoint: string, options: RequestInit = {}) => {
   const token = useAuthStore.getState().token;
-  const headers: HeadersInit = {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...options.headers,
+    ...(options.headers as Record<string, string>),
   };
 
   if (token) {
@@ -26,12 +26,12 @@ export const fetchClient = async (endpoint: string, options: RequestInit = {}) =
 
   // If body is FormData (e.g. for OAuth2PasswordRequestForm), don't set Content-Type
   if (options.body instanceof FormData) {
-    delete (headers as Record<string, string>)['Content-Type'];
+    delete headers['Content-Type'];
   }
 
   const response = await fetch(`${API_URL}${endpoint}`, {
     ...options,
-    headers,
+    headers: headers as HeadersInit,
   });
 
   if (!response.ok) {
@@ -51,5 +51,18 @@ export const fetchClient = async (endpoint: string, options: RequestInit = {}) =
     throw new ApiError(response.status, message, errorData);
   }
 
-  return response.json();
+  if (response.status === 204) {
+    return null;
+  }
+
+  const responseText = await response.text();
+  if (!responseText) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(responseText);
+  } catch (err) {
+    return responseText;
+  }
 };
