@@ -43,6 +43,15 @@ class TransactionType(str, enum.Enum):
     SALES = "sales"
     EXPENSE = "expense"
     MANUAL = "manual"
+    INCOME = "income"
+    OPERATIONAL = "operational"
+    NON_CASH_OUT = "non_cash_out"
+    NON_CASH_IN = "non_cash_in"
+    CAPITAL = "capital"
+
+class TransactionStatus(str, enum.Enum):
+    DRAFT = "draft"
+    POSTED = "posted"
 
 class Transaction(Base):
     """
@@ -56,6 +65,7 @@ class Transaction(Base):
     reference_no = Column(String(50), index=True, nullable=True) # Removed global unique for multi-tenant isolation
     description = Column(Text, nullable=False)
     transaction_type = Column(Enum(TransactionType), default=TransactionType.MANUAL, nullable=False)
+    status = Column(Enum(TransactionStatus), default=TransactionStatus.DRAFT, nullable=False, index=True)
     
     # Store the net total of the transaction for quick reference
     total_amount = Column(Numeric(15, 2), default=0.00, nullable=False)
@@ -65,6 +75,7 @@ class Transaction(Base):
     tenant = relationship("Tenant")
 
     entries = relationship("JournalEntry", back_populates="transaction", cascade="all, delete-orphan")
+    inventory_logs = relationship("InventoryLog", back_populates="transaction", cascade="all, delete-orphan")
 
     # Prevent duplicate reference numbers for the same tenant
     __table_args__ = (

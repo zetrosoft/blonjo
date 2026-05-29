@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { fetchClient, ApiError } from '../api/client';
+import apiClient, { ApiError } from '../api/client';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Button } from '../components/ui/button';
@@ -164,8 +164,8 @@ export default function OCRScan() {
 
   const loadTasks = async () => {
     try {
-      const data = await fetchClient('/ocr/tasks');
-      setTasks(data);
+      const data = await apiClient.get('/ocr/tasks');
+      setTasks(data as any);
     } catch (err) {
       console.error("Failed to load OCR tasks", err);
     } finally {
@@ -175,8 +175,8 @@ export default function OCRScan() {
 
   const loadAccounts = async () => {
     try {
-      const data = await fetchClient('/finance/accounts');
-      setAccounts(data);
+      const data = await apiClient.get('/finance/accounts');
+      setAccounts(data as any);
     } catch (err) {
       console.error("Failed to load accounts", err);
     }
@@ -205,7 +205,7 @@ export default function OCRScan() {
     const formData = new FormData();
     formData.append('file', file);
     try {
-      await fetchClient('/ocr/upload', { method: 'POST', body: formData });
+      await apiClient.post('/ocr/upload', formData);
       toast.success("File uploaded successfully.");
       await loadTasks(); // Reload immediately after success
     } catch (error) {
@@ -219,7 +219,7 @@ export default function OCRScan() {
   const handleDeleteTask = async () => {
     if (!taskToDelete) return;
     try {
-      await fetchClient(`/ocr/tasks/${taskToDelete}`, { method: 'DELETE' });
+      await apiClient.delete(`/ocr/tasks/${taskToDelete}`);
       toast.success("Task deleted successfully");
       loadTasks();
     } catch (error) {
@@ -305,14 +305,13 @@ export default function OCRScan() {
           name: item.name,
           qty: Number(item.qty || 0),
           price: Number(item.price || 0),
-          total: Number(item.qty || 0) * Number(item.price || 0)
+          total: Number(item.qty || 0) * Number(item.price || 0),
+          contact_name: item.contact_name,
+          contact_address: item.contact_address
         }))
       };
 
-      await fetchClient(`/ocr/tasks/${selectedTask.id}/correct`, {
-        method: 'POST',
-        body: JSON.stringify(ocrCorrectionPayload)
-      });
+      await apiClient.post(`/ocr/tasks/${selectedTask.id}/correct`, ocrCorrectionPayload);
 
       // 2. Save transaction to finance journal
       const cashAccount = accounts.find(a => a.code === '1-1000'); 
@@ -334,10 +333,7 @@ export default function OCRScan() {
         ]
       };
 
-      await fetchClient('/finance/transactions', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
+      await apiClient.post('/finance/transactions', payload);
 
       toast.success("Transaction recorded and AI learned from correction!");
       setSelectedTask(null);

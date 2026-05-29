@@ -5,14 +5,50 @@ import re
 from celery import shared_task
 from sqlalchemy.orm import Session
 from ollama import Client
+import google.generativeai as genai
 
 from app.core.database import SessionLocal
 from app.core.config import settings
+from app.models.tenant import Tenant 
+from app.models.user import User 
+from app.models.role import Role 
+from app.models.permission import Permission 
+from app.models.setting import AppSetting 
 from app.models.ocr import OCRTask, OCRStatus, OCRFeedback
-from app.models.user import User # Register User model in SQLAlchemy metadata
+from app.models.accounting import Transaction, Account, JournalEntry
+from app.models.inventory import InventoryLog, Product, Contact
+
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://host.docker.internal:11434")
 ollama_client = Client(host=OLLAMA_HOST)
+
+def call_gemini_fallback(prompt: str) -> str:
+    """
+    Fallback mechanism menggunakan Google Gemini API jika Ollama offline.
+    Mencoba Gemini 1.5 Flash (Primary) lalu Gemini 2.0 Flash (Secondary).
+    """
+    if not settings.GOOGLE_API_KEY:
+        raise Exception("Ollama offline dan GOOGLE_API_KEY tidak dikonfigurasi di .env")
+    
+    genai.configure(api_key=settings.GOOGLE_API_KEY)
+    
+    # Percobaan 1: Gemini 1.5 Flash
+    try:
+        print(f"Attempting Fallback with {settings.GEMINI_PRIMARY_MODEL}...")
+        model = genai.GenerativeModel(settings.GEMINI_PRIMARY_MODEL)
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        print(f"Primary Gemini ({settings.GEMINI_PRIMARY_MODEL}) failed: {str(e)}")
+        
+        # Percobaan 2: Gemini 2.0 Flash
+        try:
+            print(f"Attempting Fallback with {settings.GEMINI_SECONDARY_MODEL}...")
+            model = genai.GenerativeModel(settings.GEMINI_SECONDARY_MODEL)
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e2:
+            raise Exception(f"Seluruh jalur AI Gagal. Gemini Secondary Error: {str(e2)}")
 
 def get_ocr_text(file_path: str) -> str:
     """
@@ -103,60 +139,90 @@ def process_receipt_ocr(self, task_id: int):
 
         # 2. Jalankan Ekstraksi Teks menggunakan PyTesseract
         raw_ocr_text = get_ocr_text(task.file_path)
+        task.raw_ocr_text = raw_ocr_text
+        db.commit()
         
         # Simpan teks mentah sementara jika diperlukan untuk audit / logging
         print(f"--- PyTesseract Raw Extraction for Task {task_id} ---\n{raw_ocr_text}\n----------------------------------")
 
-        # 3. Build few-shot examples from past corrections
-        few_shot_section = _build_few_shot_examples(db)
+        # 3. RAG: Ambil contoh pembelajaran (Few-Shot)
+        rag_examples = ""
+        # Coba ambil dari Golden Template (Settings -> AI Training)
+        from app.models.ocr import AILearningTemplate
+        golden_templates = db.query(AILearningTemplate).filter(AILearningTemplate.tenant_id == task.user.tenant_id).order_by(AILearningTemplate.id.desc()).limit(2).all()
+        
+        if golden_templates:
+            rag_examples += "\nBerikut adalah TEMPLATE EMAS (Golden Templates) untuk referensi pembelajaran utama:\n"
+            for gt in golden_templates:
+                rag_examples += f"--- CONTOH TEMPLATE ---\nTEKS MENTAH: {str(gt.raw_ocr_text)[:500]}\nPANDUAN JSON YANG BENAR:\n{gt.expected_output}\n"
 
-        # 4. Susun prompt akuntansi kaya terstruktur (temperature 0.25)
+        # Coba ambil dari koreksi manual (Transactions)
+        past_tasks = db.query(OCRTask).filter(
+            OCRTask.status == OCRStatus.CORRECTED,
+            OCRTask.corrected_data != None,
+            OCRTask.user_id == task.user_id # Idealnya tenant_id, tapi di sini pakai user_id sbg proxy
+        ).order_by(OCRTask.id.desc()).limit(2).all()
+
+        if past_tasks:
+            rag_examples += "\nBerikut adalah riwayat koreksi transaksi sebelumnya untuk referensi tambahan:\n"
+            for pt in past_tasks:
+                rag_examples += f"--- CONTOH KOREKSI ---\nTEKS MENTAH: {str(pt.raw_ocr_text)[:500]}\nHASIL JSON YANG BENAR:\n{json.dumps(pt.corrected_data, indent=2)}\n"
+
+        # 4. Susun prompt akuntansi kaya terstruktur (temperature 0.2)
         prompt = f"""Anda adalah sistem ekstraksi data terstruktur tingkat lanjut. Tugas Anda adalah menganalisis teks mentah hasil OCR dari sebuah nota/struk belanja dan mengubahnya menjadi format JSON yang valid dan terstruktur.
 
 Aturan Ekstraksi:
 1. Ekstrak semua informasi penting sesuai dengan skema JSON yang diberikan di bawah ini.
-2. Format tanggal transaksi wajib YYYY-MM-DD. Jika tidak terlihat atau tidak valid, gunakan tanggal hari ini.
-3. Jenis transaksi (transaction_type) wajib bernilai salah satu dari: "purchase", "sales", atau "expense".
-4. Output harus berupa string JSON murni yang valid tanpa ada penjelasan pembuka/penutup, atau tag markdown tambahan.
+2. Identifikasi Tanggal Transaksi, Nomor Nota/Invoice, dan Alamat Merchant dengan teliti.
+3. Format tanggal transaksi wajib YYYY-MM-DD. Jika tidak terlihat, gunakan tanggal hari ini.
+4. Jenis transaksi (transaction_type) wajib bernilai salah satu dari: "purchase", "sales", atau "expense".
+5. Output harus berupa string JSON murni yang valid.
+{rag_examples}
 
 Skema JSON yang harus dipatuhi secara mutlak:
 {{
   "transaction": {{
     "date": "YYYY-MM-DD",
-    "invoice_number": "Nomor invoice/nota/struk belanja (string atau null jika tidak ada)"
+    "invoice_number": "Nomor invoice/nota/struk (string atau null)"
   }},
   "merchant": {{
-    "brand_name": "Nama merchant/toko/warung (string atau null)"
+    "brand_name": "Nama toko/merchant (string atau null)",
+    "address": "Alamat lengkap toko jika ada (string atau null)"
   }},
   "summary": {{
-    "grand_total": angka total transaksi belanja (number)
+    "grand_total": angka total transaksi (number)
   }},
   "transaction_type": "purchase, sales, atau expense",
   "items": [
     {{
-      "product_name": "Nama produk/barang belanja (string)",
-      "quantity": angka jumlah kuantitas barang (number),
-      "unit_price": angka harga satuan barang (number),
-      "subtotal": angka subtotal total harga barang tersebut (number, quantity * unit_price)
+      "product_name": "Nama barang (string)",
+      "quantity": angka jumlah (number),
+      "unit_price": angka harga satuan (number),
+      "subtotal": angka total harga barang (number)
     }}
   ]
 }}
 
 Teks Mentah Hasil OCR Nota:
 {raw_ocr_text}
-{few_shot_section}
+{rag_examples}
 """
 
-        # 5. Kirim teks mentah hasil OCR ke Ollama Qwen2.5 3B
-        response = ollama_client.generate(
-            model=settings.OLLAMA_LLM_MODEL,
-            prompt=prompt,
-            stream=False,
-            options={"temperature": 0.25}
-        )
+
+        # 5. Kirim teks mentah hasil OCR ke AI (Ollama dengan Fallback Gemini)
+        try:
+            response = ollama_client.generate(
+                model=settings.OLLAMA_LLM_MODEL,
+                prompt=prompt,
+                stream=False,
+                options={"temperature": 0.25}
+            )
+            raw_output = response['response']
+        except Exception as ollama_err:
+            print(f"Ollama Error/Offline: {str(ollama_err)}. Mengalihkan ke Gemini Fallback...")
+            raw_output = call_gemini_fallback(prompt)
         
         # 6. Parse output JSON tangguh
-        raw_output = response['response']
         clean_json_str = _clean_json_output(raw_output)
         extracted_data = json.loads(clean_json_str)
 
@@ -165,7 +231,11 @@ Teks Mentah Hasil OCR Nota:
         task.status = OCRStatus.COMPLETED
         db.commit()
         
-        return {"status": "success", "task_id": task_id}
+        return {
+            "status": "success", 
+            "task_id": task_id, 
+            "ai_provider": "gemini" if "ollama_err" in locals() else "ollama"
+        }
 
     except json.JSONDecodeError as e:
         task.status = OCRStatus.FAILED

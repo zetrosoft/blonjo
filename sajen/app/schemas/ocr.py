@@ -15,11 +15,21 @@ class OCRTaskResponse(BaseModel):
     id: int
     file_name: str
     status: OCRStatus
+    raw_ocr_text: Optional[str] = None
     extracted_data: Optional[Any] = None
     error_message: Optional[str] = None
     corrected_data: Optional[Any] = None
     created_at: datetime
     updated_at: datetime
 
+    model_config = ConfigDict(from_attributes=True)
+
+class AILearningTemplateCreate(BaseModel):
+    file_name: Optional[str] = None
+    raw_ocr_text: str
+    expected_output: str
+
+class AILearningTemplateResponse(AILearningTemplateCreate):
+    id: int
     model_config = ConfigDict(from_attributes=True)
 

@@ -24,6 +24,7 @@ dependencies = [
     "opencv-python-headless>=4.9.0.80",
     "shapely>=2.0.3",
     "pgvector>=0.2.4",
+    "google-generativeai>=0.8.3",
 ]
 
 [tool.uv]

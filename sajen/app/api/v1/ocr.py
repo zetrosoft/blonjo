@@ -5,8 +5,8 @@ from fastapi import APIRouter, HTTPException, status, UploadFile
 from typing import List
 
 from app.api.deps import SessionDep, CurrentUser
-from app.models.ocr import OCRTask, OCRFeedback, OCRStatus
-from app.schemas.ocr import OCRTaskResponse, OCRCorrectionRequest
+from app.models.ocr import OCRTask, OCRFeedback, OCRStatus, AILearningTemplate
+from app.schemas.ocr import OCRTaskResponse, OCRCorrectionRequest, AILearningTemplateCreate, AILearningTemplateResponse
 from app.workers.ocr_worker import process_receipt_ocr
 
 router = APIRouter()
@@ -35,13 +35,34 @@ def _map_rich_schema_to_frontend(extracted_data: dict) -> dict:
     transaction_sec = extracted_data.get("transaction") or {}
     merchant_sec = extracted_data.get("merchant") or {}
     summary_sec = extracted_data.get("summary") or {}
+    tx_type = extracted_data.get("transaction_type") or "purchase"
     
+    tgl_nota = transaction_sec.get("date") or extracted_data.get("transaction_date") or ""
+    supplier_nota = merchant_sec.get("brand_name") or extracted_data.get("description") or "Supplier"
+    invoice_no = transaction_sec.get("invoice_number") or ""
+    alamat_nota = merchant_sec.get("address") or ""
+    
+    # Ambil list item untuk deskripsi
+    items_list = extracted_data.get("items") or []
+    item_names = [i.get("product_name") or i.get("name") or "Item" for i in items_list[:3]]
+    item_str = ", ".join(item_names)
+    if len(items_list) > 3:
+        item_str += f" dan {len(items_list)-3} item lainnya"
+
+    # Template Deskripsi sesuai permintaan user
+    if tx_type == "purchase":
+        desc = f"Belanja tanggal {tgl_nota} di {supplier_nota}:\n {item_str}"
+        if alamat_nota:
+            desc += f"\nAlamat: {alamat_nota}"
+    else:
+        desc = supplier_nota
+
     mapped_data = {
-        "transaction_date": transaction_sec.get("date") or extracted_data.get("transaction_date") or "",
-        "reference_no": transaction_sec.get("invoice_number") or extracted_data.get("reference_no"),
-        "description": merchant_sec.get("brand_name") or extracted_data.get("description") or "Pembelian Nota",
+        "transaction_date": tgl_nota,
+        "reference_no": invoice_no,
+        "description": desc,
         "total_amount": summary_sec.get("grand_total") or extracted_data.get("total_amount") or 0.0,
-        "transaction_type": extracted_data.get("transaction_type") or "purchase",
+        "transaction_type": tx_type,
         "items": []
     }
     
@@ -59,7 +80,9 @@ def _map_rich_schema_to_frontend(extracted_data: dict) -> dict:
             "name": item.get("product_name") or "",
             "qty": item.get("quantity") or 1,
             "price": item.get("unit_price") or 0.0,
-            "total": item.get("subtotal") or 0.0
+            "total": item.get("subtotal") or 0.0,
+            "contact_name": supplier_nota,
+            "contact_address": alamat_nota
         })
         
     return mapped_data
@@ -252,4 +275,50 @@ def correct_ocr_task(
         task.corrected_data = _map_rich_schema_to_frontend(task.corrected_data)
         
     return task
+
+# === AI TRAINING TEMPLATES ENDPOINTS ===
+
+@router.get("/training-templates", response_model=List[AILearningTemplateResponse])
+def get_training_templates(session: SessionDep, current_user: CurrentUser):
+    return session.query(AILearningTemplate).filter(AILearningTemplate.tenant_id == current_user.tenant_id).order_by(AILearningTemplate.id.desc()).all()
+
+@router.post("/training-templates", response_model=AILearningTemplateResponse)
+def create_training_template(template_in: AILearningTemplateCreate, session: SessionDep, current_user: CurrentUser):
+    db_template = AILearningTemplate(
+        tenant_id=current_user.tenant_id,
+        file_name=template_in.file_name,
+        raw_ocr_text=template_in.raw_ocr_text,
+        expected_output=template_in.expected_output
+    )
+    session.add(db_template)
+    session.commit()
+    session.refresh(db_template)
+    return db_template
+
+@router.delete("/training-templates/{template_id}")
+def delete_training_template(template_id: int, session: SessionDep, current_user: CurrentUser):
+    template = session.query(AILearningTemplate).filter(
+        AILearningTemplate.id == template_id,
+        AILearningTemplate.tenant_id == current_user.tenant_id
+    ).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    session.delete(template)
+    session.commit()
+    return {"message": "Deleted successfully"}
+
+@router.post("/training-templates/extract-raw")
+async def extract_raw_text(file: UploadFile, session: SessionDep, current_user: CurrentUser):
+    """Hanya mengekstrak teks mentah dari gambar untuk keperluan Form Training AI"""
+    import pytesseract
+    from PIL import Image
+    import io
+    
+    contents = await file.read()
+    try:
+        img = Image.open(io.BytesIO(contents))
+        raw_text = pytesseract.image_to_string(img, lang="ind+eng")
+        return {"file_name": file.filename, "raw_text": raw_text}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Gagal memproses gambar: {str(e)}")
 

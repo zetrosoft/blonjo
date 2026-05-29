@@ -1,7 +1,9 @@
+import axios, { AxiosError, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '../store/auth';
 
 const API_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8005/api/v1';
 
+// Custom error class to maintain compatibility if needed, though axios has its own
 export class ApiError extends Error {
   status: number;
   data: any;
@@ -10,59 +12,71 @@ export class ApiError extends Error {
     super(message);
     this.status = status;
     this.data = data;
+    this.name = 'ApiError';
   }
 }
 
-export const fetchClient = async (endpoint: string, options: RequestInit = {}) => {
-  const token = useAuthStore.getState().token;
-  const headers: Record<string, string> = {
+const apiClient = axios.create({
+  baseURL: API_URL,
+  headers: {
     'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string>),
-  };
+  },
+});
 
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-
-  // If body is FormData (e.g. for OAuth2PasswordRequestForm), don't set Content-Type
-  if (options.body instanceof FormData) {
-    delete headers['Content-Type'];
-  }
-
-  const response = await fetch(`${API_URL}${endpoint}`, {
-    ...options,
-    headers: headers as HeadersInit,
-  });
-
-  if (!response.ok) {
-    let errorData;
-    try {
-      errorData = await response.json();
-    } catch {
-      errorData = null;
+// Request Interceptor
+apiClient.interceptors.request.use(
+  (config: InternalAxiosRequestConfig) => {
+    const token = useAuthStore.getState().token;
+    if (token && config.headers) {
+      config.headers.Authorization = `Bearer ${token}`;
     }
-    const message = errorData?.detail || response.statusText || 'An error occurred';
-    
-    // Auto logout on 401
-    if (response.status === 401) {
+
+    // Handle FormData automatically (Axios does this, but we ensure Content-Type is removed)
+    if (config.data instanceof FormData) {
+      delete config.headers['Content-Type'];
+    }
+
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// Response Interceptor
+apiClient.interceptors.response.use(
+  (response: AxiosResponse) => {
+    return response.data;
+  },
+  (error: AxiosError) => {
+    const status = error.response?.status;
+    const data = error.response?.data as any;
+    const message = data?.detail || error.message || 'An unexpected error occurred';
+
+    // Auto logout on 401 Unauthorized
+    if (status === 401) {
       useAuthStore.getState().logout();
     }
-    
-    throw new ApiError(response.status, message, errorData);
-  }
 
-  if (response.status === 204) {
-    return null;
+    // Wrap in ApiError for backward compatibility or more structured handling
+    return Promise.reject(new ApiError(status || 500, message, data));
   }
+);
 
-  const responseText = await response.text();
-  if (!responseText) {
-    return null;
-  }
+/**
+ * Legacy wrapper for fetchClient to minimize changes in existing components
+ * @deprecated Use apiClient directly for better axios features
+ */
+export const fetchClient = async (endpoint: string, options: any = {}) => {
+  const { method = 'GET', body, headers, ...rest } = options;
+  
+  const config = {
+    method,
+    url: endpoint,
+    data: body,
+    headers,
+    ...rest,
+  };
 
-  try {
-    return JSON.parse(responseText);
-  } catch (err) {
-    return responseText;
-  }
+  return apiClient(config);
 };
+
+export default apiClient;

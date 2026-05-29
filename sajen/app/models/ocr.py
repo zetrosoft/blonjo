@@ -18,6 +18,7 @@ class OCRTask(Base):
     file_name = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
     status = Column(Enum(OCRStatus), default=OCRStatus.PENDING, nullable=False)
+    raw_ocr_text = Column(Text, nullable=True) # Hasil mentah dari Tesseract
     extracted_data = Column(JSON, nullable=True)
     error_message = Column(String, nullable=True)
     corrected_data = Column(JSON, nullable=True)
@@ -42,7 +43,23 @@ class OCRFeedback(Base):
     ocr_task = relationship("OCRTask", back_populates="feedback_items")
 
 
+class AILearningTemplate(Base):
+    """
+    Golden dataset for AI Few-Shot Learning.
+    Dipisahkan dari transaksi harian untuk menjaga kualitas pembelajaran.
+    """
+    __tablename__ = "ai_learning_templates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
+    file_name = Column(String, nullable=True)
+    raw_ocr_text = Column(Text, nullable=False)
+    expected_output = Column(Text, nullable=False) # Panduan/JSON dari user
+    
+    tenant = relationship("Tenant")
+
 class CommodityTrend(Base):
+
     """
     Cached price data from web search & historical internal analysis.
     Digunakan untuk prediksi tren harga komoditas.

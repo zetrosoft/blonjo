@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # Ollama Model Config
     OLLAMA_LLM_MODEL: str = "qwen2.5:3b"
 
+    # Google Gemini Config (Fallback)
+    GOOGLE_API_KEY: str | None = None
+    GEMINI_PRIMARY_MODEL: str = "gemini-1.5-flash"
+    GEMINI_SECONDARY_MODEL: str = "gemini-2.0-flash-exp" # Latest experimental/flash
+
     @field_validator("SECRET_KEY", mode="after")
     @classmethod
     def validate_secret_key(cls, v: str) -> str:

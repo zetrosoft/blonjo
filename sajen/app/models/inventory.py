@@ -39,6 +39,7 @@ class InventoryLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
     transaction_id = Column(Integer, ForeignKey("transactions.id"), nullable=True, index=True)
+    contact_id = Column(Integer, ForeignKey("contacts.id"), nullable=True, index=True)
     quantity = Column(Numeric(15, 2), nullable=False)
     price_per_unit = Column(Numeric(15, 2), nullable=False)
     
@@ -46,7 +47,8 @@ class InventoryLog(Base):
     log_type = Column(String(10), nullable=False)
 
     product = relationship("Product", back_populates="inventory_logs")
-    transaction = relationship("Transaction")
+    transaction = relationship("Transaction", back_populates="inventory_logs")
+    contact = relationship("Contact")
 
 
 class Contact(Base):
@@ -61,6 +63,7 @@ class Contact(Base):
     name = Column(String(100), nullable=False, index=True)
     contact_type = Column(String(20), nullable=False) # "customer" or "supplier"
     phone = Column(String(20), nullable=True)
+    address = Column(String(255), nullable=True)
     
     # Store current balance (receivables for customer, payables for supplier)
     current_balance = Column(Numeric(15, 2), default=0.00, nullable=False)
