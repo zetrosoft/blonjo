@@ -154,19 +154,6 @@ Open your browser and navigate to [http://localhost:7500](http://localhost:7500)
 ## 💰 Support & Donations
 If you find this project valuable for your retail infrastructure or AI implementations, please consider supporting the developer:
 
-[![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg?style=for-the-badge&logo=paypal)](https://paypal.me/bijaktechno)
-
----
-
-## 📧 Contact & Support
-For technical inquiries, contact the Lead Software Architect or open an issue in the project tracker.
-r than Axios.
-
----
-
-## 💰 Support & Donations
-If you find this project valuable for your retail infrastructure or AI implementations, please consider supporting the developer:
-
 [![Donate via PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg?style=for-the-badge&logo=paypal)](https://www.paypal.com/paypalme/iswanputera)
 
 ---
