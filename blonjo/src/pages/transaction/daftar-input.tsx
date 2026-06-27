@@ -498,18 +498,22 @@ export default function DaftarInputPage() {
                   </div>
                 </div>
                 {/* Menampilkan Supplier jika ada inventory_logs */}
-                {selectedTx.inventory_logs?.find((l: any) => l.contact)?.contact && (
-                  <div className="col-span-1 md:col-span-2 pt-2 border-t border-zinc-200/50 dark:border-zinc-800/50">
-                    <div className="flex items-center gap-2.5 text-xs">
-                      <Users className="w-4 h-4 text-primary/70" />
-                      <span className="font-semibold text-zinc-700 dark:text-zinc-300">{t('label_supplier_customer')}:</span>
-                      <span className="text-zinc-900 dark:text-zinc-100 font-bold">{selectedTx.inventory_logs.find((l: any) => l.contact).contact.name}</span>
-                      <Badge variant="secondary" className="text-[9px] h-4 px-1.5 uppercase">
-                        {selectedTx.inventory_logs.find((l: any) => l.contact).contact.contact_type}
-                      </Badge>
+                {(() => {
+                  const contactLog = selectedTx.inventory_logs?.find((l: any) => l.contact);
+                  if (!contactLog?.contact) return null;
+                  return (
+                    <div className="col-span-1 md:col-span-2 pt-2 border-t border-zinc-200/50 dark:border-zinc-800/50">
+                      <div className="flex items-center gap-2.5 text-xs">
+                        <Users className="w-4 h-4 text-primary/70" />
+                        <span className="font-semibold text-zinc-700 dark:text-zinc-300">{t('label_supplier_customer')}:</span>
+                        <span className="text-zinc-900 dark:text-zinc-100 font-bold">{contactLog.contact.name}</span>
+                        <Badge variant="secondary" className="text-[9px] h-4 px-1.5 uppercase">
+                          {contactLog.contact.contact_type}
+                        </Badge>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
                 <div className="col-span-1 md:col-span-2 pt-2 border-t border-zinc-200/50 dark:border-zinc-800/50">
                   <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('label_description')}:</p>
                   <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200 mt-1 bg-background p-2.5 rounded border border-zinc-100 dark:border-zinc-850">
