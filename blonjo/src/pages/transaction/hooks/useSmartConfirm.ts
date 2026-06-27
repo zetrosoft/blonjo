@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { fetchClient } from '../../../api/client';
 import type { Account, JournalEntry } from '../types';
 import type { ParsedTransaction } from '../../../lib/smartParser';
+import { formatRp } from '../../../lib/utils';
 
 /**
  * useSmartConfirm — Kalkulasi journal entry otomatis dan submit transaksi Smart Note.
@@ -138,7 +139,7 @@ export function useSmartConfirm(
       }
 
       toast.success('Transaksi berhasil disimpan', {
-        description: `${parsedResult.type_label} — Rp ${parsedResult.total_amount.toLocaleString('id-ID')} (${status})`,
+        description: `${parsedResult.type_label} — ${formatRp(parsedResult.total_amount)} (${status})`,
       });
       setIsOpen(false);
       onSuccess();

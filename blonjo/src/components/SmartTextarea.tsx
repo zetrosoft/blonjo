@@ -16,6 +16,7 @@ interface SmartTextareaProps {
   className?: string;
   disabled?: boolean;
   minRows?: number;
+  processor?: "local" | "gemini" | "ollama" | null;
 }
 
 const BULLET = '• ';
@@ -27,6 +28,7 @@ export function SmartTextarea({
   className,
   disabled,
   minRows = 10,
+  processor = null,
 }: SmartTextareaProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
 
@@ -109,6 +111,16 @@ export function SmartTextarea({
 
   return (
     <div className="relative group">
+      {processor && (
+        <div 
+          className={cn(
+            "absolute top-3 right-3 w-3 h-3 rounded-full z-10 shadow-sm border border-black/10 transition-colors",
+            processor === 'ollama' ? "bg-blue-500" : 
+            processor === 'gemini' ? "bg-rose-500" : "bg-yellow-400"
+          )}
+          title={`Processor: ${processor.toUpperCase()}`}
+        />
+      )}
       <textarea
         ref={ref}
         value={value}

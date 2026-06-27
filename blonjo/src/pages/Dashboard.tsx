@@ -4,9 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { 
   DollarSign, ReceiptText, Loader2, TrendingUp, ShoppingBag 
 } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { cn, formatRp } from '../lib/utils';
 import { fetchClient } from '../api/client';
-import { formatRp } from '../lib/smartParser';
 
 // ─── Chart.js Integration ────────────────────────────────────────
 import {
@@ -38,6 +37,7 @@ interface DashboardSummary {
   total_revenue: number;
   total_expense: number;
   net_profit: number;
+  cash_balance: number;
   recent_transactions: any[];
   chart_data: any[];
 }
@@ -86,11 +86,11 @@ export default function Dashboard() {
       bgColor: "bg-rose-500/10"
     },
     {
-      title: t('net_profit'),
-      amount: `Rp ${formatRp(data?.net_profit || 0)}`,
+      title: 'Saldo Kas',
+      amount: `Rp ${formatRp(data?.cash_balance || 0)}`,
       icon: TrendingUp,
-      color: (data?.net_profit || 0) >= 0 ? "text-sky-500" : "text-rose-500",
-      bgColor: (data?.net_profit || 0) >= 0 ? "bg-sky-500/10" : "bg-rose-500/10"
+      color: (data?.cash_balance || 0) >= 0 ? "text-sky-500" : "text-rose-500",
+      bgColor: (data?.cash_balance || 0) >= 0 ? "bg-sky-500/10" : "bg-rose-500/10"
     }
   ];
 

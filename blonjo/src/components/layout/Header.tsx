@@ -143,7 +143,7 @@ export function Header({ onMenuClick }: HeaderProps) {
               </BreadcrumbItem>
               <BreadcrumbSeparator />
               <BreadcrumbItem>
-                <BreadcrumbPage>{t(`setting_${tabKey}`)}</BreadcrumbPage>
+                <BreadcrumbPage>{tabKey === 'aitraining' ? t('setting_ai_training') : t(`setting_${tabKey}`)}</BreadcrumbPage>
               </BreadcrumbItem>
             </>
           ) : (

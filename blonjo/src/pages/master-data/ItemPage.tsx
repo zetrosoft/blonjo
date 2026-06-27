@@ -4,8 +4,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Badge } from '../../components/ui/badge';
-import { Search, Plus, Edit2, Trash2, Package, TrendingUp, AlertTriangle, RefreshCw } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { Search, Plus, Edit2, Trash2, Package, TrendingUp, AlertTriangle, RefreshCw, Loader2 } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../../components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
+import { Label } from '../../components/ui/label';
+import { cn, formatRp } from '../../lib/utils';
 import { toast } from 'sonner';
 import { fetchClient } from '../../api/client';
 
@@ -19,6 +22,7 @@ interface Item {
   purchase_price: number;
   sell_price: number;
   status: 'active' | 'low_stock' | 'out_of_stock';
+  has_transactions: boolean;
 }
 
 export default function ItemPage() {
@@ -26,6 +30,16 @@ export default function ItemPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<Item | null>(null);
+  const [formData, setFormData] = useState({
+    sku: '',
+    name: '',
+    base_unit: 'pcs',
+    category_id: ''
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const loadItems = async () => {
     setLoading(true);
@@ -34,8 +48,8 @@ export default function ItemPage() {
       const data = await fetchClient('/inventory/products');
       if (Array.isArray(data)) {
         const mappedItems: Item[] = data.map((prod: any) => {
-          const stock = Number(prod.current_stock);
-          const minStock = Number(prod.min_stock_level);
+          const stock = Number(prod.current_stock) || 0;
+          const minStock = Number(prod.min_stock_level) || 0;
           let status: Item['status'] = 'active';
           if (stock === 0) {
             status = 'out_of_stock';
@@ -48,10 +62,11 @@ export default function ItemPage() {
             name: prod.name,
             category: 'Umum',
             stock,
-            uom: prod.unit,
-            purchase_price: 0, // Data harga tidak ada di model Product
-            sell_price: 0,
+            uom: prod.base_unit || 'pcs',
+            purchase_price: prod.purchase_price || 0,
+            sell_price: prod.sell_price || 0,
             status,
+            has_transactions: prod.has_transactions || false,
           };
         });
         setItems(mappedItems);
@@ -72,13 +87,7 @@ export default function ItemPage() {
     loadItems();
   }, []);
 
-  const formatRp = (val: number) => {
-    return new Intl.NumberFormat('id-ID', {
-      style: 'currency',
-      currency: 'IDR',
-      minimumFractionDigits: 0
-    }).format(val);
-  };
+
 
   const getStatusBadge = (status: Item['status']) => {
     const configs = {
@@ -101,11 +110,65 @@ export default function ItemPage() {
   );
 
   const handleAdd = () => {
-    toast.info('Info', { description: 'Fitur Tambah Item baru akan diintegrasikan dengan API backend.' });
+    setEditingItem(null);
+    setFormData({ sku: '', name: '', base_unit: 'pcs', category_id: '' });
+    setIsDialogOpen(true);
   };
 
-  const handleEdit = (sku: string) => {
-    toast.info('Info', { description: `Ubah item ${sku} akan diintegrasikan dengan API backend.` });
+  const handleEdit = (item: Item) => {
+    setEditingItem(item);
+    setFormData({
+      sku: item.sku,
+      name: item.name,
+      base_unit: item.uom || 'pcs',
+      category_id: '' // Add category ID fetch/mapping logic if needed
+    });
+    setIsDialogOpen(true);
+  };
+
+  const handleDelete = async (sku: string) => {
+    if (!confirm(`Hapus item ${sku}?`)) return;
+    try {
+      await fetchClient(`/inventory/products/${sku}`, { method: 'DELETE' });
+      toast.success('Berhasil', { description: `Item ${sku} telah dihapus.` });
+      loadItems();
+    } catch (err: any) {
+      toast.error('Gagal', { description: err.message || `Gagal menghapus ${sku}` });
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.sku || !formData.name) {
+      toast.error('Gagal', { description: 'SKU dan Nama Barang wajib diisi.' });
+      return;
+    }
+    
+    setIsSubmitting(true);
+    try {
+      if (editingItem) {
+        await fetchClient(`/inventory/products/${editingItem.sku}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            name: formData.name,
+            base_unit: formData.base_unit
+          })
+        });
+        toast.success('Berhasil', { description: `Item ${editingItem.sku} berhasil diperbarui.` });
+      } else {
+        await fetchClient('/inventory/products', {
+          method: 'POST',
+          body: JSON.stringify(formData)
+        });
+        toast.success('Berhasil', { description: `Item ${formData.sku} berhasil ditambahkan.` });
+      }
+      setIsDialogOpen(false);
+      loadItems();
+    } catch (err: any) {
+      toast.error('Gagal', { description: err.message || 'Gagal menyimpan item' });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -228,7 +291,8 @@ export default function ItemPage() {
                           <Button 
                             variant="ghost" 
                             size="icon" 
-                            onClick={() => handleEdit(item.sku)}
+                            onClick={() => handleEdit(item)}
+                            title="Ubah Item"
                             className="h-8 w-8 text-zinc-500 hover:text-primary hover:bg-primary/5"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
@@ -236,8 +300,19 @@ export default function ItemPage() {
                           <Button 
                             variant="ghost" 
                             size="icon" 
-                            onClick={() => toast.error('Hapus', { description: 'Operasi destruktif memerlukan verifikasi backend API.' })}
-                            className="h-8 w-8 text-zinc-500 hover:text-rose-500 hover:bg-rose-500/5"
+                            onClick={() => toast.info('Info', { description: 'Pengaturan Harga (Pricing) sedang dalam pengembangan.' })}
+                            title="Set Harga"
+                            className="h-8 w-8 text-zinc-500 hover:text-amber-500 hover:bg-amber-500/5"
+                          >
+                            <TrendingUp className="w-3.5 h-3.5" />
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            onClick={() => handleDelete(item.sku)}
+                            disabled={item.has_transactions}
+                            title={item.has_transactions ? "Item tidak dapat dihapus karena sudah memiliki transaksi" : "Hapus Item"}
+                            className="h-8 w-8 text-zinc-500 hover:text-rose-500 hover:bg-rose-500/5 disabled:opacity-30 disabled:cursor-not-allowed"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </Button>
@@ -251,6 +326,68 @@ export default function ItemPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <form onSubmit={handleSubmit}>
+            <DialogHeader>
+              <DialogTitle>{editingItem ? 'Ubah Item' : 'Tambah Item Baru'}</DialogTitle>
+              <DialogDescription>
+                {editingItem ? `Perbarui informasi untuk SKU ${editingItem.sku}.` : 'Masukkan detail item baru ke dalam master data.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="sku">SKU / Kode Barang</Label>
+                <Input
+                  id="sku"
+                  value={formData.sku}
+                  onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
+                  disabled={!!editingItem}
+                  placeholder="CTH-001"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="name">Nama Barang</Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="Kopi Arabica 100g"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="base_unit">Satuan Dasar (UOM)</Label>
+                <Select
+                  value={formData.base_unit}
+                  onValueChange={(val) => setFormData({ ...formData, base_unit: val })}
+                >
+                  <SelectTrigger id="base_unit">
+                    <SelectValue placeholder="Pilih satuan" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pcs">Pcs</SelectItem>
+                    <SelectItem value="kg">Kg</SelectItem>
+                    <SelectItem value="gr">Gram</SelectItem>
+                    <SelectItem value="ltr">Liter</SelectItem>
+                    <SelectItem value="box">Box</SelectItem>
+                    <SelectItem value="lusin">Lusin</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                Batal
+              </Button>
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {editingItem ? 'Simpan Perubahan' : 'Tambahkan'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

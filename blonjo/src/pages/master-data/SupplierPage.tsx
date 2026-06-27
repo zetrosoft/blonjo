@@ -5,7 +5,7 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Badge } from '../../components/ui/badge';
 import { Search, Plus, Edit2, Trash2, Users, Receipt, ShieldCheck, AlertTriangle, RefreshCw } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { cn, formatRp } from '../../lib/utils';
 import { toast } from 'sonner';
 import { fetchClient } from '../../api/client';
 
@@ -66,13 +66,7 @@ export default function SupplierPage() {
     loadSuppliers();
   }, []);
 
-  const formatRp = (val: number) => {
-    return new Intl.NumberFormat('id-ID', {
-      style: 'currency',
-      currency: 'IDR',
-      minimumFractionDigits: 0
-    }).format(val);
-  };
+
 
   const getStatusBadge = (status: Supplier['status']) => {
     return (

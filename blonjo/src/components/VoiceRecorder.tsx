@@ -14,6 +14,7 @@ import { Button } from './ui/button';
 import { cn } from '../lib/utils';
 import { fetchClient } from '../api/client';
 import { applyVoiceRules, VoiceRule, defaultVoiceRules, sanitizeVoiceRules } from '../lib/voiceRules';
+import { VoiceRuleDialog } from './VoiceRuleDialog';
 
 interface VoiceRecorderProps {
   onTranscript: (text: string, isInterim: boolean) => void;
@@ -189,6 +190,9 @@ export function VoiceRecorder({ onTranscript, disabled = false, initialText = ''
         </div>
       )}
       <div className="relative">
+        <div className="absolute -top-3 -right-3 z-10">
+          <VoiceRuleDialog />
+        </div>
         {isRecording && (
           <>
             <div

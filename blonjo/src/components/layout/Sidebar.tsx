@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { LayoutDashboard, ReceiptText, ShoppingCart, TrendingUp, Settings, BookOpen, PieChart, ChevronLeft, ChevronRight, ChevronDown, ChartBar, Package, Users, User, Ruler, Plus, History, Store, Shield, Mic2, Wand2, ShieldCheck, FileText } from 'lucide-react';
+import { LayoutDashboard, ReceiptText, ShoppingCart, TrendingUp, Settings, BookOpen, PieChart, ChevronLeft, ChevronRight, ChevronDown, ChartBar, Package, Users, User, Ruler, Plus, History, Store, Shield, Mic2, Wand2, ShieldCheck, FileText, Receipt, Scale, Landmark, Wallet, GitBranch } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { useTheme } from '../theme-provider';
@@ -59,14 +59,16 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         { label: 'menu_daftar_input', path: '/transactions/daftar-input', icon: History }
       ]
     },
-    { icon: ReceiptText, label: 'menu_ocr', path: '/ocr-receipts' },
-    { icon: BookOpen, label: 'menu_coa', path: '/coa' },
     {
       icon: PieChart,
       label: 'menu_reports',
       path: '/reports',
       subItems: [
-        { label: 'menu_journal_list', path: '/reports/journals', icon: FileText }
+        { label: 'menu_journal_list', path: '/reports/journals', icon: Receipt },
+        { label: 'menu_profit_loss', path: '/reports/profit-loss', icon: TrendingUp },
+        { label: 'menu_balance_sheet', path: '/reports/balance-sheet', icon: Scale },
+        { label: 'menu_equity_changes', path: '/reports/equity-changes', icon: Landmark },
+        { label: 'menu_cash_flow', path: '/reports/cash-flow', icon: Wallet }
       ]
     },
     { icon: TrendingUp, label: 'menu_insights', path: '/insights' },
@@ -84,7 +86,9 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         { label: 'menu_item', path: '/master-data/item', icon: Package },
         { label: 'menu_supplier', path: '/master-data/supplier', icon: Users },
         { label: 'menu_customer', path: '/master-data/customer', icon: User },
-        { label: 'menu_uom', path: '/master-data/uom', icon: Ruler }
+        { label: 'menu_uom', path: '/master-data/uom', icon: Ruler },
+        { label: 'menu_journal_mapping', path: '/master-data/journal-mapping', icon: GitBranch },
+        { label: 'menu_coa', path: '/coa', icon: BookOpen }
       ]
     }
   ];
@@ -146,7 +150,7 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       )}
       
       <aside className={cn(
-        "border-r border-border bg-card flex-col relative transition-all duration-300 z-50",
+        "border-r border-border bg-card flex-col relative transition-all duration-300 z-50 print:hidden",
         // Desktop
         "hidden md:flex",
         isCollapsed ? "w-[72px]" : "w-64",

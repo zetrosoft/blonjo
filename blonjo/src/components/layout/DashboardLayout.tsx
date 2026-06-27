@@ -3,6 +3,7 @@ import { Navigate, Outlet } from 'react-router-dom';
 import { useAuthStore } from '../../store/auth';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
+import { TerminalLogs } from '../TerminalLogs';
 
 export default function DashboardLayout() {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated());
@@ -24,6 +25,7 @@ export default function DashboardLayout() {
           <Outlet />
         </main>
       </div>
+      <TerminalLogs />
     </div>
   );
 }

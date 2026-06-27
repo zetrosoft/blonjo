@@ -1,3 +1,5 @@
+import { formatRp, formatNumber } from './utils';
+
 /**
  * Smart Transaction Parser — NLP Engine Lokal v2
  * ================================================
@@ -7,12 +9,14 @@
 
 export type TransactionType =
   | 'purchase'
+  | 'sales'
   | 'income'
   | 'operational'
   | 'non_cash_out'
   | 'non_cash_in'
   | 'capital'
-  | 'manual';
+  | 'manual'
+  | 'cash_count';
 
 export interface ParsedItem {
   name: string;
@@ -34,6 +38,7 @@ export interface ParsedTransaction {
   items: ParsedItem[];
   raw_text: string;
   confidence: 'high' | 'medium' | 'low';
+  suggested_entries?: any[];
 }
 
 // ─────────────────────────────────────────────
@@ -46,7 +51,7 @@ interface TypeRule {
   keywords: string[];
 }
 
-const TYPE_RULES: TypeRule[] = [
+export const TYPE_RULES: TypeRule[] = [
   {
     type: 'purchase',
     label: 'Pengeluaran (Belanja)',
@@ -54,10 +59,16 @@ const TYPE_RULES: TypeRule[] = [
     keywords: ['pembelian', 'purchase', 'belanja', 'beli', 'pembayaran piutang', 'bayar piutang', 'lunas piutang'],
   },
   {
-    type: 'income',
-    label: 'Pemasukan',
+    type: 'sales',
+    label: 'Penjualan Barang / Toko',
     color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
-    keywords: ['pendapatan', 'income', 'pembayaran hutang', 'bayar hutang', 'hasil jualan', 'hasil penjualan', 'penjualan', 'terima pembayaran'],
+    keywords: ['penjualan', 'hasil jualan', 'jual', 'sales', 'pos kasir', 'pendapatan hari ini', 'omzet'],
+  },
+  {
+    type: 'income',
+    label: 'Pendapatan Non-Usaha / Jasa',
+    color: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30',
+    keywords: ['pendapatan', 'income', 'pembayaran hutang', 'bayar hutang', 'terima pembayaran', 'terima uang'],
   },
   {
     type: 'operational',
@@ -79,17 +90,54 @@ const TYPE_RULES: TypeRule[] = [
   },
   {
     type: 'capital',
-    label: 'Tambah Modal',
+    label: 'Modal / Saldo Awal',
     color: 'bg-sky-500/15 text-sky-400 border-sky-500/30',
-    keywords: ['tambah modal', 'setor modal', 'modal awal', 'tambahan modal', 'investasi', 'inject modal'],
+    keywords: ['tambah modal', 'setor modal', 'modal awal', 'tambahan modal', 'investasi', 'inject modal', 'saldo awal', 'saldo akhir', 'saldo bulan'],
+  },
+  {
+    type: 'manual',
+    label: 'Manual Journal',
+    color: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30',
+    keywords: ['jurnal', 'manual', 'memo'],
+  },
+  {
+    type: 'cash_count',
+    label: 'Opname Kas (Selisih)',
+    color: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30',
+    keywords: ['opname kas', 'tunai hari ini', 'cash on hand', 'uang di tangan', 'uang fisik', 'hitung kas'],
   },
 ];
+
+// ─────────────────────────────────────────────
+//  SMART INDONESIAN NORMALIZER
+// ─────────────────────────────────────────────
+function normalizeIndonesianSlang(text: string): string {
+  return text.toLowerCase()
+    .replace(/\bjt\b/g, 'juta')
+    .replace(/\brb\b/g, 'ribu')
+    .replace(/\bk\b/g, 'ribu')
+    .replace(/\bbks\b/g, 'bungkus')
+    .replace(/\bbtl\b/g, 'botol')
+    .replace(/\bpak\b/g, 'pack')
+    .replace(/\bdus\b/g, 'box')
+    .replace(/\blbr\b/g, 'lembar')
+    .replace(/\btrf\b/g, 'transfer')
+    .replace(/\bsdh\b/g, 'sudah')
+    .replace(/\btgl\b/g, 'tanggal')
+    .replace(/\butk\b/g, 'untuk')
+    .replace(/\bdgn\b/g, 'dengan')
+    .replace(/\bkrn\b/g, 'karena')
+    .replace(/\bbayarnya\b/g, 'bayar')
+    .replace(/\bngutang\b/g, 'hutang')
+    .replace(/\bjualan\b/g, 'penjualan');
+}
 
 // ─────────────────────────────────────────────
 //  SANITIZER
 // ─────────────────────────────────────────────
 function sanitizeText(text: string): string {
-  return text
+  const normalized = normalizeIndonesianSlang(text);
+  return normalized
     .replace(/[<>{}]/g, '')
     .substring(0, 5000)
     .trim();
@@ -97,39 +145,13 @@ function sanitizeText(text: string): string {
 
 // ─────────────────────────────────────────────
 //  PARSE ANGKA FORMAT INDONESIA
+import { parseUniversalNumber } from './numericHeuristics';
+
 //  "16.000" → 16000  |  "1.500.000" → 1500000
 //  "16,5"   → 16.5   |  "800.000"   → 800000
 // ─────────────────────────────────────────────
 export function parseIDNumber(str: string): number {
-  if (!str) return 0;
-  const s = str.trim().replace(/\s/g, '');
-  if (!s) return 0;
-
-  const dots   = (s.match(/\./g) || []).length;
-  const commas = (s.match(/,/g) || []).length;
-
-  // "1.500.000" → lebih dari 1 titik → semua titik adalah pemisah ribuan
-  if (dots > 1) return Number(s.replace(/\./g, ''));
-
-  if (dots === 1 && commas === 0) {
-    const afterDot = s.split('.')[1];
-    // "16.000" atau "800.000" → 3 digit setelah titik = pemisah ribuan
-    if (afterDot && afterDot.length === 3) return Number(s.replace('.', ''));
-    // "16.5" → desimal biasa
-    return Number(s);
-  }
-
-  // "1.500,50" format Eropa
-  if (dots >= 1 && commas === 1) {
-    return Number(s.replace(/\./g, '').replace(',', '.'));
-  }
-
-  // "16,5" → comma sebagai desimal
-  if (commas === 1 && dots === 0) return Number(s.replace(',', '.'));
-
-  // Fallback: hapus semua non-digit kecuali titik terakhir
-  const clean = s.replace(/[.,]/g, '');
-  return Number(clean) || 0;
+  return parseUniversalNumber(str);
 }
 
 // ─────────────────────────────────────────────
@@ -531,13 +553,6 @@ export function detectTransactionType(text: string): { rule: TypeRule | null; co
     bestScore >= 2 ? 'medium' : 'low';
 
   return { rule: bestRule, confidence };
-}
-
-// ─────────────────────────────────────────────
-//  FORMAT ANGKA → RUPIAH DISPLAY
-// ─────────────────────────────────────────────
-export function formatRp(n: number): string {
-  return Math.round(n).toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 }
 
 // ─────────────────────────────────────────────

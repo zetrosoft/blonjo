@@ -65,7 +65,7 @@ apiClient.interceptors.response.use(
  * Legacy wrapper for fetchClient to minimize changes in existing components
  * @deprecated Use apiClient directly for better axios features
  */
-export const fetchClient = async (endpoint: string, options: any = {}) => {
+export const fetchClient = async (endpoint: string, options: any = {}): Promise<any> => {
   const { method = 'GET', body, headers, ...rest } = options;
   
   const config = {

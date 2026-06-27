@@ -72,11 +72,11 @@ export default function ChartOfAccounts() {
   // Since standard seed data doesn't have parent_ids, we group them virtually by account_type first.
   const buildTree = (): TreeNode[] => {
     const groups: Record<string, TreeNode> = {
-      asset: { id: 'group-asset', name: 'Assets (Harta)', type: 'asset', isGroup: true, children: [] },
-      liability: { id: 'group-liability', name: 'Liabilities (Kewajiban)', type: 'liability', isGroup: true, children: [] },
-      equity: { id: 'group-equity', name: 'Equity (Modal)', type: 'equity', isGroup: true, children: [] },
-      revenue: { id: 'group-revenue', name: 'Revenue (Pendapatan)', type: 'revenue', isGroup: true, children: [] },
-      expense: { id: 'group-expense', name: 'Expenses (Beban)', type: 'expense', isGroup: true, children: [] },
+      asset: { id: 'group-asset', name: t('type_asset') || 'Assets', type: 'asset', isGroup: true, children: [] },
+      liability: { id: 'group-liability', name: t('type_liability') || 'Liabilities', type: 'liability', isGroup: true, children: [] },
+      equity: { id: 'group-equity', name: t('type_equity') || 'Equity', type: 'equity', isGroup: true, children: [] },
+      revenue: { id: 'group-revenue', name: t('type_revenue') || 'Revenue', type: 'revenue', isGroup: true, children: [] },
+      expense: { id: 'group-expense', name: t('type_expense') || 'Expenses', type: 'expense', isGroup: true, children: [] },
     };
 
     const nodeMap = new Map<number, TreeNode>();
@@ -86,7 +86,7 @@ export default function ChartOfAccounts() {
       nodeMap.set(acc.id, {
         id: acc.id,
         code: acc.code,
-        name: acc.name,
+        name: t(acc.name), // Localize here
         type: acc.account_type,
         isGroup: false,
         isActive: acc.is_active,

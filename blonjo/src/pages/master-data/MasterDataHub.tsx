@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { LayoutGrid, Package, Users, User, Ruler, ArrowRight } from 'lucide-react';
+import { LayoutGrid, Package, Users, User, Ruler, ArrowRight, GitBranch } from 'lucide-react';
 
 export default function MasterDataHub() {
   const { t } = useTranslation();
@@ -37,6 +37,13 @@ export default function MasterDataHub() {
       btnText: t('md_hub_uom_btn'),
       icon: Ruler,
       path: '/master-data/uom'
+    },
+    {
+      title: t('md_hub_journal_mapping_title'),
+      desc: t('md_hub_journal_mapping_desc'),
+      btnText: t('md_hub_journal_mapping_btn'),
+      icon: GitBranch,
+      path: '/master-data/journal-mapping'
     }
   ];
 

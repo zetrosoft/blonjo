@@ -17,14 +17,12 @@ import {
   ArrowUpRight, ArrowDownRight, User2, Filter, FileDown, FileSpreadsheet,
   Edit2, Save, Trash2, Users, Send,
 } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { cn, formatRp, formatDateTime } from '../../lib/utils';
 import { toast } from 'sonner';
 import type { Transaction } from './types';
 
 
 // ── Helper formatters (pure, tidak bergantung hooks) ────────────────────
-const formatRp = (val: number) =>
-  new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);
 
 const formatDateForInput = (date: Date) => date.toISOString().split('T')[0];
 
@@ -489,7 +487,7 @@ export default function DaftarInputPage() {
                   <div className="flex items-center gap-2.5 text-zinc-500 dark:text-zinc-400 text-xs">
                     <Clock className="w-4 h-4 text-primary/70" />
                     <span className="font-semibold text-zinc-700 dark:text-zinc-300">{t('label_created')}:</span>
-                    <span className="text-zinc-900 dark:text-zinc-100">{new Date(selectedTx.created_at).toLocaleString(i18n.language.startsWith('id') ? 'id-ID' : 'en-US')}</span>
+                    <span className="text-zinc-900 dark:text-zinc-100">{formatDateTime(selectedTx.created_at)}</span>
                   </div>
                   <div className="flex items-center gap-2.5 text-zinc-500 dark:text-zinc-400 text-xs">
                     <User2 className="w-4 h-4 text-primary/70" />
