@@ -1,101 +1,54 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { fetchClient } from '../../api/client';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../../components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
   AlertDialogTrigger,
-} from "../../components/ui/alert-dialog";
+} from '../../components/ui/alert-dialog';
 import { Badge } from '../../components/ui/badge';
-import { 
-  Search, Eye, RefreshCw, CalendarDays, Receipt, Clock, BookOpen, 
-  ArrowUpRight, ArrowDownRight, User2, Filter, FileDown, FileSpreadsheet, Download,
-  Edit2, Save, Trash2, Users, Send
+import {
+  Search, Eye, RefreshCw, CalendarDays, Receipt, Clock, BookOpen,
+  ArrowUpRight, ArrowDownRight, User2, Filter, FileDown, FileSpreadsheet,
+  Edit2, Save, Trash2, Users, Send,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
+import type { Transaction } from './types';
 
-interface Transaction {
-  id: number;
-  transaction_date: string;
-  reference_no: string | null;
-  description: string;
-  transaction_type: string;
-  total_amount: number;
-  status: 'draft' | 'posted';
-  created_at: string;
-  entries: {
-    id: number;
-    account_id: number;
-    debit: number;
-    credit: number;
-    account?: {
-      name: string;
-      code: string;
-      account_type: 'asset' | 'liability' | 'equity' | 'revenue' | 'expense';
-    };
-  }[];
-  inventory_logs: {
-    id: number;
-    product_id: number;
-    quantity: number;
-    price_per_unit: number;
-    log_type: 'in' | 'out';
-    product?: {
-      name: string;
-      unit: string;
-    };
-    contact?: {
-      name: string;
-      contact_type: string;
-    };
-  }[];
-}
+
+// ── Helper formatters (pure, tidak bergantung hooks) ────────────────────
+const formatRp = (val: number) =>
+  new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(val);
+
+const formatDateForInput = (date: Date) => date.toISOString().split('T')[0];
 
 export default function DaftarInputPage() {
   const { t, i18n } = useTranslation();
-  
-  // Tanggal default: 1 bulan ke belakang
-  const now = new Date();
-  const oneMonthAgo = new Date();
-  oneMonthAgo.setMonth(now.getMonth() - 1);
-  
-  const formatDateForInput = (date: Date) => {
-    return date.toISOString().split('T')[0];
-  };
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [typeFilter, setTypeFilter] = useState('all');
-  const [fromDate, setFromDate] = useState(formatDateForInput(oneMonthAgo));
-  const [toDate, setToDate] = useState(formatDateForInput(now));
-  const [pageSize, setPageSize] = useState(50);
+  const [loading, setLoading]           = useState(true);
+  const [searchQuery, setSearchQuery]   = useState('');
+  const [typeFilter, setTypeFilter]     = useState('all');
+  const [fromDate, setFromDate]         = useState(formatDateForInput(new Date('2024-01-01')));
+  const [toDate, setToDate]             = useState(formatDateForInput(new Date()));
+  const [pageSize, setPageSize]         = useState(50);
 
-  // Detail modal state
-  const [selectedTx, setSelectedTx] = useState<any>(null);
-  const [detailOpen, setDetailOpen] = useState(false);
+  // Detail dialog state
+  const [selectedTx, setSelectedTx]       = useState<Transaction | null>(null);
+  const [detailOpen, setDetailOpen]       = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [editItems, setEditItems] = useState<any[]>([]);
+  const [isEditing, setIsEditing]         = useState(false);
+  const [editItems, setEditItems]         = useState<any[]>([]);
 
-  const loadTransactions = async () => {
+  const loadTransactions = useCallback(async () => {
     setLoading(true);
     try {
-      // Menambahkan limit dan filter tanggal ke API jika didukung, 
-      // namun di sini kita asumsikan fetch semua dulu atau filter client-side sementara
-      // Jika API mendukung: `/finance/transactions?limit=${pageSize}&from=${fromDate}&to=${toDate}`
       const data = await fetchClient('/finance/transactions');
       setTransactions(data);
     } catch (err: any) {
@@ -103,13 +56,11 @@ export default function DaftarInputPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [t]);
 
-  useEffect(() => {
-    loadTransactions();
-  }, [pageSize]); // Reload jika page size berubah
+  useEffect(() => { loadTransactions(); }, [pageSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleViewDetail = async (txId: number) => {
+  const handleViewDetail = useCallback(async (txId: number) => {
     setLoadingDetail(true);
     setDetailOpen(true);
     setIsEditing(false);
@@ -122,14 +73,12 @@ export default function DaftarInputPage() {
     } finally {
       setLoadingDetail(false);
     }
-  };
+  }, [t]);
 
-  const handlePost = async (txId: number) => {
+  const handlePost = useCallback(async (txId: number) => {
     setLoading(true);
     try {
-      await fetchClient(`/finance/transactions/${txId}/post`, {
-        method: 'POST'
-      });
+      await fetchClient(`/finance/transactions/${txId}/post`, { method: 'POST' });
       toast.success('Jurnal berhasil diposting');
       if (detailOpen) setDetailOpen(false);
       loadTransactions();
@@ -138,14 +87,12 @@ export default function DaftarInputPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [detailOpen, loadTransactions]);
 
-  const handleDelete = async (txId: number) => {
+  const handleDelete = useCallback(async (txId: number) => {
     setLoading(true);
     try {
-      await fetchClient(`/finance/transactions/${txId}`, {
-        method: 'DELETE'
-      });
+      await fetchClient(`/finance/transactions/${txId}`, { method: 'DELETE' });
       toast.success('Jurnal berhasil dihapus');
       if (detailOpen) setDetailOpen(false);
       loadTransactions();
@@ -154,85 +101,69 @@ export default function DaftarInputPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [detailOpen, loadTransactions]);
 
-  const startEditing = () => {
+  const startEditing = useCallback(() => {
     if (!selectedTx) return;
     setEditItems(selectedTx.inventory_logs.map((log: any) => ({
-      name: log.product?.name || '',
-      qty: Number(log.quantity),
-      unit: log.product?.unit || 'pcs',
-      unit_price: Number(log.price_per_unit),
-      total: Number(log.quantity) * Number(log.price_per_unit),
-      contact_name: log.contact?.name || ''
+      name:         log.product?.name || '',
+      qty:          Number(log.quantity),
+      unit:         log.product?.unit || 'pcs',
+      unit_price:   Number(log.price_per_unit),
+      total:        Number(log.quantity) * Number(log.price_per_unit),
+      contact_name: log.contact?.name || '',
     })));
     setIsEditing(true);
-  };
+  }, [selectedTx]);
 
-  const updateEditItem = (index: number, field: string, value: any) => {
-    const newItems = [...editItems];
-    newItems[index] = { ...newItems[index], [field]: value };
-    if (field === 'qty' || field === 'unit_price') {
-      newItems[index].total = Number(newItems[index].qty) * Number(newItems[index].unit_price);
-    }
-    setEditItems(newItems);
-  };
+  const updateEditItem = useCallback((index: number, field: string, value: any) => {
+    setEditItems(prev => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      if (field === 'qty' || field === 'unit_price') {
+        next[index].total = Number(next[index].qty) * Number(next[index].unit_price);
+      }
+      return next;
+    });
+  }, []);
 
-  const saveEditItems = async () => {
+  const saveEditItems = useCallback(async () => {
     if (!selectedTx) return;
     setLoadingDetail(true);
     try {
       const newTotal = editItems.reduce((acc, item) => acc + Number(item.total), 0);
-      
-      const payload = {
-        description: selectedTx.description,
-        total_amount: newTotal,
-        items: editItems
-      };
-
       await fetchClient(`/finance/transactions/${selectedTx.id}`, {
         method: 'PUT',
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ description: selectedTx.description, total_amount: newTotal, items: editItems }),
       });
-
-      toast.success(t('toast_success_save_store')); // Reuse success toast
+      toast.success(t('toast_success_save_store'));
       setIsEditing(false);
-      handleViewDetail(selectedTx.id); // Refresh detail
-      loadTransactions(); // Refresh list
+      handleViewDetail(selectedTx.id);
+      loadTransactions();
     } catch (err: any) {
       toast.error(err.message || 'Gagal menyimpan perubahan');
     } finally {
       setLoadingDetail(false);
     }
-  };
+  }, [selectedTx, editItems, t, handleViewDetail, loadTransactions]);
 
-  const handleExport = (format: 'pdf' | 'excel') => {
-    toast.success('Ekspor sedang diproses', { 
-      description: `Data ${format.toUpperCase()} sedang disiapkan berdasarkan filter aktif.` 
+  const handleExport = useCallback((format: 'pdf' | 'excel') => {
+    toast.success('Ekspor sedang diproses', {
+      description: `Data ${format.toUpperCase()} sedang disiapkan berdasarkan filter aktif.`,
     });
-    // Implementasi library export (misal jspdf, xlsx) bisa diletakkan di sini
-  };
-
-  const formatRp = (val: number) => {
-    return new Intl.NumberFormat('id-ID', {
-      style: 'currency',
-      currency: 'IDR',
-      minimumFractionDigits: 0
-    }).format(val);
-  };
+  }, []);
 
   const getTxTypeBadge = (type: string) => {
     const styles: Record<string, string> = {
-      purchase: 'bg-orange-500/10 text-orange-500 border-orange-500/20',
-      sales: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
-      expense: 'bg-rose-500/10 text-rose-500 border-rose-500/20',
-      income: 'bg-sky-500/10 text-sky-500 border-sky-500/20',
+      purchase:    'bg-orange-500/10 text-orange-500 border-orange-500/20',
+      sales:       'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
+      expense:     'bg-rose-500/10 text-rose-500 border-rose-500/20',
+      income:      'bg-sky-500/10 text-sky-500 border-sky-500/20',
       operational: 'bg-amber-500/10 text-amber-500 border-amber-500/20',
-      manual: 'bg-slate-500/10 text-slate-500 border-slate-500/20',
+      manual:      'bg-slate-500/10 text-slate-500 border-slate-500/20',
     };
-    
     return (
-      <Badge variant="outline" className={cn("capitalize px-2 py-0.5", styles[type] || 'bg-muted text-muted-foreground')}>
+      <Badge variant="outline" className={cn('capitalize px-2 py-0.5', styles[type] || 'bg-muted text-muted-foreground')}>
         {type.replace('_', ' ')}
       </Badge>
     );
@@ -240,32 +171,31 @@ export default function DaftarInputPage() {
 
   const getStatusBadge = (status: string) => {
     const styles: Record<string, string> = {
-      draft: 'bg-zinc-500/10 text-zinc-500 border-zinc-500/20',
+      draft:  'bg-zinc-500/10 text-zinc-500 border-zinc-500/20',
       posted: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20',
     };
-    
     return (
-      <Badge variant="outline" className={cn("capitalize px-2 py-0.5 font-bold text-[10px]", styles[status] || 'bg-muted text-muted-foreground')}>
+      <Badge variant="outline" className={cn('capitalize px-2 py-0.5 font-bold text-[10px]', styles[status] || 'bg-muted text-muted-foreground')}>
         {t(`status_${status}`)}
       </Badge>
     );
   };
 
-  const filteredTransactions = transactions.filter(tx => {
-    const matchesSearch = 
-      (tx.reference_no?.toLowerCase() || '').includes(searchQuery.toLowerCase()) || 
-      tx.description.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    const matchesType = typeFilter === 'all' || tx.transaction_type === typeFilter;
-    
-    const txDate = tx.transaction_date; // Asumsi format YYYY-MM-DD
-    const matchesDate = txDate >= fromDate && txDate <= toDate;
-    
-    return matchesSearch && matchesType && matchesDate;
-  }).slice(0, pageSize);
+  const filteredTransactions = useMemo(() =>
+    transactions
+      .filter(tx => {
+        const matchSearch = (tx.reference_no?.toLowerCase() || '').includes(searchQuery.toLowerCase())
+          || tx.description.toLowerCase().includes(searchQuery.toLowerCase());
+        const matchType = typeFilter === 'all' || tx.transaction_type === typeFilter;
+        const matchDate = tx.transaction_date >= fromDate && tx.transaction_date <= toDate;
+        return matchSearch && matchType && matchDate;
+      })
+      .slice(0, pageSize),
+    [transactions, searchQuery, typeFilter, fromDate, toDate, pageSize],
+  );
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
+    <div className="w-full max-w-none px-2 md:px-4 lg:px-6 py-6 space-y-6 mx-auto">
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
@@ -403,10 +333,10 @@ export default function DaftarInputPage() {
                       className="cursor-pointer hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40"
                       onClick={() => handleViewDetail(tx.id)}
                     >
-                      <TableCell className="font-medium text-xs font-mono">
+                      <TableCell className="font-medium text-xs font-mono whitespace-nowrap">
                         {tx.transaction_date}
                       </TableCell>
-                      <TableCell className="font-semibold text-xs text-primary font-mono">
+                      <TableCell className="font-semibold text-xs text-primary font-mono whitespace-nowrap">
                         {tx.reference_no || '-'}
                       </TableCell>
                       <TableCell>
