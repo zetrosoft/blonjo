@@ -88,38 +88,49 @@ async def parse_transaction_note(
         # ────────────────────────────────────────────────────────────────────
         # LEVEL 2 & 3: RAG Context + LLM (hanya jika rule-based gagal)
         # ────────────────────────────────────────────────────────────────────
-        from app.services.smart_parser import classify_transaction
+        from app.services.smart_parser import classify_transaction, TransactionClass
         from app.services.ai_context import build_minimal_context
 
         # Deteksi kelas transaksi untuk membatasi overhead context
         tx_class = classify_transaction(normalized_text)
         min_context = build_minimal_context(normalized_text, tx_class, current_user.tenant_id, session)
 
-
-        # Bangun RAG context dinamis
         rag_context = ""
-        # 1. Inject COA (dari cache Redis atau query build_minimal_context jika tidak ada cache)
-        coa_section = ""
-        if needs_coa_in_prompt(normalized_text):
-            coa_str = get_coa_string(session, current_user.tenant_id) or min_context.get("coa", "")
-            if coa_str:
-                coa_section = f"\n--- DAFTAR AKUN (COA) ---\n{coa_str}\n"
 
-        # 2. Inject Pricing Rules yang terfilter secara dinamis
+        # 1. Inject Pricing Rules yang sudah difilter berdasarkan keyword produk
+        #    KAS_GLOBAL → [] (skip), PRODUCT_SALES → keyword-matched, UNKNOWN → []
         rules = min_context.get("pricing_rules", [])
         if rules:
             rag_context += "\n--- ATURAN HARGA JUAL (PRICING RULES) ---\n"
             for r in rules:
                 rag_context += f"- {r['name'] or 'Aturan Harga'}: {json.dumps(r['rule_payload'])}\n"
 
-        # Tambahkan RAG template historis / golden template jika input kompleks
+        # 2. Ambil PEMBELAJARAN/REFERENSI dari RAG (tanpa pricing rules & master data global)
+        #    Hanya untuk input kompleks (>60 char) — hemat token untuk input pendek
         is_complex = len(normalized_text) > 60
         if is_complex:
             rag_context_full = get_rag_context(session, current_user.tenant_id, normalized_text)
-            # Hapus bagian pricing rules dari full context agar tidak duplikasi
-            if "PEMBELAJARAN" in rag_context_full or "REFERENSI" in rag_context_full:
-                lines = [l for l in rag_context_full.split("\n") if "ATURAN HARGA" not in l]
-                rag_context += "\n".join(lines)
+            # Strip SELURUH blok ATURAN HARGA dari get_rag_context (regex multiline)
+            # Ini mencegah duplikasi: min_context sudah inject rules yang terfilter di atas
+            rag_clean = re.sub(
+                r'\n?--- ATURAN HARGA JUAL.*?(?=\n---|$)',
+                '',
+                rag_context_full,
+                flags=re.DOTALL
+            )
+            if rag_clean.strip():
+                rag_context += "\n" + rag_clean.strip()
+
+        # 3. COA: gunakan targeted COA dari build_minimal_context (bukan full get_coa_string)
+        #    - KAS_GLOBAL     → hanya akun kas (kode 1-1xxx, max 20)
+        #    - PRODUCT_SALES  → akun kas + penjualan (max 25)
+        #    - UNKNOWN        → akun umum (max 35), fallback ke get_coa_string jika kosong
+        coa_section = ""
+        coa_str = min_context.get("coa", "")
+        if not coa_str and tx_class == TransactionClass.UNKNOWN:
+            coa_str = get_coa_string(session, current_user.tenant_id)
+        if coa_str:
+            coa_section = f"\n--- DAFTAR AKUN (COA) ---\n{coa_str}\n"
 
         # Bangun prompt minimal
         system_instruction, prompt = build_minimal_prompt(
