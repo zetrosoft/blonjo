@@ -21,9 +21,6 @@ GEMINI_MODELS = [
 
 def _clean_json_output(raw_text: str) -> str:
     """Robust JSON extraction from LLM output, supporting both arrays and objects"""
-    # Print raw output for debugging in Docker logs
-    print(f"--- AI RAW OUTPUT ---\n{raw_text}\n---------------------")
-    
     clean = raw_text.strip()
     clean = re.sub(r"<think>.*?</think>", "", clean, flags=re.DOTALL)
     clean = re.sub(r"^```(?:json)?\s*", "", clean, flags=re.IGNORECASE)
