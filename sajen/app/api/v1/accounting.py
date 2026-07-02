@@ -132,14 +132,16 @@ async def parse_transaction_note(
 
         # Panggil AI (Level 2: Redis Cache/MCP, Level 3: LLM/MCP)
         from app.services.mcp_client import mcp_client
-        final_parsed_data = await mcp_client.parse_transaction(
+        mcp_result = await mcp_client.parse_transaction(
             session,
             normalized_text,
             {"coa": coa_section, "pricing_rules": rules}
         )
-        processor_name = "mcp_server" if settings.MCP_ENABLED else "local_fallback"
-        token_in = 0
-        token_out = 0
+        # Ambil semua info dari hasil — processor & token sekarang akurat
+        final_parsed_data = mcp_result.get("parsed_data") if isinstance(mcp_result, dict) else mcp_result
+        processor_name = mcp_result.get("processor", "local_fallback") if isinstance(mcp_result, dict) else "local_fallback"
+        token_in = mcp_result.get("token_in", 0) if isinstance(mcp_result, dict) else 0
+        token_out = mcp_result.get("token_out", 0) if isinstance(mcp_result, dict) else 0
 
 
 

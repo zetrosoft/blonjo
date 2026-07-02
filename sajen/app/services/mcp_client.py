@@ -35,6 +35,7 @@ class MCPClient:
         """
         Parse natural transaction text.
         Fallback ke local ai_engine jika MCP mati/disable.
+        Return: dict { parsed_data, processor, token_in, token_out }
         """
         if settings.MCP_ENABLED:
             try:
@@ -46,22 +47,31 @@ class MCPClient:
                 if "content" in res and len(res["content"]) > 0:
                     import json
                     text_content = res["content"][0].get("text", "")
-                    return json.loads(text_content)
+                    return {
+                        "parsed_data": json.loads(text_content),
+                        "processor": "mcp_server",
+                        "token_in": 0,
+                        "token_out": 0
+                    }
             except Exception as e:
                 print(f"[MCPClient] parse_transaction gagal, fallback ke AI lokal. Error: {e}")
-                
-        # Fallback lokal
+
+        # Fallback lokal — return full dict termasuk processor & token info
         from app.services.ai_engine import call_ai_text
-        # Buat prompt dummy minimal dari build_minimal_prompt
         from app.services.smart_parser import build_minimal_prompt
         from datetime import datetime
-        
+
         coa_str = context.get("coa", "")
         today_date = datetime.now().strftime("%Y-%m-%d")
         system_instruction, prompt = build_minimal_prompt(text, today_date, coa_str)
-        
+
         res_ai = call_ai_text(db, prompt, system_instruction=system_instruction, temperature=0.0)
-        return res_ai.get("parsed_data")
+        return {
+            "parsed_data": res_ai.get("parsed_data"),
+            "processor": res_ai.get("processor", "local_fallback"),
+            "token_in": res_ai.get("token_in", 0),
+            "token_out": res_ai.get("token_out", 0)
+        }
 
     async def parse_pricing_rule(self, db: Session, text: str) -> dict:
         """
