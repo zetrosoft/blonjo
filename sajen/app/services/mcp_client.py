@@ -34,24 +34,44 @@ class MCPClient:
     async def parse_transaction(self, db: Session, text: str, context: dict) -> dict:
         """
         Parse natural transaction text.
+        Context dikirim ke MCP server agar AI mendapat pricing rules & COA yang relevan.
         Fallback ke local ai_engine jika MCP mati/disable.
         Return: dict { parsed_data, processor, token_in, token_out }
         """
         if settings.MCP_ENABLED:
             try:
+                import json as _json
+                from datetime import datetime as _dt
+
+                # Format context menjadi string sections untuk MCP
+                pricing_rules_str = ""
+                rules = context.get("pricing_rules", [])
+                if rules:
+                    pricing_rules_str = "--- ATURAN HARGA JUAL (PRICING RULES) ---\n"
+                    for r in rules:
+                        pricing_rules_str += f"- {r.get('name','Aturan')}: {_json.dumps(r.get('rule_payload', r))}\n"
+
+                mcp_context = {
+                    "pricing_rules": pricing_rules_str or None,
+                    "coa": context.get("coa") or None,
+                    "today_date": _dt.now().strftime("%Y-%m-%d"),
+                }
+                # Hapus key None agar tidak dikirim
+                mcp_context = {k: v for k, v in mcp_context.items() if v}
+
                 res = await self.call_tool("parse_transaction", {
                     "text": text,
-                    "context": context
+                    "context": mcp_context,
                 })
-                # Asumsi output tool berformat { content: [{ type: "text", text: "..." }] }
+                # Output MCP: { content: [{ type: "text", text: "..." }] }
                 if "content" in res and len(res["content"]) > 0:
-                    import json
                     text_content = res["content"][0].get("text", "")
+                    parsed = _json.loads(text_content)
                     return {
-                        "parsed_data": json.loads(text_content),
+                        "parsed_data": parsed,
                         "processor": "mcp_server",
                         "token_in": 0,
-                        "token_out": 0
+                        "token_out": 0,
                     }
             except Exception as e:
                 print(f"[MCPClient] parse_transaction gagal, fallback ke AI lokal. Error: {e}")
@@ -70,7 +90,7 @@ class MCPClient:
             "parsed_data": res_ai.get("parsed_data"),
             "processor": res_ai.get("processor", "local_fallback"),
             "token_in": res_ai.get("token_in", 0),
-            "token_out": res_ai.get("token_out", 0)
+            "token_out": res_ai.get("token_out", 0),
         }
 
     async def parse_pricing_rule(self, db: Session, text: str) -> dict:
