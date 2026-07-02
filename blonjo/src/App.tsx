@@ -1,11 +1,12 @@
 import React, { lazy, Suspense } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import { Loader2 } from 'lucide-react';
 
 // Layouts
 import DashboardLayout from './components/layout/DashboardLayout';
 import MasterDataLayout from './pages/master-data/layout';
+import MaterialControlLayout from './pages/material-control/layout';
 
 // Lazy Loaded Pages
 const Login = lazy(() => import('./pages/Login'));
@@ -21,13 +22,24 @@ const InputTransaksiPage = lazy(() => import('./pages/transaction/input-transaks
 const DaftarInputPage = lazy(() => import('./pages/transaction/daftar-input'));
 const TransactionHub = lazy(() => import('./pages/TransactionHub'));
 
+// Material Control pages
+const InventoryControlPage = lazy(() => import('./pages/material-control/InventoryControl'));
+const PurchasingHistoryPage = lazy(() => import('./pages/material-control/PurchasingHistory'));
+const StockLevelPage = lazy(() => import('./pages/material-control/StockLevel'));
+const RecommendedPurchasePage = lazy(() => import('./pages/material-control/RecommendedPurchase'));
+const MaterialControlHub = lazy(() => import('./pages/material-control/MaterialControlHub'));
+
 // Master data pages
 const ItemPage = lazy(() => import('./pages/master-data/ItemPage'));
+const MyCatalogPage = lazy(() => import('./pages/master-data/MyCatalogPage'));
 const SupplierPage = lazy(() => import('./pages/master-data/SupplierPage'));
 const CustomerPage = lazy(() => import('./pages/master-data/CustomerPage'));
 const UomPage = lazy(() => import('./pages/master-data/UomPage'));
 const JournalMappingPage = lazy(() => import('./pages/master-data/JournalMappingPage'));
 const MasterDataHub = lazy(() => import('./pages/master-data/MasterDataHub'));
+const PricingRulePage = lazy(() => import('./pages/master-data/PricingRulePage'));
+const PriceListPage = lazy(() => import('./pages/master-data/PriceListPage'));
+
 
 // Report pages
 const ReportsHub = lazy(() => import('./pages/reports/ReportsHub'));
@@ -60,6 +72,15 @@ export default function App() {
             <Route path="/transactions/input-transaksi" element={<InputTransaksiPage />} />
             <Route path="/transactions/daftar-input" element={<DaftarInputPage />} />
             
+            {/* Material Control nested routes */}
+            <Route path="/material-control" element={<MaterialControlLayout />}>
+              <Route index element={<MaterialControlHub />} />
+              <Route path="inventory" element={<InventoryControlPage />} />
+              <Route path="purchases" element={<PurchasingHistoryPage />} />
+              <Route path="stock-level" element={<StockLevelPage />} />
+              <Route path="recommended" element={<RecommendedPurchasePage />} />
+            </Route>
+            
             <Route path="/reports" element={<ReportsHub />} />
             <Route path="/reports/journals" element={<Reports />} />
             <Route path="/reports/profit-loss" element={<ProfitLossReport />} />
@@ -75,7 +96,9 @@ export default function App() {
               <Route path="customer" element={<CustomerPage />} />
               <Route path="uom" element={<UomPage />} />
               <Route path="journal-mapping" element={<JournalMappingPage />} />
+              <Route path="price-list" element={<PriceListPage />} />
             </Route>
+
             
             <Route path="/insights" element={<div className="p-4">Insights Page</div>} />
             <Route path="/settings" element={<Settings />} />

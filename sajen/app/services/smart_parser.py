@@ -16,8 +16,52 @@ Pipeline:
 """
 
 import re
-from datetime import datetime, timedelta
-from typing import Optional
+from enum import Enum
+from typing import Optional, List
+
+
+class TransactionClass(str, Enum):
+    KAS_GLOBAL = "KAS_GLOBAL"       # Kas, rekonsiliasi, selisih — SKIP pricing rules
+    PRODUCT_SALES = "PRODUCT_SALES" # Jual beli barang — butuh pricing rules
+    UNKNOWN = "UNKNOWN"             # Fallback — bawa context minimal
+
+
+PATTERNS_KAS_GLOBAL = [
+    r'(?i)(selisih|rekonsiliasi)\s+(uang\s+)?tunai\s*([\d.,]+)?',
+    r'(?i)(tambahan|kurang)\s+(uang\s+)?(tunai|kas)\s*([\d.,]+)?',
+    r'(?i)(pendapatan|pengeluaran)\s+(tambahan|lain[- ]?lain)\s*([\d.,]+)?',
+    r'(?i)(setoran|penarikan)\s+(kas|tunai)\s*([\d.,]+)?',
+    r'(?i)^(biaya|bayar)\s+\w+[\s\d.,]+$',
+    r'(?i)(modal|gaji|upah|sewa)\s+[\d.,]+',
+]
+
+
+def classify_transaction(text: str) -> TransactionClass:
+    normalized = text.lower().strip()
+    for pattern in PATTERNS_KAS_GLOBAL:
+        if re.search(pattern, normalized):
+            return TransactionClass.KAS_GLOBAL
+    product_signals = [
+        'kg', 'gram', 'gr', 'pcs', 'btl', 'ctn', 'pack', 'ons',
+        'liter', 'beli', 'belanja', 'jual', 'jualan', '@', 'per '
+    ]
+    if any(kw in normalized for kw in product_signals):
+        return TransactionClass.PRODUCT_SALES
+    return TransactionClass.UNKNOWN
+
+
+def _extract_product_keywords(text: str) -> List[str]:
+    """Ekstrak kata-kata yang berpotensi menjadi nama produk dari teks transaksi."""
+    # Hilangkan angka, simbol, dan kata umum
+    clean = re.sub(r'[\d.,@\-+:/]', ' ', text.lower())
+    words = clean.split()
+    stop_words = {
+        'beli', 'belanja', 'jual', 'jualan', 'total', 'jumlah', 'kemarin', 'tgl', 
+        'hari', 'ini', 'ke', 'dari', 'untuk', 'rp', 'idr', 'pcs', 'kg', 'gr', 'btl'
+    }
+    return [w for w in words if w not in stop_words and len(w) > 2]
+
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -475,11 +519,13 @@ def build_minimal_prompt(normalized_text: str, today_date: str, coa_context: str
         "Ekstrak data dari Smart Note menjadi JSON.\n\n"
         "ATURAN WAJIB:\n"
         "1. ZERO HALUSINASI: Jika tidak ada rincian barang → items: [].\n"
-        "2. 'Penjualan'/'Pendapatan'/'Penerimaan' operasional → transaction_type: 'sales'.\n"
-        "3. 'income' HANYA untuk non-operasional (bunga bank, hibah, dividen).\n"
-        "4. Angka shorthand (3jt/500rb/Rp) sudah dinormalisasi sebelum dikirim ke sini.\n"
-        "5. Jika ada tanggal eksplisit di teks, gunakan itu. Jika tidak → gunakan today_date.\n"
-        "6. items[] hanya diisi jika ada nama barang + qty + harga satuan yang jelas."
+        "2. Jika terdapat kata 'Pembelian', 'Kulakan', 'Belanja', atau ketika nama toko tenant kita (misal: TOKO KUSUMA) terdaftar sebagai Pelanggan/Customer pada nota tagihan pihak ketiga/supplier → set transaction_type: 'purchase'.\n"
+        "3. Jika terdapat kata 'Penjualan', 'Pendapatan', 'Penerimaan' operasional toko kita ke konsumen → set transaction_type: 'sales'.\n"
+        "4. 'income' HANYA untuk pendapatan non-operasional (bunga bank, hibah, dividen).\n"
+        "5. Angka shorthand (3jt/500rb/Rp) sudah dinormalisasi sebelum dikirim ke sini.\n"
+        "6. Jika ada tanggal eksplisit di teks, gunakan itu. Jika tidak → gunakan today_date.\n"
+        "7. items[] hanya diisi jika ada nama barang + qty + harga satuan yang jelas.\n"
+        "8. Ekstrak satuan barang (seperti kg, pcs, btl, ctn, ltr) ke dalam properti 'unit' jika ada di teks. Jika tidak ada, gunakan default 'pcs'."
     )
 
     coa_section = f"\n{coa_context.strip()}\n" if coa_context.strip() else ""
@@ -495,7 +541,7 @@ def build_minimal_prompt(normalized_text: str, today_date: str, coa_context: str
         "  \"total_amount\": number,\n"
         "  \"transaction_type\": \"sales|purchase|expense|income|cash_count|capital\",\n"
         "  \"items\": [\n"
-        "    { \"name\": \"string\", \"qty\": number, \"unit_price\": number, \"total\": number }\n"
+        "    { \"name\": \"string\", \"qty\": number, \"unit\": \"string (kg|pcs|btl|ctn|dll)\", \"unit_price\": number, \"total\": number }\n"
         "  ]\n"
         "}"
     )

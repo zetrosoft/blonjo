@@ -4,20 +4,22 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Badge } from '../../components/ui/badge';
-import { Search, Plus, Edit2, Trash2, UserCheck, CreditCard, Sparkles, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Search, Plus, Edit2, Trash2, UserCheck, CreditCard, Sparkles, AlertTriangle, RefreshCw, Loader2 } from 'lucide-react';
 import { cn, formatRp } from '../../lib/utils';
 import { toast } from 'sonner';
 import { fetchClient } from '../../api/client';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/dialog';
+import { Label } from '../../components/ui/label';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../../components/ui/alert-dialog';
 
 interface Customer {
   id: number;
   code: string;
   name: string;
   phone: string;
+  address: string;
   tier: 'retail' | 'reseller' | 'agent';
-  total_spent: number;
   receivable_balance: number; // Piutang
-  status: 'active' | 'inactive';
 }
 
 export default function CustomerPage() {
@@ -25,6 +27,24 @@ export default function CustomerPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
+
+  const [formData, setFormData] = useState({
+    name: '',
+    phone: '',
+    address: '',
+    current_balance: '0'
+  });
+
+  const toSentenceCase = (str: string) => {
+    if (!str) return '-';
+    const trimmed = str.trim();
+    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  };
 
   const loadCustomers = async () => {
     setLoading(true);
@@ -41,17 +61,14 @@ export default function CustomerPage() {
             tier = 'reseller';
           }
 
-          const status: Customer['status'] = 'active';
-
           return {
             id: cust.id,
             code: `CST-${cust.id.toString().padStart(3, '0')}`,
             name: cust.name,
-            phone: cust.phone || 'Tidak ada telepon',
+            phone: cust.phone || '',
+            address: cust.address || '',
             tier,
-            total_spent: 0, // Data total belanja tidak ada di model Contact
             receivable_balance: Number(cust.current_balance),
-            status,
           };
         });
         setCustomers(mappedCustomers);
@@ -72,7 +89,78 @@ export default function CustomerPage() {
     loadCustomers();
   }, []);
 
+  const handleAdd = () => {
+    setEditingCustomer(null);
+    setFormData({
+      name: '',
+      phone: '',
+      address: '',
+      current_balance: '0'
+    });
+    setIsDialogOpen(true);
+  };
 
+  const handleEdit = (customer: Customer) => {
+    setEditingCustomer(customer);
+    setFormData({
+      name: customer.name,
+      phone: customer.phone,
+      address: customer.address,
+      current_balance: customer.receivable_balance.toString()
+    });
+    setIsDialogOpen(true);
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.name) {
+      toast.error('Gagal', { description: 'Nama pelanggan wajib diisi.' });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        name: formData.name,
+        contact_type: 'customer',
+        phone: formData.phone || null,
+        address: formData.address || null,
+        current_balance: parseFloat(formData.current_balance) || 0
+      };
+
+      if (editingCustomer) {
+        await fetchClient(`/inventory/contacts/${editingCustomer.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload)
+        });
+        toast.success('Berhasil', { description: `Pelanggan ${formData.name} berhasil diperbarui.` });
+      } else {
+        await fetchClient('/inventory/contacts', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        toast.success('Berhasil', { description: `Pelanggan ${formData.name} berhasil ditambahkan.` });
+      }
+      setIsDialogOpen(false);
+      loadCustomers();
+    } catch (err: any) {
+      toast.error('Gagal', { description: err.message || 'Gagal menyimpan pelanggan' });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const confirmDelete = async (id: number, name: string) => {
+    try {
+      await fetchClient(`/inventory/contacts/${id}`, { method: 'DELETE' });
+      toast.success('Berhasil', { description: `Pelanggan ${name} telah dihapus.` });
+      loadCustomers();
+    } catch (err: any) {
+      toast.error('Gagal', { description: err.message || `Gagal menghapus pelanggan ${name}` });
+    } finally {
+      setDeleteTarget(null);
+    }
+  };
 
   const getTierBadge = (tier: Customer['tier']) => {
     const configs = {
@@ -91,21 +179,14 @@ export default function CustomerPage() {
   const filteredCustomers = customers.filter(cust => 
     cust.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     cust.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    cust.phone.includes(searchQuery)
+    cust.phone.includes(searchQuery) ||
+    cust.address.toLowerCase().includes(searchQuery.toLowerCase())
   );
-
-  const handleAdd = () => {
-    toast.info('Info', { description: 'Fitur Tambah Pelanggan baru akan diintegrasikan dengan API backend.' });
-  };
-
-  const handleEdit = (code: string) => {
-    toast.info('Info', { description: `Ubah pelanggan ${code} akan diintegrasikan dengan API backend.` });
-  };
 
   return (
     <div className="space-y-6">
       {/* Overview Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card className="border-zinc-200/60 dark:border-zinc-800/60 bg-card/60 backdrop-blur-md shadow-sm">
           <CardContent className="pt-6 flex items-center justify-between">
             <div className="space-y-1">
@@ -116,20 +197,6 @@ export default function CustomerPage() {
             </div>
             <div className="p-3 bg-primary/10 text-primary rounded-xl">
               <UserCheck className="w-6 h-6" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-zinc-200/60 dark:border-zinc-800/60 bg-card/60 backdrop-blur-md shadow-sm">
-          <CardContent className="pt-6 flex items-center justify-between">
-            <div className="space-y-1">
-              <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Total Penjualan Kotor</p>
-              <p className="text-2xl font-extrabold text-emerald-600 dark:text-emerald-500">
-                {loading ? '-' : formatRp(customers.reduce((acc, curr) => acc + curr.total_spent, 0))}
-              </p>
-            </div>
-            <div className="p-3 bg-emerald-500/10 text-emerald-500 rounded-xl">
-              <Sparkles className="w-6 h-6" />
             </div>
           </CardContent>
         </Card>
@@ -155,7 +222,7 @@ export default function CustomerPage() {
           <div className="relative flex-1 max-w-sm w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
             <Input
-              placeholder="Cari pelanggan, telepon, atau kode..."
+              placeholder="Cari pelanggan berdasarkan nama, alamat, atau nomor telepon..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9 bg-background border-zinc-200 dark:border-zinc-800"
@@ -199,9 +266,8 @@ export default function CustomerPage() {
                     <TableHead>Nama Pelanggan</TableHead>
                     <TableHead>Kategori Tier</TableHead>
                     <TableHead>Telepon</TableHead>
-                    <TableHead className="text-right">Total Belanja</TableHead>
+                    <TableHead>Alamat</TableHead>
                     <TableHead className="text-right">Piutang Toko</TableHead>
-                    <TableHead>Status</TableHead>
                     <TableHead className="text-center w-[100px]">Aksi</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -209,29 +275,21 @@ export default function CustomerPage() {
                   {filteredCustomers.map((cust) => (
                     <TableRow key={cust.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40">
                       <TableCell className="font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-300">{cust.code}</TableCell>
-                      <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100">{cust.name}</TableCell>
-                      <TableCell>{getTierBadge(cust.tier)}</TableCell>
-                      <TableCell className="text-xs font-mono">{cust.phone}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold text-emerald-600 dark:text-emerald-500">{formatRp(cust.total_spent)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-extrabold text-indigo-600 dark:text-indigo-500">
-                        {cust.receivable_balance > 0 ? formatRp(cust.receivable_balance) : 'Lunas'}
+                      <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100">
+                        {toSentenceCase(cust.name)}
                       </TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={cn(
-                          "px-2.5 py-0.5 text-xs font-semibold",
-                          cust.status === 'active' 
-                            ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' 
-                            : 'bg-zinc-500/10 text-zinc-500 border-zinc-500/20'
-                        )}>
-                          {cust.status === 'active' ? 'Aktif' : 'Nonaktif'}
-                        </Badge>
+                      <TableCell>{getTierBadge(cust.tier)}</TableCell>
+                      <TableCell className="text-xs font-mono">{cust.phone || '-'}</TableCell>
+                      <TableCell className="max-w-xs truncate text-xs text-zinc-500">{cust.address || '-'}</TableCell>
+                      <TableCell className="text-right font-mono text-xs font-extrabold text-indigo-600 dark:text-indigo-500">
+                        {cust.receivable_balance > 0 ? formatRp(cust.receivable_balance) : '-'}
                       </TableCell>
                       <TableCell className="text-center">
                         <div className="flex justify-center items-center gap-1.5">
                           <Button 
                             variant="ghost" 
                             size="icon" 
-                            onClick={() => handleEdit(cust.code)}
+                            onClick={() => handleEdit(cust)}
                             className="h-8 w-8 text-zinc-500 hover:text-primary hover:bg-primary/5"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
@@ -239,7 +297,7 @@ export default function CustomerPage() {
                           <Button 
                             variant="ghost" 
                             size="icon" 
-                            onClick={() => toast.error('Hapus', { description: 'Operasi destruktif memerlukan verifikasi backend API.' })}
+                            onClick={() => setDeleteTarget(cust)}
                             className="h-8 w-8 text-zinc-500 hover:text-rose-500 hover:bg-rose-500/5"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -254,6 +312,92 @@ export default function CustomerPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Add/Edit Dialog */}
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <form onSubmit={handleSave}>
+            <DialogHeader>
+              <DialogTitle>{editingCustomer ? 'Ubah Pelanggan' : 'Tambah Pelanggan Baru'}</DialogTitle>
+              <DialogDescription>
+                {editingCustomer ? 'Perbarui informasi detail pelanggan.' : 'Masukkan detail pelanggan baru ke database.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="name">Nama Pelanggan</Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="Contoh: Budi santoso"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="phone">Telepon</Label>
+                <Input
+                  id="phone"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  placeholder="Nomor telepon aktif..."
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="address">Alamat</Label>
+                <Input
+                  id="address"
+                  value={formData.address}
+                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                  placeholder="Alamat lengkap..."
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="balance">Saldo Awal Piutang (Rp)</Label>
+                <Input
+                  id="balance"
+                  type="number"
+                  value={formData.current_balance}
+                  onChange={(e) => setFormData({ ...formData, current_balance: e.target.value })}
+                  placeholder="Saldo piutang awal..."
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                Batal
+              </Button>
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? 'Menyimpan...' : editingCustomer ? 'Simpan Perubahan' : 'Tambahkan'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Alert */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Apakah Anda yakin?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tindakan ini tidak dapat dibatalkan. Pelanggan "{deleteTarget && toSentenceCase(deleteTarget.name)}" akan dihapus secara permanen dari database master.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={() => {
+                if (deleteTarget) {
+                  confirmDelete(deleteTarget.id, deleteTarget.name);
+                }
+              }}
+              className="bg-rose-600 hover:bg-rose-700 text-white"
+            >
+              Hapus
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

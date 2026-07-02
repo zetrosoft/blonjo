@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, Enum, ForeignKey, JSON, Text, Numeric
 from sqlalchemy.orm import relationship
+from pgvector.sqlalchemy import Vector
 from app.models.base import Base
 import enum
 
@@ -14,6 +15,7 @@ class OCRTask(Base):
     __tablename__ = "ocr_tasks"
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     file_name = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
@@ -23,6 +25,7 @@ class OCRTask(Base):
     error_message = Column(String, nullable=True)
     corrected_data = Column(JSON, nullable=True)
 
+    tenant = relationship("Tenant")
     user = relationship("User")
     feedback_items = relationship("OCRFeedback", back_populates="ocr_task", cascade="all, delete-orphan")
 
@@ -55,6 +58,10 @@ class AILearningTemplate(Base):
     file_name = Column(String, nullable=True)
     raw_ocr_text = Column(Text, nullable=False)
     expected_output = Column(Text, nullable=False) # Panduan/JSON dari user
+    usage_count = Column(Integer, default=0, nullable=False)
+    
+    # Embedding for vector similarity RAG (3072 dimensions)
+    embedding = Column(Vector(3072), nullable=True)
     
     tenant = relationship("Tenant")
 

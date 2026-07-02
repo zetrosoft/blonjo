@@ -31,5 +31,15 @@ class AILearningTemplateCreate(BaseModel):
 
 class AILearningTemplateResponse(AILearningTemplateCreate):
     id: int
+    usage_count: int
+    created_at: datetime
     model_config = ConfigDict(from_attributes=True)
+
+class AITrainingProcessRequest(BaseModel):
+    instructions: str
+    raw_text: str
+
+class AITrainingProcessResponse(BaseModel):
+    processed_markdown: str
+    processor: str
 

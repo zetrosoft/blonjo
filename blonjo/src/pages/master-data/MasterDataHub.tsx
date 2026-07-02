@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { LayoutGrid, Package, Users, User, Ruler, ArrowRight, GitBranch } from 'lucide-react';
+import { LayoutGrid, Package, Users, User, Ruler, ArrowRight, GitBranch, DollarSign, Tag } from 'lucide-react';
 
 export default function MasterDataHub() {
   const { t } = useTranslation();

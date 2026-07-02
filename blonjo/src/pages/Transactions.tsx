@@ -41,7 +41,7 @@ export default function Transactions() {
   // ── Hooks ─────────────────────────────────────────────────────────
   const { accounts, loading }  = useAccounts();
   const smartNote              = useSmartNote();
-  const ocr                    = useOcrUpload(smartNote.setNoteText, smartNote.setParsedResult);
+  const ocr                    = useOcrUpload(smartNote.setNoteText, smartNote.mergeAndSet);
   const smartConfirm           = useSmartConfirm(accounts, smartNote.parsedResult, smartNote.handleReset);
   const manual                 = useManualEntry();
 

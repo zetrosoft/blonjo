@@ -1,4 +1,5 @@
 import { formatRp, formatNumber } from './utils';
+import { mcpClient } from '../api/mcpClient';
 
 /**
  * Smart Transaction Parser — NLP Engine Lokal v2
@@ -558,35 +559,38 @@ export function detectTransactionType(text: string): { rule: TypeRule | null; co
 // ─────────────────────────────────────────────
 //  MAIN PARSER
 // ─────────────────────────────────────────────
-export function parseNoteText(rawText: string): ParsedTransaction {
+export async function parseNoteText(rawText: string): Promise<ParsedTransaction> {
   const text = sanitizeText(rawText);
 
-  // Deteksi Tipe & Kepercayaan
-  const { rule, confidence } = detectTransactionType(text);
-  
-  // Ekstraksi Item & Tanggal
-  const items = extractItems(text);
-  const transaction_date = extractDate(text);
+  let type = 'manual';
+  let total_amount = 0;
+  let items: ParsedItem[] = [];
+  let contact_name = undefined;
+  let confidence: 'high' | 'medium' | 'low' = 'low';
 
-  // Total = sum all items if present, fallback to extractAmount
-  const total_amount = items.length > 0
+  // Fallback Lokal
+  const localRule = detectTransactionType(text);
+  type = localRule.rule?.type ?? 'manual';
+  confidence = localRule.confidence;
+  items = extractItems(text);
+  total_amount = items.length > 0
     ? items.reduce((sum, i) => sum + i.total, 0)
     : extractAmount(text);
+  contact_name = items.find(i => i.contact_name)?.contact_name;
 
-  // Generate deskripsi manusiawi
+  // Tentukan label dan warna berdasarkan tipe dari JSON atau Lokal
+  const rule = TYPE_RULES.find(r => r.type === type);
+  const transaction_date = extractDate(text);
   const description = generateDescription(text, rule?.label ?? 'Manual Journal', items);
 
-  // Ambil contact dari item pertama sebagai contact utama jika ada
-  const contact_name = items.find(i => i.contact_name)?.contact_name;
-
   return {
-    transaction_type: rule?.type ?? 'manual',
+    transaction_type: (type as TransactionType),
     type_label: rule?.label ?? 'Manual Journal',
     type_color: rule?.color ?? 'bg-muted text-muted-foreground border-border',
     description,
     total_amount,
     transaction_date,
-    contact_name, // Masukkan ke sini
+    contact_name,
     items,
     raw_text: text,
     confidence,

@@ -22,6 +22,7 @@ from app.services.accounting import (
     create_transaction_with_journal, 
     update_transaction_draft, 
     post_transaction,
+    unpost_transaction,
     delete_transaction_draft,
     get_dashboard_summary,
     get_auto_journal_entries,
@@ -41,11 +42,12 @@ from datetime import datetime
 router = APIRouter()
 
 @router.post("/transactions/parse", response_model=ParseNoteResponse)
-def parse_transaction_note(
+async def parse_transaction_note(
     request: ParseNoteRequest,
     session: SessionDep,
     current_user: CurrentUser
 ):
+
     """
     Parse unstructured text into transaction data.
 
@@ -86,18 +88,40 @@ def parse_transaction_note(
         # ────────────────────────────────────────────────────────────────────
         # LEVEL 2 & 3: RAG Context + LLM (hanya jika rule-based gagal)
         # ────────────────────────────────────────────────────────────────────
+        from app.services.smart_parser import classify_transaction
+        from app.services.ai_context import build_minimal_context
 
-        # Bangun RAG context (tidak lagi mengandung COA)
-        rag_context = get_rag_context(session, current_user.tenant_id, normalized_text)
+        # Deteksi kelas transaksi untuk membatasi overhead context
+        tx_class = classify_transaction(normalized_text)
+        min_context = build_minimal_context(normalized_text, tx_class, current_user.tenant_id, session)
 
-        # COA: Ambil dari cache Redis, inject ke prompt HANYA jika diperlukan
+
+        # Bangun RAG context dinamis
+        rag_context = ""
+        # 1. Inject COA (dari cache Redis atau query build_minimal_context jika tidak ada cache)
         coa_section = ""
         if needs_coa_in_prompt(normalized_text):
-            coa_str = get_coa_string(session, current_user.tenant_id)
+            coa_str = get_coa_string(session, current_user.tenant_id) or min_context.get("coa", "")
             if coa_str:
                 coa_section = f"\n--- DAFTAR AKUN (COA) ---\n{coa_str}\n"
 
-        # Bangun prompt minimal (bukan prompt raksasa dengan semua konteks)
+        # 2. Inject Pricing Rules yang terfilter secara dinamis
+        rules = min_context.get("pricing_rules", [])
+        if rules:
+            rag_context += "\n--- ATURAN HARGA JUAL (PRICING RULES) ---\n"
+            for r in rules:
+                rag_context += f"- {r['name'] or 'Aturan Harga'}: {json.dumps(r['rule_payload'])}\n"
+
+        # Tambahkan RAG template historis / golden template jika input kompleks
+        is_complex = len(normalized_text) > 60
+        if is_complex:
+            rag_context_full = get_rag_context(session, current_user.tenant_id, normalized_text)
+            # Hapus bagian pricing rules dari full context agar tidak duplikasi
+            if "PEMBELAJARAN" in rag_context_full or "REFERENSI" in rag_context_full:
+                lines = [l for l in rag_context_full.split("\n") if "ATURAN HARGA" not in l]
+                rag_context += "\n".join(lines)
+
+        # Bangun prompt minimal
         system_instruction, prompt = build_minimal_prompt(
             normalized_text, today_date, coa_section
         )
@@ -106,12 +130,18 @@ def parse_transaction_note(
         if rag_context.strip():
             prompt = rag_context.strip() + "\n\n" + prompt
 
-        # Panggil AI (Level 2: Redis Cache di dalam call_ai_text, Level 3: LLM)
-        res = call_ai_text(session, prompt, system_instruction=system_instruction, temperature=0.0)
-        final_parsed_data = res["parsed_data"]
-        processor_name = res.get("processor", "unknown")
-        token_in = res.get("token_in", 0)
-        token_out = res.get("token_out", 0)
+        # Panggil AI (Level 2: Redis Cache/MCP, Level 3: LLM/MCP)
+        from app.services.mcp_client import mcp_client
+        final_parsed_data = await mcp_client.parse_transaction(
+            session,
+            normalized_text,
+            {"coa": coa_section, "pricing_rules": rules}
+        )
+        processor_name = "mcp_server" if settings.MCP_ENABLED else "local_fallback"
+        token_in = 0
+        token_out = 0
+
+
 
         # ── Post-processing: Override & Sanity Check ─────────────────────────
         if final_parsed_data:
@@ -438,6 +468,23 @@ def post_transaction_api(
     Only accessible by Admin and Manager roles.
     """
     return post_transaction(
+        db=session,
+        transaction_id=transaction_id,
+        tenant_id=current_user.tenant_id
+    )
+
+
+@router.post("/transactions/{transaction_id}/unpost", response_model=TransactionResponse)
+def unpost_transaction_api(
+    transaction_id: int,
+    session: SessionDep,
+    current_user: User = Depends(check_role([UserRole.ADMIN, UserRole.MANAGER]))
+):
+    """
+    Unpost a transaction (change status from POSTED to DRAFT).
+    Only accessible by Admin and Manager roles.
+    """
+    return unpost_transaction(
         db=session,
         transaction_id=transaction_id,
         tenant_id=current_user.tenant_id

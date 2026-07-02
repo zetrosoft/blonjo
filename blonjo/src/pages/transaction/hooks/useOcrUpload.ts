@@ -11,7 +11,7 @@ import { parseNoteText, type ParsedTransaction } from '../../../lib/smartParser'
  */
 export function useOcrUpload(
   setNoteText: (text: string) => void,
-  setParsedResult: (result: ParsedTransaction | null) => void,
+  onParse: (text: string) => void,
 ) {
   const [isUploading, setIsUploading] = useState(false);
   const [currentOcrTaskId, setCurrentOcrTaskId] = useState<number | null>(null);
@@ -55,8 +55,8 @@ export function useOcrUpload(
           setNoteText(text);
           toast.success('OCR Berhasil', { description: 'Data mentah telah dimasukkan ke Smart Note.' });
 
-          // Parse lokal dengan delay kecil agar UI settle
-          setTimeout(() => setParsedResult(parseNoteText(text)), 500);
+          // Parse menggunakan backend/RAG parser
+          setTimeout(() => onParse(text), 500);
         } else if (task.status === 'failed') {
           stopPolling();
           setIsUploading(false);
@@ -66,7 +66,7 @@ export function useOcrUpload(
         console.error('[useOcrUpload] Polling error:', err);
       }
     }, 2000);
-  }, [setNoteText, setParsedResult, stopPolling]);
+  }, [setNoteText, onParse, stopPolling]);
 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

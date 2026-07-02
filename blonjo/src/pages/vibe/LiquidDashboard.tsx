@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Omnibar } from './Omnibar';
 import { VibeRenderer, VibeData } from './VibeRenderer';
 import { fetchClient } from '@/api/client';
+import { mcpClient } from '@/api/mcpClient';
 import { toast } from 'sonner';
 import { Loader2 } from 'lucide-react';
 import { useAccountingStore } from '@/store/accounting';
@@ -17,7 +18,8 @@ const LiquidDashboard: React.FC = () => {
       let data: any;
       
       if (file) {
-        // Use FormData for file uploads (OCR path)
+        // Fallback untuk OCR saat ini karena tools OCR belum lengkap di MCP Server.
+        // Kedepannya ini akan dikirim via MCP tools (misal: ocr_document) sebagai Base64
         const formData = new FormData();
         formData.append('file', file);
         formData.append('text', intent || 'Proses dokumen ini');
@@ -25,16 +27,19 @@ const LiquidDashboard: React.FC = () => {
         data = await fetchClient('/vibe/intent', {
           method: 'POST',
           body: formData,
-          headers: {
-            // fetchClient handles multipart/form-data correctly if body is FormData
-          }
         });
       } else {
-        // Normal text intent
-        data = await fetchClient('/vibe/intent', {
-          method: 'POST',
-          body: JSON.stringify({ text: intent })
+        // Normal text intent via MCP Server (Tahap 3A)
+        const result = await mcpClient.callTool('vibe_orchestrator', { 
+          text: intent,
+          has_file: false
         });
+        const content = result.content as any[];
+        if (!result.isError && content && content.length > 0 && content[0].type === 'text') {
+           data = JSON.parse(content[0].text);
+        } else {
+           throw new Error("Respons MCP gagal atau tidak valid");
+        }
       }
       
       if (data && Array.isArray(data.items)) {

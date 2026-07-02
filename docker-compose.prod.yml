@@ -1,0 +1,102 @@
+# =============================================================
+# JUALAN (Blonjo + Sajen) - Production Docker Compose
+# Target: VPS x86_64 (Linux amd64)
+#
+# Database & Redis: Shared dari jkk-infra (jkk-infra-postgres-1 & jkk-infra-redis-1)
+# Network: jkk-backbone (shared) + bijexa-network (Traefik)
+# Catatan: Untuk development lokal, gunakan docker-compose.yml
+# =============================================================
+
+services:
+  # ── Core API Engine (FastAPI) ──────────────────────────────
+  sajen-api:
+    container_name: sajen_backend_api
+    build:
+      context: ./sajen
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:8005:8005"
+    env_file:
+      - .env.production
+    networks:
+      - jkk-backbone
+      - bijexa-network
+    volumes:
+      - uploads_data:/app/uploads
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sajen-api.rule=Host(`blonjo.samkarsa.com`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.sajen-api.entrypoints=websecure"
+      - "traefik.http.routers.sajen-api.tls.certresolver=myresolver"
+      - "traefik.http.services.sajen-api.loadbalancer.server.port=8005"
+      - "traefik.docker.network=bijexa-network"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  # ── Agentic Worker (Celery) ────────────────────────────────
+  sajen-worker:
+    container_name: sajen_agentic_worker
+    build:
+      context: ./sajen
+      dockerfile: Dockerfile
+    env_file:
+      - .env.production
+    depends_on:
+      - sajen-api
+    networks:
+      - jkk-backbone
+    volumes:
+      - uploads_data:/app/uploads
+    command: ["celery", "-A", "app.core.celery_app", "worker", "--loglevel=info", "--pool=threads", "--concurrency=2"]
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  # ── Frontend Dashboard (Blonjo - nginx production) ─────────
+  blonjo-ui:
+    container_name: blonjo_frontend
+    build:
+      context: ./blonjo
+      dockerfile: Dockerfile.prod
+      args:
+        - VITE_API_URL=${VITE_API_URL}
+    ports:
+      - "127.0.0.1:7500:7500"
+    networks:
+      - bijexa-network
+    environment:
+      - VITE_API_URL=${VITE_API_URL}
+    depends_on:
+      - sajen-api
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.blonjo-ui.rule=Host(`blonjo.samkarsa.com`)"
+      - "traefik.http.routers.blonjo-ui.entrypoints=websecure"
+      - "traefik.http.routers.blonjo-ui.tls.certresolver=myresolver"
+      - "traefik.http.services.blonjo-ui.loadbalancer.server.port=7500"
+      - "traefik.docker.network=bijexa-network"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+networks:
+  jkk-backbone:
+    external: true   # Shared network dengan jkk-infra (postgres & redis)
+  bijexa-network:
+    external: true   # Traefik reverse proxy network
+
+volumes:
+  uploads_data:

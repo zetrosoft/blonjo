@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Label } from '../../components/ui/label';
 import { cn, formatRp } from '../../lib/utils';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../../components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { fetchClient } from '../../api/client';
 
@@ -40,6 +41,9 @@ export default function ItemPage() {
     category_id: ''
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const [uoms, setUoms] = useState<any[]>([]);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const loadItems = async () => {
     setLoading(true);
@@ -83,8 +87,20 @@ export default function ItemPage() {
     }
   };
 
+  const loadUoms = async () => {
+    try {
+      const data = await fetchClient('/inventory/uoms');
+      if (Array.isArray(data)) {
+        setUoms(data.filter(u => u.status === 'active'));
+      }
+    } catch (err) {
+      console.error('Failed to load UOMs for selection', err);
+    }
+  };
+
   useEffect(() => {
     loadItems();
+    loadUoms();
   }, []);
 
 
@@ -126,14 +142,15 @@ export default function ItemPage() {
     setIsDialogOpen(true);
   };
 
-  const handleDelete = async (sku: string) => {
-    if (!confirm(`Hapus item ${sku}?`)) return;
+  const confirmDelete = async (sku: string) => {
     try {
       await fetchClient(`/inventory/products/${sku}`, { method: 'DELETE' });
       toast.success('Berhasil', { description: `Item ${sku} telah dihapus.` });
       loadItems();
     } catch (err: any) {
       toast.error('Gagal', { description: err.message || `Gagal menghapus ${sku}` });
+    } finally {
+      setDeleteTarget(null);
     }
   };
 
@@ -309,7 +326,7 @@ export default function ItemPage() {
                           <Button 
                             variant="ghost" 
                             size="icon" 
-                            onClick={() => handleDelete(item.sku)}
+                            onClick={() => setDeleteTarget(item.sku)}
                             disabled={item.has_transactions}
                             title={item.has_transactions ? "Item tidak dapat dihapus karena sudah memiliki transaksi" : "Hapus Item"}
                             className="h-8 w-8 text-zinc-500 hover:text-rose-500 hover:bg-rose-500/5 disabled:opacity-30 disabled:cursor-not-allowed"
@@ -366,12 +383,22 @@ export default function ItemPage() {
                     <SelectValue placeholder="Pilih satuan" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="pcs">Pcs</SelectItem>
-                    <SelectItem value="kg">Kg</SelectItem>
-                    <SelectItem value="gr">Gram</SelectItem>
-                    <SelectItem value="ltr">Liter</SelectItem>
-                    <SelectItem value="box">Box</SelectItem>
-                    <SelectItem value="lusin">Lusin</SelectItem>
+                    {uoms.length === 0 ? (
+                      <>
+                        <SelectItem value="pcs">Pcs</SelectItem>
+                        <SelectItem value="kg">Kg</SelectItem>
+                        <SelectItem value="gr">Gram</SelectItem>
+                        <SelectItem value="ltr">Liter</SelectItem>
+                        <SelectItem value="box">Box</SelectItem>
+                        <SelectItem value="lusin">Lusin</SelectItem>
+                      </>
+                    ) : (
+                      uoms.map((u) => (
+                        <SelectItem key={u.id} value={u.code}>
+                          {u.name} ({u.code.toUpperCase()})
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
               </div>
@@ -388,6 +415,30 @@ export default function ItemPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Apakah Anda yakin?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tindakan ini tidak dapat dibatalkan. Produk dengan SKU {deleteTarget} akan dihapus secara permanen dari database master.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={() => {
+                if (deleteTarget) {
+                  confirmDelete(deleteTarget);
+                }
+              }}
+              className="bg-rose-600 hover:bg-rose-700 text-white"
+            >
+              Hapus
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

@@ -19,12 +19,14 @@ import RoleSettings from './settings/RoleSettings';
 import VoiceSettings from './settings/VoiceSettings';
 import AITrainingSettings from './settings/AITrainingSettings';
 import SaasSettings from './settings/SaasSettings';
+import MyCatalogPage from './master-data/MyCatalogPage';
+import PricingRulePage from './master-data/PricingRulePage';
 
 // UI Hub Components (Grid Cards)
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { 
-  Store, Users, Shield, Mic2, Wand2, ShieldCheck, ArrowRight 
+  Store, Users, Shield, Mic2, Wand2, ShieldCheck, ArrowRight, DollarSign, Tag 
 } from 'lucide-react';
 
 export default function Settings() {
@@ -32,43 +34,17 @@ export default function Settings() {
   const { tab } = useParams<{ tab: string }>();
   const navigate = useNavigate();
   const { user } = useAuthStore();
-  const activeTab = tab as 'store' | 'users' | 'roles' | 'saas' | 'voice' | 'aitraining' | undefined;
+  const activeTab = tab as 'store' | 'users' | 'roles' | 'saas' | 'voice' | 'aitraining' | 'my-catalog' | 'pricing-rules' | undefined;
 
   const getTabLabel = (tKey: string) => {
     if (tKey === 'aitraining') return t('setting_ai_training');
+    if (tKey === 'my-catalog') return t('menu_my_catalog');
+    if (tKey === 'pricing-rules') return t('menu_pricing_rules');
     return t(`setting_${tKey}`);
   };
 
   return (
     <div className="container mx-auto px-6 py-8 space-y-6">
-      {/* ── Breadcrumb ── */}
-      <Breadcrumb className="mb-2">
-        <BreadcrumbList>
-          <BreadcrumbItem>
-            <BreadcrumbLink onClick={() => navigate('/')} className="cursor-pointer">
-              Dashboard
-            </BreadcrumbLink>
-          </BreadcrumbItem>
-          <BreadcrumbSeparator />
-          {activeTab ? (
-            <>
-              <BreadcrumbItem>
-                <BreadcrumbLink onClick={() => navigate('/settings')} className="cursor-pointer">
-                  {t('menu_settings')}
-                </BreadcrumbLink>
-              </BreadcrumbItem>
-              <BreadcrumbSeparator />
-              <BreadcrumbItem>
-                <BreadcrumbPage>{getTabLabel(activeTab)}</BreadcrumbPage>
-              </BreadcrumbItem>
-            </>
-          ) : (
-            <BreadcrumbItem>
-              <BreadcrumbPage>{t('menu_settings')}</BreadcrumbPage>
-            </BreadcrumbItem>
-          )}
-        </BreadcrumbList>
-      </Breadcrumb>
 
       {/* ── Header ── */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between pb-6 border-b border-border/40 gap-4">
@@ -195,7 +171,41 @@ export default function Settings() {
                 </CardContent>
               </Card>
 
-              {/* 6. SaaS Admin (If Superuser) */}
+              {/* 6. Price List */}
+              <Card className="border-zinc-200/80 dark:border-zinc-800/80 bg-card hover:shadow-md transition-all duration-300 flex flex-col group cursor-pointer" onClick={() => navigate('/settings/my-catalog')}>
+                <CardHeader className="space-y-2 pb-2">
+                  <div className="p-3 bg-primary/10 text-primary w-fit rounded-xl">
+                    <DollarSign className="w-6 h-6" />
+                  </div>
+                  <CardTitle className="text-md font-bold mt-2">{t('settings_hub_my_catalog_title')}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 flex-1 flex flex-col justify-between">
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">{t('settings_hub_my_catalog_desc')}</p>
+                  <Button variant="ghost" className="w-full flex items-center justify-between text-xs font-bold border border-zinc-200 dark:border-zinc-800 mt-4 group-hover:bg-primary group-hover:text-primary-foreground transition-all">
+                    <span>{t('md_hub_my_catalog_btn')}</span>
+                    <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {/* 7. Pricing Rules */}
+              <Card className="border-zinc-200/80 dark:border-zinc-800/80 bg-card hover:shadow-md transition-all duration-300 flex flex-col group cursor-pointer" onClick={() => navigate('/settings/pricing-rules')}>
+                <CardHeader className="space-y-2 pb-2">
+                  <div className="p-3 bg-primary/10 text-primary w-fit rounded-xl">
+                    <Tag className="w-6 h-6" />
+                  </div>
+                  <CardTitle className="text-md font-bold mt-2">{t('settings_hub_pricing_rules_title')}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 flex-1 flex flex-col justify-between">
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">{t('settings_hub_pricing_rules_desc')}</p>
+                  <Button variant="ghost" className="w-full flex items-center justify-between text-xs font-bold border border-zinc-200 dark:border-zinc-800 mt-4 group-hover:bg-primary group-hover:text-primary-foreground transition-all">
+                    <span>{t('md_hub_pricing_rules_btn')}</span>
+                    <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" />
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {/* 8. SaaS Admin (If Superuser) */}
               {user?.is_superuser && (
                 <Card className="border-violet-200/80 dark:border-violet-900/40 bg-card hover:shadow-md transition-all duration-300 flex flex-col group cursor-pointer lg:col-span-1" onClick={() => navigate('/settings/saas')}>
                   <CardHeader className="space-y-2 pb-2">
@@ -223,6 +233,8 @@ export default function Settings() {
         {activeTab === 'roles' && <RoleSettings />}
         {activeTab === 'voice' && <VoiceSettings />}
         {activeTab === 'aitraining' && <AITrainingSettings />}
+        {activeTab === 'my-catalog' && <MyCatalogPage hideHeader />}
+        {activeTab === 'pricing-rules' && <PricingRulePage hideHeader />}
         {activeTab === 'saas' && user?.is_superuser && <SaasSettings />}
       </div>
     </div>

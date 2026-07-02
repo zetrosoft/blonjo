@@ -8,9 +8,13 @@ import { Search, Plus, Edit2, Trash2, Ruler, ClipboardList, Info, RefreshCw, Ale
 import { cn } from '../../lib/utils';
 import { toast } from 'sonner';
 import { fetchClient } from '../../api/client';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/dialog';
+import { Label } from '../../components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../../components/ui/alert-dialog';
 
 interface Uom {
-  id: string | number;
+  id: number;
   code: string;
   name: string;
   category: 'weight' | 'volume' | 'count' | 'length';
@@ -18,55 +22,31 @@ interface Uom {
   status: 'active' | 'inactive';
 }
 
-const DEFAULT_UOMS: Uom[] = [
-  { id: 'def-1', code: 'pcs', name: 'Pieces / Biji', category: 'count', description: 'Satuan hitung barang eceran satuan tunggal', status: 'active' },
-  { id: 'def-2', code: 'kg', name: 'Kilogram', category: 'weight', description: 'Satuan standar untuk berat/massa sembako', status: 'active' },
-  { id: 'def-3', code: 'ltr', name: 'Liter', category: 'volume', description: 'Satuan volume zat cair seperti minyak goreng', status: 'active' },
-  { id: 'def-4', code: 'box', name: 'Kotak / Dus', category: 'count', description: 'Satuan kemasan karton/dus isi banyak', status: 'active' },
-];
-
 export default function UomPage() {
   const [uoms, setUoms] = useState<Uom[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingUom, setEditingUom] = useState<Uom | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: number, code: string } | null>(null);
+  
+  const [formData, setFormData] = useState({
+    code: '',
+    name: '',
+    category: 'count' as Uom['category'],
+    description: '',
+    status: 'active' as Uom['status']
+  });
 
   const loadUoms = async () => {
     setLoading(true);
     setError(null);
     try {
-      const products = await fetchClient('/inventory/products');
-      if (Array.isArray(products)) {
-        // Ekstrak unit unik dari produk
-        const uniqueUnits = Array.from(new Set(products.map((p: any) => p.unit))).filter(Boolean);
-        
-        // Map ke format Uom
-        const mappedUoms: Uom[] = uniqueUnits.map((unit: any, index: number) => {
-          const lowerUnit = unit.toLowerCase();
-          let category: Uom['category'] = 'count';
-          if (['kg', 'gr', 'gram'].includes(lowerUnit)) category = 'weight';
-          if (['ltr', 'ml', 'liter'].includes(lowerUnit)) category = 'volume';
-          if (['m', 'cm'].includes(lowerUnit)) category = 'length';
-
-          return {
-            id: `api-${index}`,
-            code: unit,
-            name: unit.toUpperCase(),
-            category,
-            description: `Satuan resmi dari database produk`,
-            status: 'active'
-          };
-        });
-
-        // Gabungkan dengan default jika belum ada
-        const finalUoms = [...mappedUoms];
-        DEFAULT_UOMS.forEach(def => {
-          if (!finalUoms.some(u => u.code.toLowerCase() === def.code.toLowerCase())) {
-            finalUoms.push(def);
-          }
-        });
-
-        setUoms(finalUoms);
+      const data = await fetchClient('/inventory/uoms');
+      if (Array.isArray(data)) {
+        setUoms(data);
       } else {
         throw new Error('Format data tidak didukung');
       }
@@ -74,7 +54,7 @@ export default function UomPage() {
       const msg = err.message || 'Gagal memuat data satuan';
       setError(msg);
       toast.error('Error', { description: msg });
-      setUoms([]); // JANGAN FALLBACK KE MOCK!
+      setUoms([]);
     } finally {
       setLoading(false);
     }
@@ -84,6 +64,73 @@ export default function UomPage() {
     loadUoms();
   }, []);
 
+  const handleAdd = () => {
+    setEditingUom(null);
+    setFormData({
+      code: '',
+      name: '',
+      category: 'count',
+      description: '',
+      status: 'active'
+    });
+    setIsDialogOpen(true);
+  };
+
+  const handleEdit = (uom: Uom) => {
+    setEditingUom(uom);
+    setFormData({
+      code: uom.code,
+      name: uom.name,
+      category: uom.category,
+      description: uom.description || '',
+      status: uom.status
+    });
+    setIsDialogOpen(true);
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.code || !formData.name) {
+      toast.error('Gagal', { description: 'Kode dan Nama Satuan wajib diisi.' });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      if (editingUom) {
+        await fetchClient(`/inventory/uoms/${editingUom.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(formData)
+        });
+        toast.success('Berhasil', { description: `Satuan ${formData.code.toUpperCase()} berhasil diperbarui.` });
+      } else {
+        await fetchClient('/inventory/uoms', {
+          method: 'POST',
+          body: JSON.stringify(formData)
+        });
+        toast.success('Berhasil', { description: `Satuan ${formData.code.toUpperCase()} berhasil ditambahkan.` });
+      }
+      setIsDialogOpen(false);
+      loadUoms();
+    } catch (err: any) {
+      toast.error('Gagal', { description: err.message || 'Gagal menyimpan satuan' });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const confirmDelete = async (id: number, code: string) => {
+    try {
+      await fetchClient(`/inventory/uoms/${id}`, { method: 'DELETE' });
+      toast.success('Berhasil', { description: `Satuan ${code.toUpperCase()} telah dihapus.` });
+      loadUoms();
+    } catch (err: any) {
+      toast.error('Gagal', { description: err.message || `Gagal menghapus satuan ${code.toUpperCase()}` });
+    } finally {
+      setDeleteTarget(null);
+    }
+  };
+
   const getCategoryBadge = (category: Uom['category']) => {
     const configs = {
       weight: { label: 'Berat', class: 'bg-amber-500/10 text-amber-500 border-amber-500/20' },
@@ -91,7 +138,7 @@ export default function UomPage() {
       count: { label: 'Jumlah / Kuantitas', class: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' },
       length: { label: 'Panjang', class: 'bg-indigo-500/10 text-indigo-500 border-indigo-500/20' },
     };
-    const conf = configs[category];
+    const conf = configs[category] || configs['count'];
     return (
       <Badge variant="outline" className={cn("px-2 py-0.5 text-xs font-semibold", conf.class)}>
         {conf.label}
@@ -102,16 +149,8 @@ export default function UomPage() {
   const filteredUoms = uoms.filter(uom => 
     uom.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     uom.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    uom.description.toLowerCase().includes(searchQuery.toLowerCase())
+    (uom.description && uom.description.toLowerCase().includes(searchQuery.toLowerCase()))
   );
-
-  const handleAdd = () => {
-    toast.info('Info', { description: 'Fitur Tambah Satuan (UoM) baru akan diintegrasikan dengan API backend.' });
-  };
-
-  const handleEdit = (code: string) => {
-    toast.info('Info', { description: `Ubah satuan ${code} akan diintegrasikan dengan API backend.` });
-  };
 
   return (
     <div className="space-y-6">
@@ -185,7 +224,7 @@ export default function UomPage() {
             <div className="text-center py-16 space-y-3">
               <Ruler className="w-12 h-12 text-zinc-300 dark:text-zinc-700 mx-auto" />
               <h3 className="text-md font-semibold text-zinc-700 dark:text-zinc-300">Tidak ada satuan ditemukan</h3>
-              <p className="text-sm text-zinc-400 dark:text-zinc-500 max-w-sm mx-auto">Satuan akan muncul otomatis dari produk terdaftar.</p>
+              <p className="text-sm text-zinc-400 dark:text-zinc-500 max-w-sm mx-auto">Klik 'Tambah Satuan' untuk membuat satuan baru.</p>
             </div>
           ) : (
             <div className="overflow-x-auto border border-zinc-200/80 dark:border-zinc-800/80 rounded-xl bg-background/30">
@@ -203,7 +242,7 @@ export default function UomPage() {
                 <TableBody>
                   {filteredUoms.map((uom) => (
                     <TableRow key={uom.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40">
-                      <TableCell className="font-mono text-xs font-bold text-primary">{uom.code}</TableCell>
+                      <TableCell className="font-mono text-xs font-bold text-primary">{uom.code.toUpperCase()}</TableCell>
                       <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100">{uom.name}</TableCell>
                       <TableCell>{getCategoryBadge(uom.category)}</TableCell>
                       <TableCell className="text-xs text-zinc-500 max-w-xs truncate">{uom.description || '-'}</TableCell>
@@ -222,7 +261,7 @@ export default function UomPage() {
                           <Button 
                             variant="ghost" 
                             size="icon" 
-                            onClick={() => handleEdit(uom.code)}
+                            onClick={() => handleEdit(uom)}
                             className="h-8 w-8 text-zinc-500 hover:text-primary hover:bg-primary/5"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
@@ -230,7 +269,7 @@ export default function UomPage() {
                           <Button 
                             variant="ghost" 
                             size="icon" 
-                            onClick={() => toast.error('Hapus', { description: 'Operasi destruktif memerlukan verifikasi backend API.' })}
+                            onClick={() => setDeleteTarget({ id: uom.id, code: uom.code })}
                             className="h-8 w-8 text-zinc-500 hover:text-rose-500 hover:bg-rose-500/5"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -245,6 +284,113 @@ export default function UomPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <form onSubmit={handleSave}>
+            <DialogHeader>
+              <DialogTitle>{editingUom ? 'Ubah Satuan' : 'Tambah Satuan Baru'}</DialogTitle>
+              <DialogDescription>
+                {editingUom ? `Perbarui informasi satuan ${editingUom.code.toUpperCase()}.` : 'Masukkan detail satuan baru ke database.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="code">Kode Satuan</Label>
+                <Input
+                  id="code"
+                  value={formData.code}
+                  onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+                  disabled={!!editingUom}
+                  placeholder="pcs, kg, ltr, box, dll"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="name">Nama Satuan</Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="Pieces, Kilogram, Liter, Box, dll"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="category">Kategori</Label>
+                <Select
+                  value={formData.category}
+                  onValueChange={(val) => setFormData({ ...formData, category: val as Uom['category'] })}
+                >
+                  <SelectTrigger id="category">
+                    <SelectValue placeholder="Pilih kategori" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="count">Kuantitas / Jumlah</SelectItem>
+                    <SelectItem value="weight">Berat / Massa</SelectItem>
+                    <SelectItem value="volume">Volume / Zat Cair</SelectItem>
+                    <SelectItem value="length">Panjang</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="description">Deskripsi</Label>
+                <Input
+                  id="description"
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  placeholder="Keterangan singkat..."
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="status">Status</Label>
+                <Select
+                  value={formData.status}
+                  onValueChange={(val) => setFormData({ ...formData, status: val as Uom['status'] })}
+                >
+                  <SelectTrigger id="status">
+                    <SelectValue placeholder="Pilih status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active">Aktif</SelectItem>
+                    <SelectItem value="inactive">Nonaktif</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                Batal
+              </Button>
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? 'Menyimpan...' : editingUom ? 'Simpan Perubahan' : 'Tambahkan'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Apakah Anda yakin?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tindakan ini tidak dapat dibatalkan. Satuan {deleteTarget?.code.toUpperCase()} akan dihapus secara permanen dari database master.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={() => {
+                if (deleteTarget) {
+                  confirmDelete(deleteTarget.id, deleteTarget.code);
+                }
+              }}
+              className="bg-rose-600 hover:bg-rose-700 text-white"
+            >
+              Hapus
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

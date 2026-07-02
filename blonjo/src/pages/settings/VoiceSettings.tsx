@@ -9,6 +9,37 @@ import { Mic2, Plus, Edit, Trash2, RefreshCw } from 'lucide-react';
 import { fetchClient } from '../../api/client';
 import { toast } from 'sonner';
 import { VoiceRule, defaultVoiceRules, sanitizeVoiceRules } from '../../lib/voiceRules';
+function formatPatternForDisplay(pattern: string): string {
+  if (!pattern) return '';
+  let display = pattern;
+  
+  // 1. Ganti raw regex numbers
+  display = display.replace(/\\\\b\(\\\\d\+\)\\\\s\*juta\\\\b/g, '[Angka] juta');
+  display = display.replace(/\\b\(\\d\+\)\\s\*juta\\b/g, '[Angka] juta');
+  display = display.replace(/\\\\b\(\\\\d\+\)\\\\s\*ribu\\\\b/g, '[Angka] ribu');
+  display = display.replace(/\\b\(\\d\+\)\\s\*ribu\\b/g, '[Angka] ribu');
+  display = display.replace(/\(\\d\+\)\\s\+kali\\s\+\(\\d\+\)/g, '[Angka] kali [Angka]');
+  display = display.replace(/\(\\\\d\+\)\\\\s\+kali\\\\s\+\(\\\\d\+\)/g, '[Angka] kali [Angka]');
+  
+  // 2. Bersihkan escape boundaries \\b
+  display = display.replace(/\\\\b|\\b/g, '');
+  
+  // 3. Bersihkan non-capturing groups (?:xxx|yyy) -> xxx / yyy
+  display = display.replace(/\(\?:(.+?)\)/g, (match, group) => {
+    return group.replace(/\|/g, ' / ');
+  });
+  
+  // 4. Bersihkan pipe character | -> /
+  display = display.replace(/\|/g, ' / ');
+  
+  // 5. Bersihkan sisa-sisa backslash
+  display = display.replace(/\\/g, '');
+  
+  // 6. Rapikan spasi
+  display = display.replace(/\s+/g, ' ').trim();
+  
+  return display;
+}
 
 interface AppSetting {
   id: number;
@@ -167,8 +198,11 @@ export default function VoiceSettings() {
                 {voiceRules.map((rule, idx) => (
                   <tr key={idx} className="hover:bg-accent/20 transition-colors group">
                     <td className="py-3 px-4">
-                      <span className="font-bold text-rose-500 bg-rose-500/10 px-2 py-0.5 rounded text-sm whitespace-nowrap">
-                        {typeof rule.pattern === 'string' ? rule.pattern : String(rule.pattern || '')}
+                      <span 
+                        title={typeof rule.pattern === 'string' ? rule.pattern : String(rule.pattern || '')}
+                        className="font-semibold text-rose-500 bg-rose-500/10 px-2 py-0.5 rounded text-sm cursor-help whitespace-normal break-words inline-block"
+                      >
+                        {formatPatternForDisplay(typeof rule.pattern === 'string' ? rule.pattern : String(rule.pattern || ''))}
                       </span>
                     </td>
                     <td className="py-3 px-4">

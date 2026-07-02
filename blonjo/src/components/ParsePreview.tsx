@@ -246,7 +246,7 @@ export function ParsePreview({ parsed, onUpdate, accounts = [] }: ParsePreviewPr
                       />
                     </td>
                     <td className="px-2 py-1 text-right font-mono text-xs font-semibold text-foreground whitespace-nowrap">
-                      Rp {formatRp(item.total)}
+                      {formatRp(item.total)}
                     </td>
                   </tr>
                 ))}

@@ -3,7 +3,7 @@ services:
   # Database PostgreSQL (+ pgvector)
   sajen-db:
     container_name: sajen_postgres_db
-    image: ankane/pgvector:latest
+    image: pgvector/pgvector:pg15
     platform: linux/arm64
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
@@ -48,7 +48,7 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
-      - OLLAMA_HOST=${OLLAMA_HOST}
+      - OLLAMA_HOST=http://host.docker.internal:11434
     depends_on:
       sajen-db:
         condition: service_healthy
@@ -61,7 +61,13 @@ services:
       - uploads_data:/app/uploads
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8005", "--reload"]
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     develop:
+
       watch:
         - action: sync
           path: ./sajen
@@ -82,7 +88,7 @@ services:
       - DATABASE_URL=${DATABASE_URL}
       - REDIS_URL=${REDIS_URL}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL}
-      - OLLAMA_HOST=${OLLAMA_HOST}
+      - OLLAMA_HOST=http://host.docker.internal:11434
     depends_on:
       sajen-api:
         condition: service_started
@@ -95,7 +101,13 @@ services:
       - uploads_data:/app/uploads
     command: ["celery", "-A", "app.core.celery_app", "worker", "--loglevel=info", "--pool=threads", "--concurrency=2"]
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     develop:
+
       watch:
         - action: sync
           path: ./sajen
@@ -126,7 +138,13 @@ services:
       sajen-api:
         condition: service_started
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     develop:
+
       watch:
         - action: sync
           path: ./blonjo

@@ -4,21 +4,21 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Badge } from '../../components/ui/badge';
-import { Search, Plus, Edit2, Trash2, Users, Receipt, ShieldCheck, AlertTriangle, RefreshCw } from 'lucide-react';
+import { Search, Plus, Edit2, Trash2, Users, Receipt, ShieldCheck, AlertTriangle, RefreshCw, Loader2 } from 'lucide-react';
 import { cn, formatRp } from '../../lib/utils';
 import { toast } from 'sonner';
 import { fetchClient } from '../../api/client';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../../components/ui/dialog';
+import { Label } from '../../components/ui/label';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../../components/ui/alert-dialog';
 
 interface Supplier {
   id: number;
   code: string;
   name: string;
-  contact_person: string;
   phone: string;
   address: string;
-  payment_terms: string;
   outstanding_balance: number;
-  status: 'active' | 'inactive';
 }
 
 export default function SupplierPage() {
@@ -26,6 +26,24 @@ export default function SupplierPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Supplier | null>(null);
+
+  const [formData, setFormData] = useState({
+    name: '',
+    phone: '',
+    address: '',
+    current_balance: '0'
+  });
+
+  const toSentenceCase = (str: string) => {
+    if (!str) return '-';
+    const trimmed = str.trim();
+    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  };
 
   const loadSuppliers = async () => {
     setLoading(true);
@@ -33,21 +51,14 @@ export default function SupplierPage() {
     try {
       const data = await fetchClient('/inventory/contacts?contact_type=supplier');
       if (Array.isArray(data)) {
-        const mappedSuppliers: Supplier[] = data.map((supp: any) => {
-          const status: Supplier['status'] = 'active';
-          
-          return {
-            id: supp.id,
-            code: `SPL-${supp.id.toString().padStart(3, '0')}`,
-            name: supp.name,
-            contact_person: 'Bagian Penjualan',
-            phone: supp.phone || 'Tidak ada telepon',
-            address: 'Alamat belum diatur',
-            payment_terms: 'Cash on Delivery',
-            outstanding_balance: Number(supp.current_balance),
-            status,
-          };
-        });
+        const mappedSuppliers: Supplier[] = data.map((supp: any) => ({
+          id: supp.id,
+          code: `SPL-${supp.id.toString().padStart(3, '0')}`,
+          name: supp.name,
+          phone: supp.phone || '',
+          address: supp.address || '',
+          outstanding_balance: Number(supp.current_balance)
+        }));
         setSuppliers(mappedSuppliers);
       } else {
         throw new Error('Format data tidak didukung');
@@ -66,39 +77,90 @@ export default function SupplierPage() {
     loadSuppliers();
   }, []);
 
+  const handleAdd = () => {
+    setEditingSupplier(null);
+    setFormData({
+      name: '',
+      phone: '',
+      address: '',
+      current_balance: '0'
+    });
+    setIsDialogOpen(true);
+  };
 
+  const handleEdit = (supplier: Supplier) => {
+    setEditingSupplier(supplier);
+    setFormData({
+      name: supplier.name,
+      phone: supplier.phone,
+      address: supplier.address,
+      current_balance: supplier.outstanding_balance.toString()
+    });
+    setIsDialogOpen(true);
+  };
 
-  const getStatusBadge = (status: Supplier['status']) => {
-    return (
-      <Badge variant="outline" className={cn(
-        "px-2.5 py-0.5 text-xs font-semibold",
-        status === 'active' 
-          ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' 
-          : 'bg-zinc-500/10 text-zinc-500 border-zinc-500/20'
-      )}>
-        {status === 'active' ? 'Aktif' : 'Nonaktif'}
-      </Badge>
-    );
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.name) {
+      toast.error('Gagal', { description: 'Nama pemasok wajib diisi.' });
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        name: formData.name,
+        contact_type: 'supplier',
+        phone: formData.phone || null,
+        address: formData.address || null,
+        current_balance: parseFloat(formData.current_balance) || 0
+      };
+
+      if (editingSupplier) {
+        await fetchClient(`/inventory/contacts/${editingSupplier.id}`, {
+          method: 'PUT',
+          body: JSON.stringify(payload)
+        });
+        toast.success('Berhasil', { description: `Pemasok ${formData.name} berhasil diperbarui.` });
+      } else {
+        await fetchClient('/inventory/contacts', {
+          method: 'POST',
+          body: JSON.stringify(payload)
+        });
+        toast.success('Berhasil', { description: `Pemasok ${formData.name} berhasil ditambahkan.` });
+      }
+      setIsDialogOpen(false);
+      loadSuppliers();
+    } catch (err: any) {
+      toast.error('Gagal', { description: err.message || 'Gagal menyimpan pemasok' });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const confirmDelete = async (id: number, name: string) => {
+    try {
+      await fetchClient(`/inventory/contacts/${id}`, { method: 'DELETE' });
+      toast.success('Berhasil', { description: `Pemasok ${name} telah dihapus.` });
+      loadSuppliers();
+    } catch (err: any) {
+      toast.error('Gagal', { description: err.message || `Gagal menghapus pemasok ${name}` });
+    } finally {
+      setDeleteTarget(null);
+    }
   };
 
   const filteredSuppliers = suppliers.filter(supplier => 
     supplier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     supplier.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    supplier.contact_person.toLowerCase().includes(searchQuery.toLowerCase())
+    supplier.phone.includes(searchQuery) ||
+    supplier.address.toLowerCase().includes(searchQuery.toLowerCase())
   );
-
-  const handleAdd = () => {
-    toast.info('Info', { description: 'Fitur Tambah Supplier baru akan diintegrasikan dengan API backend.' });
-  };
-
-  const handleEdit = (code: string) => {
-    toast.info('Info', { description: `Ubah supplier ${code} akan diintegrasikan dengan API backend.` });
-  };
 
   return (
     <div className="space-y-6">
       {/* Overview Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card className="border-zinc-200/60 dark:border-zinc-800/60 bg-card/60 backdrop-blur-md shadow-sm">
           <CardContent className="pt-6 flex items-center justify-between">
             <div className="space-y-1">
@@ -109,20 +171,6 @@ export default function SupplierPage() {
             </div>
             <div className="p-3 bg-primary/10 text-primary rounded-xl">
               <Users className="w-6 h-6" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="border-zinc-200/60 dark:border-zinc-800/60 bg-card/60 backdrop-blur-md shadow-sm">
-          <CardContent className="pt-6 flex items-center justify-between">
-            <div className="space-y-1">
-              <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Pemasok Aktif</p>
-              <p className="text-3xl font-extrabold text-emerald-600 dark:text-emerald-500">
-                {loading ? '-' : suppliers.filter(s => s.status === 'active').length}
-              </p>
-            </div>
-            <div className="p-3 bg-emerald-500/10 text-emerald-500 rounded-xl">
-              <ShieldCheck className="w-6 h-6" />
             </div>
           </CardContent>
         </Card>
@@ -148,7 +196,7 @@ export default function SupplierPage() {
           <div className="relative flex-1 max-w-sm w-full">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
             <Input
-              placeholder="Cari pemasok, kontak person, atau kode..."
+              placeholder="Cari pemasok berdasarkan nama, alamat, atau kode..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9 bg-background border-zinc-200 dark:border-zinc-800"
@@ -190,12 +238,9 @@ export default function SupplierPage() {
                   <TableRow>
                     <TableHead className="w-[100px]">Kode</TableHead>
                     <TableHead>Nama Pemasok</TableHead>
-                    <TableHead>Kontak Person</TableHead>
                     <TableHead>Telepon</TableHead>
                     <TableHead>Alamat</TableHead>
-                    <TableHead>Termin</TableHead>
                     <TableHead className="text-right">Sisa Utang</TableHead>
-                    <TableHead>Status</TableHead>
                     <TableHead className="text-center w-[100px]">Aksi</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -203,21 +248,20 @@ export default function SupplierPage() {
                   {filteredSuppliers.map((supplier) => (
                     <TableRow key={supplier.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40">
                       <TableCell className="font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-300">{supplier.code}</TableCell>
-                      <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100">{supplier.name}</TableCell>
-                      <TableCell className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">{supplier.contact_person}</TableCell>
-                      <TableCell className="text-xs font-mono">{supplier.phone}</TableCell>
-                      <TableCell className="max-w-xs truncate text-xs text-zinc-500">{supplier.address}</TableCell>
-                      <TableCell className="text-xs font-bold text-zinc-600 dark:text-zinc-400">{supplier.payment_terms}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold text-rose-600 dark:text-rose-500">
-                        {supplier.outstanding_balance > 0 ? formatRp(supplier.outstanding_balance) : 'Lunas'}
+                      <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100">
+                        {toSentenceCase(supplier.name)}
                       </TableCell>
-                      <TableCell>{getStatusBadge(supplier.status)}</TableCell>
+                      <TableCell className="text-xs font-mono">{supplier.phone || '-'}</TableCell>
+                      <TableCell className="max-w-xs truncate text-xs text-zinc-500">{supplier.address || '-'}</TableCell>
+                      <TableCell className="text-right font-mono text-xs font-bold text-rose-600 dark:text-rose-500">
+                        {supplier.outstanding_balance > 0 ? formatRp(supplier.outstanding_balance) : '-'}
+                      </TableCell>
                       <TableCell className="text-center">
                         <div className="flex justify-center items-center gap-1.5">
                           <Button 
                             variant="ghost" 
                             size="icon" 
-                            onClick={() => handleEdit(supplier.code)}
+                            onClick={() => handleEdit(supplier)}
                             className="h-8 w-8 text-zinc-500 hover:text-primary hover:bg-primary/5"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
@@ -225,7 +269,7 @@ export default function SupplierPage() {
                           <Button 
                             variant="ghost" 
                             size="icon" 
-                            onClick={() => toast.error('Hapus', { description: 'Operasi destruktif memerlukan verifikasi backend API.' })}
+                            onClick={() => setDeleteTarget(supplier)}
                             className="h-8 w-8 text-zinc-500 hover:text-rose-500 hover:bg-rose-500/5"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
@@ -240,6 +284,92 @@ export default function SupplierPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Add/Edit Dialog */}
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <form onSubmit={handleSave}>
+            <DialogHeader>
+              <DialogTitle>{editingSupplier ? 'Ubah Pemasok' : 'Tambah Pemasok Baru'}</DialogTitle>
+              <DialogDescription>
+                {editingSupplier ? 'Perbarui informasi detail pemasok.' : 'Masukkan detail pemasok baru ke database.'}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="name">Nama Pemasok</Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="Contoh: Beras lumbung"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="phone">Telepon</Label>
+                <Input
+                  id="phone"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  placeholder="Nomor telepon aktif..."
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="address">Alamat</Label>
+                <Input
+                  id="address"
+                  value={formData.address}
+                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                  placeholder="Alamat lengkap..."
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="balance">Saldo Awal Utang (Rp)</Label>
+                <Input
+                  id="balance"
+                  type="number"
+                  value={formData.current_balance}
+                  onChange={(e) => setFormData({ ...formData, current_balance: e.target.value })}
+                  placeholder="Saldo utang awal..."
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                Batal
+              </Button>
+              <Button type="submit" disabled={isSubmitting}>
+                {isSubmitting ? 'Menyimpan...' : editingSupplier ? 'Simpan Perubahan' : 'Tambahkan'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Alert */}
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Apakah Anda yakin?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tindakan ini tidak dapat dibatalkan. Pemasok "{deleteTarget && toSentenceCase(deleteTarget.name)}" akan dihapus secara permanen dari database master.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Batal</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={() => {
+                if (deleteTarget) {
+                  confirmDelete(deleteTarget.id, deleteTarget.name);
+                }
+              }}
+              className="bg-rose-600 hover:bg-rose-700 text-white"
+            >
+              Hapus
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

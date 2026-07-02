@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1 import auth, accounting, ocr, inventory, admin, roles, settings, users
+from app.api.v1 import auth, accounting, ocr, inventory, admin, roles, settings, users, reports, vibe
 from app.core.config import settings as app_settings
 
 app = FastAPI(
@@ -25,12 +25,14 @@ app.add_middleware(
 
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["Authentication"])
 app.include_router(accounting.router, prefix="/api/v1/finance", tags=["Accounting"])
+app.include_router(reports.router, prefix="/api/v1/reports", tags=["Reports"])
 app.include_router(ocr.router, prefix="/api/v1/ocr", tags=["AI & OCR"])
 app.include_router(inventory.router, prefix="/api/v1/inventory", tags=["Inventory & Stock Management"])
 app.include_router(admin.router, prefix="/api/v1/saas", tags=["SaaS Admin"])
 app.include_router(roles.router, prefix="/api/v1/roles", tags=["RBAC & Roles"])
 app.include_router(settings.router, prefix="/api/v1/settings", tags=["Tenant Settings"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["User Management"])
+app.include_router(vibe.router, prefix="/api/v1/vibe", tags=["Vibe Coding"])
 
 @app.get("/api/health", tags=["System"])
 async def health_check():

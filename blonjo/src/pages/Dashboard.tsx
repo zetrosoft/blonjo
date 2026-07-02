@@ -73,21 +73,21 @@ export default function Dashboard() {
   const stats = [
     {
       title: t('total_revenue'),
-      amount: `Rp ${formatRp(data?.total_revenue || 0)}`,
+      amount: formatRp(data?.total_revenue || 0),
       icon: DollarSign,
       color: "text-emerald-500",
       bgColor: "bg-emerald-500/10"
     },
     {
       title: t('total_expense'),
-      amount: `Rp ${formatRp(data?.total_expense || 0)}`,
+      amount: formatRp(data?.total_expense || 0),
       icon: ShoppingBag,
       color: "text-rose-500",
       bgColor: "bg-rose-500/10"
     },
     {
       title: 'Saldo Kas',
-      amount: `Rp ${formatRp(data?.cash_balance || 0)}`,
+      amount: formatRp(data?.cash_balance || 0),
       icon: TrendingUp,
       color: (data?.cash_balance || 0) >= 0 ? "text-sky-500" : "text-rose-500",
       bgColor: (data?.cash_balance || 0) >= 0 ? "bg-sky-500/10" : "bg-rose-500/10"
@@ -124,7 +124,7 @@ export default function Dashboard() {
         cornerRadius: 8,
         displayColors: true,
         callbacks: {
-          label: (context: any) => `Rp ${formatRp(context.raw)}`,
+          label: (context: any) => formatRp(context.raw),
         }
       },
     },
@@ -262,7 +262,7 @@ export default function Dashboard() {
                         "text-xs font-black tabular-nums",
                         tx.transaction_type === 'income' || tx.transaction_type === 'sales' ? "text-emerald-400" : "text-rose-400"
                       )}>
-                        {tx.transaction_type === 'income' || tx.transaction_type === 'sales' ? '+' : '-'} Rp {formatRp(Number(tx.total_amount))}
+                        {tx.transaction_type === 'income' || tx.transaction_type === 'sales' ? '+' : '-'} {formatRp(Number(tx.total_amount))}
                       </p>
                       <p className="text-[10px] font-medium text-muted-foreground truncate max-w-[120px] italic">{tx.description}</p>
                     </div>

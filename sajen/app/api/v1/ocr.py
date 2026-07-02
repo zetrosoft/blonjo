@@ -1,13 +1,24 @@
 import os
 import shutil
 import uuid
-from fastapi import APIRouter, HTTPException, status, UploadFile
-from typing import List
+from fastapi import APIRouter, HTTPException, status, UploadFile, Body
+from typing import List, Annotated, Any
 
 from app.api.deps import SessionDep, CurrentUser
 from app.models.ocr import OCRTask, OCRFeedback, OCRStatus, AILearningTemplate
-from app.schemas.ocr import OCRTaskResponse, OCRCorrectionRequest, AILearningTemplateCreate, AILearningTemplateResponse
+from app.models.log import AIParsingLog
+from app.schemas.ocr import (
+    OCRTaskResponse, 
+    OCRCorrectionRequest, 
+    AILearningTemplateCreate, 
+    AILearningTemplateResponse,
+    AITrainingProcessRequest,
+    AITrainingProcessResponse
+)
 from app.workers.ocr_worker import process_receipt_ocr
+from app.services.ai_context import get_rag_context
+from app.services.ai_engine import call_ai_vision, call_ai_text
+import json
 
 router = APIRouter()
 
@@ -114,6 +125,7 @@ async def upload_receipt(
 
     # Create DB Record
     new_task = OCRTask(
+        tenant_id=current_user.tenant_id,
         user_id=current_user.id,
         file_name=file.filename,
         file_path=file_path
@@ -144,6 +156,26 @@ def get_ocr_tasks(
         if task.corrected_data:
             task.corrected_data = _map_rich_schema_to_frontend(task.corrected_data)
     return tasks
+
+@router.get("/tasks/{task_id}", response_model=OCRTaskResponse)
+@router.get("/tasks/{task_id}/", response_model=OCRTaskResponse, include_in_schema=False)
+def get_ocr_task_detail(
+    task_id: int,
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    """
+    Get the status and results of a specific OCR task.
+    """
+    task = session.query(OCRTask).filter(OCRTask.id == task_id, OCRTask.user_id == current_user.id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="OCR Task not found")
+    
+    if task.extracted_data:
+        task.extracted_data = _map_rich_schema_to_frontend(task.extracted_data)
+    if task.corrected_data:
+        task.corrected_data = _map_rich_schema_to_frontend(task.corrected_data)
+    return task
 
 @router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_ocr_task(
@@ -280,12 +312,17 @@ def correct_ocr_task(
 
 @router.get("/training-templates", response_model=List[AILearningTemplateResponse])
 def get_training_templates(session: SessionDep, current_user: CurrentUser):
-    return session.query(AILearningTemplate).filter(AILearningTemplate.tenant_id == current_user.tenant_id).order_by(AILearningTemplate.id.desc()).all()
+    # Mengambil data Global (Public) dan data spesifik Tenant
+    return session.query(AILearningTemplate).filter(
+        (AILearningTemplate.tenant_id == current_user.tenant_id) | 
+        (AILearningTemplate.tenant_id == None)
+    ).order_by(AILearningTemplate.id.desc()).all()
 
 @router.post("/training-templates", response_model=AILearningTemplateResponse)
 def create_training_template(template_in: AILearningTemplateCreate, session: SessionDep, current_user: CurrentUser):
+    # Simpan dengan tenant_id user agar bisa di-edit/hapus oleh user tersebut
     db_template = AILearningTemplate(
-        tenant_id=current_user.tenant_id,
+        tenant_id=current_user.tenant_id, 
         file_name=template_in.file_name,
         raw_ocr_text=template_in.raw_ocr_text,
         expected_output=template_in.expected_output
@@ -295,11 +332,38 @@ def create_training_template(template_in: AILearningTemplateCreate, session: Ses
     session.refresh(db_template)
     return db_template
 
+@router.put("/training-templates/{template_id}", response_model=AILearningTemplateResponse)
+def update_training_template(
+    template_id: int, 
+    template_in: AILearningTemplateCreate, 
+    session: SessionDep, 
+    current_user: CurrentUser
+):
+    template = session.query(AILearningTemplate).filter(
+        AILearningTemplate.id == template_id,
+        (AILearningTemplate.tenant_id == current_user.tenant_id) | (AILearningTemplate.tenant_id == None)
+    ).first()
+    
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found or access denied")
+    
+    template.file_name = template_in.file_name
+    template.raw_ocr_text = template_in.raw_ocr_text
+    template.expected_output = template_in.expected_output
+    
+    # Recalculate embedding if text changed
+    from app.services.ai_engine import get_embedding
+    template.embedding = get_embedding(template.raw_ocr_text)
+    
+    session.commit()
+    session.refresh(template)
+    return template
+
 @router.delete("/training-templates/{template_id}")
 def delete_training_template(template_id: int, session: SessionDep, current_user: CurrentUser):
     template = session.query(AILearningTemplate).filter(
         AILearningTemplate.id == template_id,
-        AILearningTemplate.tenant_id == current_user.tenant_id
+        (AILearningTemplate.tenant_id == current_user.tenant_id) | (AILearningTemplate.tenant_id == None)
     ).first()
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
@@ -313,12 +377,79 @@ async def extract_raw_text(file: UploadFile, session: SessionDep, current_user: 
     import pytesseract
     from PIL import Image
     import io
-    
+
     contents = await file.read()
+
+    # 1. Coba gunakan Gemini Vision jika tersedia (untuk akurasi tulisan tangan)
+    from app.core.config import settings
+    if settings.GOOGLE_API_KEY:
+        try:
+            res = call_ai_vision(
+                db=session,
+                image_bytes=contents,
+                mime_type=file.content_type,
+                prompt="Bacakan teks dari nota ini secara lengkap baris demi baris. Gunakan tabel markdown jika ada daftar barang."
+            )
+            return {"file_name": file.filename, "raw_text": res["raw_text"]}
+        except Exception as e:
+            print(f"Gemini Vision failed in training, falling back to Tesseract: {e}")
+
+    # 2. Fallback ke Tesseract (kurang akurat untuk tulisan tangan)
     try:
         img = Image.open(io.BytesIO(contents))
         raw_text = pytesseract.image_to_string(img, lang="ind+eng")
         return {"file_name": file.filename, "raw_text": raw_text}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Gagal memproses gambar: {str(e)}")
+
+@router.post("/training-templates/process", response_model=AITrainingProcessResponse)
+async def process_training_data(
+    payload: Annotated[AITrainingProcessRequest, Body(...)],
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    """
+    Memproses gabungan teks mentah (hasil Vision) dan instruksi user 
+    untuk menghasilkan draf Golden Template (Markdown).
+    """
+    rag_context = get_rag_context(session, current_user.tenant_id)
+
+    system_instruction = (
+        "Anda adalah AI Trainer Expert. Tugas Anda adalah membantu user membuat DATASET PEMBELAJARAN (Golden Template).\n"
+        "Gunakan data mentah dari OCR dan perbaiki sesuai dengan INSTRUKSI CARA BACA yang diberikan user.\n"
+        "Output harus berupa teks Markdown yang sangat rapi dan detail."
+    )
+
+    prompt = f"""
+INSTRUKSI CARA BACA DARI USER:
+{payload.instructions}
+
+TEKS MENTAH DARI OCR:
+{payload.raw_text}
+
+{rag_context}
+
+Tugas: Susun ulang data di atas menjadi laporan Markdown yang rapi. 
+Pastikan seluruh rincian item masuk ke dalam tabel Markdown.
+"""
+
+    res = call_ai_text(session, prompt, system_instruction=system_instruction)
+
+    # Save Activity Log for Terminal Visibility
+    new_log = AIParsingLog(
+        tenant_id=current_user.tenant_id,
+        original_text=f"AI TRAINING PROCESS: {payload.instructions[:100]}...",
+        prompt=prompt,
+        parsed_result=res.get("raw_output", ""),
+        token_in=res.get("token_in", 0),
+        token_out=res.get("token_out", 0),
+        processor=res.get("processor", "local")
+    )
+    session.add(new_log)
+    session.commit()
+
+    return AITrainingProcessResponse(
+        processed_markdown=res.get("raw_output", ""),
+        processor=res.get("processor", "local")
+    )
 

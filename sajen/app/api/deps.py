@@ -8,6 +8,8 @@ from app.core.config import settings
 from app.models.user import User, UserRole
 from app.schemas.token import TokenPayload
 
+from app.core import context
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
 
 def get_db() -> Generator:
@@ -42,6 +44,11 @@ def get_current_user(session: SessionDep, token: TokenDep) -> User:
         raise credentials_exception
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
+    
+    # Set Implicit Global Context
+    context.set_tenant_context(user.tenant_id)
+    context.set_user_context(user.id)
+    
     return user
 
 CurrentUser = Annotated[User, Depends(get_current_user)]

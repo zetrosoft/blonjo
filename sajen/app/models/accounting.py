@@ -48,6 +48,9 @@ class TransactionType(str, enum.Enum):
     NON_CASH_OUT = "non_cash_out"
     NON_CASH_IN = "non_cash_in"
     CAPITAL = "capital"
+    CASH_COUNT = "cash_count" # For reconciliation / Cash on hand check
+    SALES_RETURN = "sales_return"
+    PURCHASE_RETURN = "purchase_return"
 
 class TransactionStatus(str, enum.Enum):
     DRAFT = "draft"
@@ -99,3 +102,41 @@ class JournalEntry(Base):
 
     transaction = relationship("Transaction", back_populates="entries")
     account = relationship("Account", back_populates="journal_entries")
+
+class JournalMapping(Base):
+    """
+    Master Data for Automatic Journaling (GL Mapper).
+    Defines how each transaction type should be mapped to accounts.
+    Supports multi-tenancy and multi-pair entries.
+    """
+    __tablename__ = "journal_mappings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
+    transaction_type = Column(Enum(TransactionType), nullable=False, index=True)
+    description = Column(String(255), nullable=True)
+    is_active = Column(Boolean, default=True)
+
+    lines = relationship("JournalMappingLine", back_populates="mapping", cascade="all, delete-orphan")
+    tenant = relationship("Tenant")
+
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "transaction_type", name="uq_mapping_tenant_type"),
+    )
+
+class JournalMappingLine(Base):
+    """
+    Lines for Journal Mapping - defines the Debit/Credit account and proportion.
+    """
+    __tablename__ = "journal_mapping_lines"
+
+    id = Column(Integer, primary_key=True, index=True)
+    mapping_id = Column(Integer, ForeignKey("journal_mappings.id", ondelete="CASCADE"), nullable=False, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    side = Column(String(10), nullable=False) # "debit" or "credit"
+    
+    # "total_amount" (invoice total), "cogs_amount" (from inventory), or "tax_amount"
+    value_type = Column(String(50), nullable=False, default="total_amount")
+
+    mapping = relationship("JournalMapping", back_populates="lines")
+    account = relationship("Account")

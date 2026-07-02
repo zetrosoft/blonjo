@@ -4,6 +4,7 @@ import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/ca
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
+import { Checkbox } from '../../components/ui/checkbox';
 import { Store, Save } from 'lucide-react';
 import { fetchClient } from '../../api/client';
 import { toast } from 'sonner';
@@ -24,6 +25,7 @@ export default function StoreSettings() {
   const [storePhone, setStorePhone] = useState<string>('');
   const [cogsRate, setCogsRate] = useState<number>(70);
   const [printerWidth, setPrinterWidth] = useState<'58mm' | '80mm'>('58mm');
+  const [autoPostJournal, setAutoPostJournal] = useState<boolean>(true);
 
   useEffect(() => {
     loadStoreSettings();
@@ -39,6 +41,7 @@ export default function StoreSettings() {
         if (item.key === 'store_phone') setStorePhone(item.value);
         if (item.key === 'default_cogs_rate') setCogsRate(Number(item.value));
         if (item.key === 'printer_paper_width') setPrinterWidth(item.value as '58mm' | '80mm');
+        if (item.key === 'auto_post_journal') setAutoPostJournal(item.value === 'true');
       });
     } catch (err: any) {
       console.error(err);
@@ -57,7 +60,8 @@ export default function StoreSettings() {
         { key: 'store_address', value: storeAddress, description: 'Alamat Toko' },
         { key: 'store_phone', value: storePhone, description: 'Nomor Telepon Toko' },
         { key: 'default_cogs_rate', value: cogsRate.toString(), description: 'Estimasi Persentase HPP (%)' },
-        { key: 'printer_paper_width', value: printerWidth, description: 'Lebar Kertas Struk Printer Thermal' }
+        { key: 'printer_paper_width', value: printerWidth, description: 'Lebar Kertas Struk Printer Thermal' },
+        { key: 'auto_post_journal', value: autoPostJournal.toString(), description: 'Posting Jurnal Otomatis' }
       ];
 
       for (const item of settingsToSave) {
@@ -124,6 +128,23 @@ export default function StoreSettings() {
               <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-bold text-muted-foreground">%</span>
             </div>
             <p className="text-[10px] text-muted-foreground italic">Digunakan untuk menghitung HPP otomatis jika rincian item tidak diisi.</p>
+          </div>
+        </div>
+
+        <div className="flex items-center space-x-3 bg-primary/5 p-4 rounded-xl border border-primary/10">
+          <Checkbox 
+            id="auto_post_journal" 
+            checked={autoPostJournal} 
+            onCheckedChange={(checked) => setAutoPostJournal(checked === true)}
+            className="w-5 h-5"
+          />
+          <div className="grid gap-1 leading-none">
+            <label htmlFor="auto_post_journal" className="text-sm font-bold cursor-pointer text-foreground">
+              {t('setting_auto_post')}
+            </label>
+            <p className="text-xs text-muted-foreground">
+              {t('setting_auto_post_desc')}
+            </p>
           </div>
         </div>
 

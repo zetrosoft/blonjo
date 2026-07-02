@@ -13,12 +13,26 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     
     # CORS Origins (comma-separated string in env will parse as list)
-    ALLOWED_ORIGINS: List[str] = [
+    ALLOWED_ORIGINS: str | List[str] = [
+        "https://blonjo.samkarsa.com",
         "http://localhost:7500",
         "http://127.0.0.1:7500",
         "http://localhost:5173",
-        "http://127.0.0.1:5173"
+        "http://127.0.0.1:5173",
+        "http://localhost:8005",
+        "http://127.0.0.1:8005",
+        "http://host.docker.internal:7500",
+        "http://host.docker.internal:5173"
     ]
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: str | List[str]) -> List[str] | str:
+        if isinstance(v, str) and not v.startswith("["):
+            return [i.strip() for i in v.split(",")]
+        elif isinstance(v, (list, str)):
+            return v
+        raise ValueError(v)
     
     # JWT Auth
     SECRET_KEY: str = "yolo_super_secret_key_change_in_production_12345"
@@ -32,12 +46,19 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     
     # Ollama Model Config
-    OLLAMA_LLM_MODEL: str = "qwen2.5:3b"
+    OLLAMA_LLM_MODEL: str = "qwen2.5-coder:3b"
+    OLLAMA_FALLBACK_URL: str = "https://winterishly-unladled-brycen.ngrok-free.dev"
 
     # Google Gemini Config (Fallback)
     GOOGLE_API_KEY: str | None = None
     GEMINI_PRIMARY_MODEL: str = "gemini-1.5-flash"
     GEMINI_SECONDARY_MODEL: str = "gemini-2.0-flash-exp" # Latest experimental/flash
+
+    # MCP Server Integration Config
+    MCP_ENABLED: bool = False
+    MCP_SERVER_URL: str = "http://mcp-backend-prod:3000"
+    MCP_API_KEY: str = ""
+
 
     @field_validator("SECRET_KEY", mode="after")
     @classmethod

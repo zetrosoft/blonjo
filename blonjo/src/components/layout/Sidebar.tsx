@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { LayoutDashboard, ReceiptText, ShoppingCart, TrendingUp, Settings, BookOpen, PieChart, ChevronLeft, ChevronRight, ChevronDown, ChartBar, Package, Users, User, Ruler, Plus, History, Store, Shield, Mic2, Wand2, ShieldCheck, FileText, Receipt, Scale, Landmark, Wallet, GitBranch } from 'lucide-react';
+import { LayoutDashboard, ReceiptText, ShoppingCart, TrendingUp, Settings, BookOpen, PieChart, ChevronLeft, ChevronRight, ChevronDown, ChartBar, Package, Users, User, Ruler, Plus, History, Store, Shield, Mic2, Wand2, ShieldCheck, FileText, Receipt, Scale, Landmark, Wallet, GitBranch, Boxes, Tag, DollarSign } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { useTheme } from '../theme-provider';
@@ -42,6 +42,8 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
     { label: 'setting_roles', path: '/settings/roles', icon: Shield },
     { label: 'setting_voice', path: '/settings/voice', icon: Mic2 },
     { label: 'setting_ai_training', path: '/settings/aitraining', icon: Wand2 },
+    { label: 'menu_my_catalog', path: '/settings/my-catalog', icon: DollarSign },
+    { label: 'menu_pricing_rules', path: '/settings/pricing-rules', icon: Tag },
   ];
 
   if (user?.is_superuser) {
@@ -57,6 +59,17 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       subItems: [
         { label: 'menu_input_transaksi', path: '/transactions/input-transaksi', icon: Plus },
         { label: 'menu_daftar_input', path: '/transactions/daftar-input', icon: History }
+      ]
+    },
+    {
+      icon: Boxes,
+      label: 'menu_material_control',
+      path: '/material-control',
+      subItems: [
+        { label: 'menu_inventory_control', path: '/material-control/inventory', icon: Package },
+        { label: 'menu_purchasing_history', path: '/material-control/purchases', icon: History },
+        { label: 'menu_stock_level', path: '/material-control/stock-level', icon: TrendingUp },
+        { label: 'menu_recommended_purchase', path: '/material-control/recommended', icon: ShoppingCart }
       ]
     },
     {
@@ -84,12 +97,14 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       path: '/master-data',
       subItems: [
         { label: 'menu_item', path: '/master-data/item', icon: Package },
+        { label: 'Price List', path: '/master-data/price-list', icon: Tag },
         { label: 'menu_supplier', path: '/master-data/supplier', icon: Users },
         { label: 'menu_customer', path: '/master-data/customer', icon: User },
         { label: 'menu_uom', path: '/master-data/uom', icon: Ruler },
         { label: 'menu_journal_mapping', path: '/master-data/journal-mapping', icon: GitBranch },
         { label: 'menu_coa', path: '/coa', icon: BookOpen }
       ]
+
     }
   ];
 
@@ -102,6 +117,8 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       setExpandedMenus(prev => ({ ...prev, '/settings': true }));
     } else if (path.startsWith('/transactions')) {
       setExpandedMenus(prev => ({ ...prev, '/transactions': true }));
+    } else if (path.startsWith('/material-control')) {
+      setExpandedMenus(prev => ({ ...prev, '/material-control': true }));
     } else if (path.startsWith('/master-data')) {
       setExpandedMenus(prev => ({ ...prev, '/master-data': true }));
     }

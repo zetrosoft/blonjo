@@ -42,6 +42,7 @@ export function useSmartConfirm(
       non_cash_in: [['kas'],                          ['bank']],
       sales:      [['kas', 'bank'],                  ['pendapatan', 'jual']],
       expense:    [['beban', 'biaya'],               ['kas', 'bank']],
+      cash_count: [['kas', 'utama'],                  ['pendapatan', 'lain', 'beban', 'operasional']],
     };
     const [debitKws, creditKws] = keyMap[txType] ?? [[], []];
     return [

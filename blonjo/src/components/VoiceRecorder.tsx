@@ -101,23 +101,36 @@ export function VoiceRecorder({ onTranscript, disabled = false, initialText = ''
         let transcript = result[0].transcript as string;
         
         if (result.isFinal) {
-           const lower = transcript.toLowerCase().trim();
-           // Voice Commands
-           const hapusMatch = lower.match(/^hapus (\d+) kata$/);
-           
-           if (hapusMatch) {
-               const numWords = parseInt(hapusMatch[1], 10);
-               let words = finalSegments.join(' ').trim().split(/\s+/);
-               if (words.length > 0 && words[0] !== "") {
-                   words.splice(Math.max(0, words.length - numWords), numWords);
-                   finalSegments = words.length > 0 ? [words.join(' ')] : [];
-               }
-           } else if (lower === 'salah' || lower === 'hapus') {
-               // Hapus kalimat/segment terakhir
-               if (finalSegments.length > 0) {
-                   finalSegments.pop();
-               }
-           } else {
+            const lower = transcript.toLowerCase().trim();
+            // Voice Commands
+            const hapusKataMatch = lower.match(/^(?:hapus|buang|kurangi|mundur)\s+(\d+)\s+kata$/);
+            const gantiMatch = lower.match(/^(?:ganti|ubah)\s+(.+?)\s+(?:dengan|jadi)\s+(.+)$/);
+            
+            if (hapusKataMatch) {
+                const numWords = parseInt(hapusKataMatch[1], 10);
+                let words = finalSegments.join(' ').trim().split(/\s+/);
+                if (words.length > 0 && words[0] !== "") {
+                    words.splice(Math.max(0, words.length - numWords), numWords);
+                    finalSegments = words.length > 0 ? [words.join(' ')] : [];
+                }
+            } else if (['salah', 'hapus', 'batal', 'ralat', 'salah dengar', 'bukan itu', 'hapus baris'].includes(lower)) {
+                // Hapus kalimat/segment terakhir
+                if (finalSegments.length > 0) {
+                    finalSegments.pop();
+                }
+            } else if (['hapus semua', 'bersihkan', 'reset', 'kosongkan', 'ulangi dari awal', 'bersihkan semua'].includes(lower)) {
+                // Bersihkan semua segment
+                finalSegments = [];
+            } else if (gantiMatch) {
+                const targetWord = gantiMatch[1].trim();
+                const replacementWord = gantiMatch[2].trim();
+                if (targetWord && replacementWord) {
+                    finalSegments = finalSegments.map(seg => {
+                        const regex = new RegExp(targetWord, 'gi');
+                        return seg.replace(regex, replacementWord);
+                    });
+                }
+            } else {
                const processed = applyVoiceRules(transcript.trim(), activeRulesRef.current);
                if (processed.includes('[STOP]')) {
                    const cleanText = processed.replace('[STOP]', '').trim();

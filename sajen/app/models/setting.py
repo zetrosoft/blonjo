@@ -12,7 +12,7 @@ class AppSetting(Base):
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
     key = Column(String(100), nullable=False, index=True)
-    value = Column(String(1000), nullable=True)
+    value = Column(String, nullable=True)
     description = Column(String(255), nullable=True)
 
     # Relationships

@@ -171,12 +171,46 @@ export function Header({ onMenuClick }: HeaderProps) {
               </BreadcrumbItem>
               <BreadcrumbSeparator />
               <BreadcrumbItem>
-                <BreadcrumbPage>{t(`menu_${subKey}`)}</BreadcrumbPage>
+                <BreadcrumbPage>{t(`menu_${subKey.replace(/-/g, '_')}`)}</BreadcrumbPage>
               </BreadcrumbItem>
             </>
           ) : (
             <BreadcrumbItem>
               <BreadcrumbPage>{t('menu_master_data')}</BreadcrumbPage>
+            </BreadcrumbItem>
+          )}
+        </BreadcrumbList>
+      );
+    }
+
+    // 4.5. Material Control
+    if (path.startsWith('/material-control')) {
+      const subKey = path.split('/')[2];
+      const materialControlMap: Record<string, string> = {
+        'inventory': 'menu_inventory_control',
+        'purchases': 'menu_purchasing_history',
+        'stock-level': 'menu_stock_level',
+        'recommended': 'menu_recommended_purchase'
+      };
+      return (
+        <BreadcrumbList className="bg-transparent px-0 py-0 border-0 shadow-none">
+          {dashboardItem}
+          <BreadcrumbSeparator />
+          {subKey ? (
+            <>
+              <BreadcrumbItem>
+                <BreadcrumbLink asChild>
+                  <Link to="/material-control">{t('menu_material_control')}</Link>
+                </BreadcrumbLink>
+              </BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem>
+                <BreadcrumbPage>{t(materialControlMap[subKey] || `menu_${subKey.replace(/-/g, '_')}`)}</BreadcrumbPage>
+              </BreadcrumbItem>
+            </>
+          ) : (
+            <BreadcrumbItem>
+              <BreadcrumbPage>{t('menu_material_control')}</BreadcrumbPage>
             </BreadcrumbItem>
           )}
         </BreadcrumbList>

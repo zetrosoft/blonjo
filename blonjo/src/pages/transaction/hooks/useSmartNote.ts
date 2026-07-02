@@ -27,7 +27,7 @@ export function useSmartNote() {
   // ── Parse gabungan server + lokal ────────────────────────────────
   const mergeAndSet = useCallback(async (text: string) => {
     setIsParsing(true);
-    const local = parseNoteText(text);
+    const local = await parseNoteText(text);
     try {
       const res: any = await fetchClient('/finance/transactions/parse', {
         method: 'POST',
@@ -39,6 +39,7 @@ export function useSmartNote() {
         total_amount: res.parsed_data.total_amount || local.total_amount,
         description: res.parsed_data.description || local.description,
         transaction_date: res.parsed_data.transaction_date || local.transaction_date,
+        items: res.parsed_data.items || local.items,
         suggested_entries: res.suggested_entries,
       });
     } catch {
@@ -90,5 +91,6 @@ export function useSmartNote() {
     handleReset,
     handleLoadExample,
     updateParsed,
+    mergeAndSet,
   };
 }
