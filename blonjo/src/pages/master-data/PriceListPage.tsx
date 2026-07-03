@@ -1,3 +1,4 @@
+import { PaginationControls } from '@/components/ui/pagination-controls';
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
@@ -31,6 +32,9 @@ interface ProductPriceInfo {
 }
 
 export default function PriceListPage() {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+
   const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<ProductPriceInfo[]>([]);
@@ -91,6 +95,8 @@ export default function PriceListPage() {
     item.name.toLowerCase().includes(search.toLowerCase()) ||
     item.sku.toLowerCase().includes(search.toLowerCase())
   );
+  const paginatedItems = filteredItems.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
+
 
   return (
     <div className="p-6 space-y-6">
@@ -120,6 +126,7 @@ export default function PriceListPage() {
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
             </div>
           ) : (
+            <>
             <Table>
               <TableHeader>
                 <TableRow>
@@ -139,7 +146,7 @@ export default function PriceListPage() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredItems.map((item) => (
+                  paginatedItems.map((item) => (
                     <TableRow key={item.id}>
                       <TableCell>
                         <div>
@@ -180,6 +187,9 @@ export default function PriceListPage() {
                 )}
               </TableBody>
             </Table>
+<PaginationControls totalItems={filteredItems.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
+            </>
+
           )}
         </CardContent>
       </Card>

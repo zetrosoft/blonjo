@@ -1,3 +1,4 @@
+import { PaginationControls } from '@/components/ui/pagination-controls';
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { fetchClient } from '../api/client';
@@ -26,6 +27,9 @@ interface TreeNode {
 }
 
 export default function ChartOfAccounts() {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+
   const { t } = useTranslation();
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
@@ -171,6 +175,8 @@ export default function ChartOfAccounts() {
       );
     });
   };
+  const paginatedItems = accounts.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
+
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -223,6 +229,7 @@ export default function ChartOfAccounts() {
       ) : (
         <div className="bg-card border border-border/50 rounded-xl shadow-sm p-1">
           {viewMode === 'list' ? (
+            <>
             <Table>
               <TableHeader>
                 <TableRow className="border-border/50">
@@ -240,7 +247,7 @@ export default function ChartOfAccounts() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  accounts.map((acc) => (
+                  paginatedItems.map((acc) => (
                     <TableRow key={acc.id} className="border-border/50">
                       <TableCell className="font-semibold text-primary">{acc.code}</TableCell>
                       <TableCell className="font-medium">{acc.name}</TableCell>
@@ -257,6 +264,8 @@ export default function ChartOfAccounts() {
                 )}
               </TableBody>
             </Table>
+<PaginationControls totalItems={accounts.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
+            </>
           ) : (
             <div className="p-4 flex flex-col">
               {accounts.length === 0 ? (

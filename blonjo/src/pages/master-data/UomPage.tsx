@@ -1,3 +1,4 @@
+import { PaginationControls } from '@/components/ui/pagination-controls';
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table';
@@ -23,6 +24,9 @@ interface Uom {
 }
 
 export default function UomPage() {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+
   const [uoms, setUoms] = useState<Uom[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -151,6 +155,8 @@ export default function UomPage() {
     uom.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
     (uom.description && uom.description.toLowerCase().includes(searchQuery.toLowerCase()))
   );
+  const paginatedItems = filteredUoms.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
+
 
   return (
     <div className="space-y-6">
@@ -240,7 +246,7 @@ export default function UomPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredUoms.map((uom) => (
+                  {paginatedItems.map((uom) => (
                     <TableRow key={uom.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40">
                       <TableCell className="font-mono text-xs font-bold text-primary">{uom.code.toUpperCase()}</TableCell>
                       <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100">{uom.name}</TableCell>
@@ -280,6 +286,8 @@ export default function UomPage() {
                   ))}
                 </TableBody>
               </Table>
+<PaginationControls totalItems={filteredUoms.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
+
             </div>
           )}
         </CardContent>

@@ -1,3 +1,4 @@
+import { PaginationControls } from '@/components/ui/pagination-controls';
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table';
@@ -22,6 +23,9 @@ interface Supplier {
 }
 
 export default function SupplierPage() {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -156,6 +160,8 @@ export default function SupplierPage() {
     supplier.phone.includes(searchQuery) ||
     supplier.address.toLowerCase().includes(searchQuery.toLowerCase())
   );
+  const paginatedItems = filteredSuppliers.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
+
 
   return (
     <div className="space-y-6">
@@ -245,7 +251,7 @@ export default function SupplierPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredSuppliers.map((supplier) => (
+                  {paginatedItems.map((supplier) => (
                     <TableRow key={supplier.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40">
                       <TableCell className="font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-300">{supplier.code}</TableCell>
                       <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100">
@@ -280,6 +286,8 @@ export default function SupplierPage() {
                   ))}
                 </TableBody>
               </Table>
+<PaginationControls totalItems={filteredSuppliers.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
+
             </div>
           )}
         </CardContent>

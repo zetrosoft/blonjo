@@ -16,6 +16,7 @@
  * @architect Semua perubahan logic → masuk ke hook terkait, bukan di sini
  */
 
+import { PaginationControls } from '@/components/ui/pagination-controls';
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShoppingCart, Table2, Wand2 } from 'lucide-react';
@@ -35,6 +36,9 @@ import {
 } from './transaction/hooks';
 
 export default function Transactions() {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+
   const { t } = useTranslation();
   const [inputMode, setInputMode] = useState<InputMode>('smart');
 

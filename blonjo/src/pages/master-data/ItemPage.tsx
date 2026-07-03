@@ -1,3 +1,4 @@
+import { PaginationControls } from '@/components/ui/pagination-controls';
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table';
@@ -27,6 +28,9 @@ interface Item {
 }
 
 export default function ItemPage() {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -187,6 +191,8 @@ export default function ItemPage() {
       setIsSubmitting(false);
     }
   };
+  const paginatedItems = filteredItems.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
+
 
   return (
     <div className="space-y-6">
@@ -293,7 +299,7 @@ export default function ItemPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredItems.map((item) => (
+                  {paginatedItems.map((item) => (
                     <TableRow key={item.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40">
                       <TableCell className="font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-300">{item.sku}</TableCell>
                       <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100">{item.name}</TableCell>
@@ -339,6 +345,8 @@ export default function ItemPage() {
                   ))}
                 </TableBody>
               </Table>
+<PaginationControls totalItems={filteredItems.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
+
             </div>
           )}
         </CardContent>

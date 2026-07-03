@@ -1,3 +1,4 @@
+import { PaginationControls } from '@/components/ui/pagination-controls';
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { fetchClient } from '../../api/client';
@@ -27,6 +28,9 @@ import type { Transaction } from './types';
 const formatDateForInput = (date: Date) => date.toISOString().split('T')[0];
 
 export default function DaftarInputPage() {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
+
   const { t, i18n } = useTranslation();
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -150,6 +154,8 @@ export default function DaftarInputPage() {
       .slice(0, pageSize),
     [transactions, searchQuery, typeFilter, fromDate, toDate, pageSize],
   );
+  const paginatedItems = filteredTransactions.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
+
 
   return (
     <div className="w-full max-w-none px-2 md:px-4 lg:px-6 py-6 space-y-6 mx-auto">
@@ -284,7 +290,7 @@ export default function DaftarInputPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredTransactions.map((tx) => (
+                  {paginatedItems.map((tx) => (
                     <TableRow 
                       key={tx.id}
                       className="cursor-pointer hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40"
@@ -381,6 +387,8 @@ export default function DaftarInputPage() {
                   ))}
                 </TableBody>
               </Table>
+<PaginationControls totalItems={filteredTransactions.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
+
             </div>
           )}
         </CardContent>
