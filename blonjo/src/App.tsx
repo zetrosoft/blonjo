@@ -96,7 +96,6 @@ export default function App() {
               <Route path="customer" element={<CustomerPage />} />
               <Route path="uom" element={<UomPage />} />
               <Route path="journal-mapping" element={<JournalMappingPage />} />
-              <Route path="price-list" element={<PriceListPage />} />
             </Route>
 
             

@@ -97,7 +97,6 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       path: '/master-data',
       subItems: [
         { label: 'menu_item', path: '/master-data/item', icon: Package },
-        { label: 'Price List', path: '/master-data/price-list', icon: Tag },
         { label: 'menu_supplier', path: '/master-data/supplier', icon: Users },
         { label: 'menu_customer', path: '/master-data/customer', icon: User },
         { label: 'menu_uom', path: '/master-data/uom', icon: Ruler },
