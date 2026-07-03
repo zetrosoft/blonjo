@@ -37,13 +37,35 @@ class PricingEngine:
         today = date.today()
 
         # --- 1. Check Pricing Rule (Highest Priority) ---
-        rule = db.query(TenantPricingRule).filter(
+        product = db.query(Product).get(product_id)
+        
+        rules = db.query(TenantPricingRule).filter(
             TenantPricingRule.tenant_id == tenant_id,
-            TenantPricingRule.product_id == product_id,
             TenantPricingRule.is_active == True,
             TenantPricingRule.valid_from <= today,
             or_(TenantPricingRule.valid_to == None, TenantPricingRule.valid_to >= today)
-        ).first()
+        ).filter(
+            or_(
+                TenantPricingRule.product_id == product_id,
+                TenantPricingRule.product_id == None
+            )
+        ).all()
+
+        rule = None
+        # Priority 1: Exact product match
+        for r in rules:
+            if r.product_id == product_id:
+                rule = r
+                break
+        
+        # Priority 2: Keyword match for 'all variants'
+        if not rule and product:
+            for r in rules:
+                if r.product_id is None and r.rule_payload:
+                    keyword = r.rule_payload.get('apply_to_keyword')
+                    if keyword and keyword.lower() in product.name.lower():
+                        rule = r
+                        break
 
         if rule:
             payload = rule.rule_payload

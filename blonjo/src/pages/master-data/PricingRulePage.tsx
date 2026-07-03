@@ -231,10 +231,12 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
 
   const renderPayloadSummary = (rule: PricingRule) => {
     const payload = rule.rule_payload;
+    const displayName = payload.product_name || (payload.apply_to_keyword ? `Semua Varian: ${payload.apply_to_keyword}` : '');
+    
     if (rule.rule_type === 'tiered' && payload.tiers) {
       return (
         <div className="space-y-1 text-xs">
-          <p className="font-semibold text-muted-foreground">{t('pr_tiered_price')} ({payload.product_name}):</p>
+          <p className="font-semibold text-muted-foreground">{t('pr_tiered_price')} ({displayName}):</p>
           <ul className="list-disc list-inside space-y-0.5">
             {payload.tiers.map((tItem, idx) => (
               <li key={idx}>
@@ -251,7 +253,7 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
       const br = payload.bundle_rules;
       return (
         <div className="text-xs">
-          <p className="font-semibold text-muted-foreground">{t('pr_multiple_promo')} ({payload.product_name}):</p>
+          <p className="font-semibold text-muted-foreground">{t('pr_multiple_promo')} ({displayName}):</p>
           <p>
             {t('pr_buy')} 1 @ <span className="font-mono">{formatRp(br.base_price)}</span>, 
             {t('pr_buy')} {br.bundle_qty} @ <span className="font-mono">{formatRp(br.bundle_price)}</span> ({t('pr_multiples_apply')})
@@ -263,7 +265,7 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
     if (rule.rule_type === 'formula' && payload.multiplier) {
       return (
         <div className="text-xs">
-          <p className="font-semibold text-muted-foreground">{t('pr_formula')} ({payload.product_name}):</p>
+          <p className="font-semibold text-muted-foreground">{t('pr_formula')} ({displayName}):</p>
           <p>{t('pr_multiplier_factor')}: <span className="font-mono">{payload.multiplier}x</span> {t('pr_base_price')}</p>
         </div>
       );
