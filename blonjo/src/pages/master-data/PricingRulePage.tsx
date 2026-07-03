@@ -28,6 +28,7 @@ interface PricingRule {
   is_active: boolean;
   rule_payload: {
     product_name?: string;
+    apply_to_keyword?: string;
     tiers?: Array<{
       qty_threshold: number;
       unit?: string;
