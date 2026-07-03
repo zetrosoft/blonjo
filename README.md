@@ -160,3 +160,36 @@ If you find this project valuable for your retail infrastructure or AI implement
 
 ## 📧 Contact & Support
 For technical inquiries, contact the Lead Software Architect or open an issue in the project tracker.
+
+## 🧠 MCP & AI Architecture
+
+Sistem AI di dalam SAJEN (RAG, Embedding, Semantic Search, Pricing Rules Parsing) dipisahkan dari proses utama backend melalui teknologi **Model Context Protocol (MCP) Server**.
+
+### Alasan Arsitektural (Mengapa Menggunakan MCP?)
+1. **Stateless Backend:** SAJEN (FastAPI) tidak perlu menyimpan memori model AI atau menahan load GPU, menjadikannya cepat dan *stateless*.
+2. **Skalabilitas Terisolasi:** Proses *semantic search*, OCR, dan NLP bisa dialihkan ke server/node khusus AI, tanpa mengganggu kinerja transaksi API retail.
+3. **Standarisasi Koneksi AI:** Memungkinkan perpindahan model AI secara dinamis (seperti Ollama lokal ke Claude/OpenAI) tanpa mengubah ribuan baris *logic* di FastAPI.
+4. **Pemrosesan Vektor Eksternal:** Tugas berat seperti memecah dokumen (*chunking*), membuat *embedding*, dan melakukan *similarity search* dieksekusi secara independen oleh `mcp-server`.
+
+### Diagram Arsitektur
+
+```mermaid
+flowchart TD
+    User([User / Browser])
+    Blonjo[Blonjo Frontend\n(React/Vite)]
+    Sajen[Sajen Backend\n(FastAPI)]
+    MCP[MCP Server\n(Node.js)]
+    DB[(PostgreSQL\n+ pgvector)]
+    Ollama([Ollama\n(Local Model)])
+    
+    User -->|UI Interaction| Blonjo
+    Blonjo -->|REST API| Sajen
+    
+    %% Standard CRUD
+    Sajen -->|Transaksi/CRUD| DB
+    
+    %% AI Integration
+    Sajen -.->|Call MCP Tool| MCP
+    MCP -.->|Generate Text/Embeddings| Ollama
+    MCP -->|Query/Ingest Vectors| DB
+```
