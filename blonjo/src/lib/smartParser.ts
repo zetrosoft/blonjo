@@ -36,6 +36,8 @@ export interface ParsedTransaction {
   total_amount: number;
   transaction_date: string;
   contact_name?: string; // Tambahkan ini
+  payment_method?: string;
+  due_date?: string;
   items: ParsedItem[];
   raw_text: string;
   confidence: 'high' | 'medium' | 'low';

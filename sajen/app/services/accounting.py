@@ -60,7 +60,7 @@ def check_tax_exempt_via_vector(items: list) -> bool:
         print(f"Error checking tax exemption: {e}")
         return True # Safe fallback
 
-def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: TransactionType, amount: Decimal, is_tax_exempt: bool = True) -> list[dict]:
+def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: TransactionType, amount: Decimal, is_tax_exempt: bool = True, payment_method: str | None = None) -> list[dict]:
     """
     Generate dynamic journal entries based on JournalMapping master data.
     Supports multi-pair (compound) entries and specialized logic for CASH_COUNT.
@@ -108,14 +108,39 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
                     val = (amount * Decimal('11') / Decimal('111')).quantize(Decimal('0.00'))
             else:
                 val = Decimal('0.00')
+                
+            # Intercept Cash/Bank if payment_method is hutang/tempo
+            target_account_id = line.account_id
+            target_account = account
+            
+            if payment_method and payment_method.lower() in ["hutang", "tempo", "kredit"]:
+                if account and (account.code.startswith("1-11") or account.code.startswith("1-10")):
+                    if trans_type == TransactionType.PURCHASE and line.side == "credit":
+                        # Redirect to Hutang Dagang (2-1101)
+                        hutang_acc = db.query(Account).filter(
+                            Account.code == "2-1101", 
+                            or_(Account.tenant_id == t_id, Account.tenant_id == None)
+                        ).first()
+                        if hutang_acc:
+                            target_account_id = hutang_acc.id
+                            target_account = hutang_acc
+                    elif trans_type == TransactionType.SALES and line.side == "debit":
+                        # Redirect to Piutang Usaha (1-1201)
+                        piutang_acc = db.query(Account).filter(
+                            Account.code == "1-1201", 
+                            or_(Account.tenant_id == t_id, Account.tenant_id == None)
+                        ).first()
+                        if piutang_acc:
+                            target_account_id = piutang_acc.id
+                            target_account = piutang_acc
             
             entries.append({
-                "account_id": line.account_id,
+                "account_id": target_account_id,
                 "account": {
-                    "id": account.id,
-                    "code": account.code,
-                    "name": account.name
-                } if account else None,
+                    "id": target_account.id,
+                    "code": target_account.code,
+                    "name": target_account.name
+                } if target_account else None,
                 "debit": val if line.side == "debit" else 0,
                 "credit": val if line.side == "credit" else 0
             })
@@ -275,6 +300,8 @@ def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, us
         transaction_type=trans_in.transaction_type,
         status=final_status,
         total_amount=trans_in.total_amount,
+        payment_method=trans_in.payment_method,
+        due_date=trans_in.due_date,
         created_by_id=u_id
     )
     db.add(db_transaction)
@@ -697,6 +724,13 @@ def get_dashboard_summary(db: Session, tenant_id: int | None = None) -> dict:
             "revenue": float(day_rev),
             "expense": float(day_exp)
         })
+    # Fetch Upcoming Debts (H-7 to any future date)
+    # Get debts that are due, sorted by nearest date
+    upcoming_debts = db.query(Transaction).filter(
+        Transaction.tenant_id == t_id,
+        Transaction.due_date.isnot(None),
+        Transaction.status == TransactionStatus.POSTED
+    ).order_by(Transaction.due_date.asc()).limit(10).all()
 
     return {
         "total_revenue": total_revenue,
@@ -704,7 +738,8 @@ def get_dashboard_summary(db: Session, tenant_id: int | None = None) -> dict:
         "net_profit": net_profit,
         "cash_balance": cash_balance,
         "recent_transactions": recent_transactions,
-        "chart_data": chart_data
+        "chart_data": chart_data,
+        "upcoming_debts": upcoming_debts
     }
 
 def adjust_summary_sales_hpp(db: Session, tenant_id: int, transaction_date: date):

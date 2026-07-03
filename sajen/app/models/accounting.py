@@ -73,6 +73,9 @@ class Transaction(Base):
     # Store the net total of the transaction for quick reference
     total_amount = Column(Numeric(15, 2), default=0.00, nullable=False)
     
+    payment_method = Column(String(50), nullable=True)
+    due_date = Column(Date, nullable=True, index=True)
+    
     created_by_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     creator = relationship("User")
     tenant = relationship("Tenant")

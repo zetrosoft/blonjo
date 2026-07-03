@@ -47,6 +47,8 @@ class TransactionBase(BaseModel):
     description: str
     transaction_type: TransactionType
     total_amount: Decimal = Field(ge=0)
+    payment_method: Optional[str] = None
+    due_date: Optional[date] = None
 
 class ParsedItem(BaseModel):
     name: str

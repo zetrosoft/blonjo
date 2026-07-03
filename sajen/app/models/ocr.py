@@ -46,25 +46,6 @@ class OCRFeedback(Base):
     ocr_task = relationship("OCRTask", back_populates="feedback_items")
 
 
-class AILearningTemplate(Base):
-    """
-    Golden dataset for AI Few-Shot Learning.
-    Dipisahkan dari transaksi harian untuk menjaga kualitas pembelajaran.
-    """
-    __tablename__ = "ai_learning_templates"
-
-    id = Column(Integer, primary_key=True, index=True)
-    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
-    file_name = Column(String, nullable=True)
-    raw_ocr_text = Column(Text, nullable=False)
-    expected_output = Column(Text, nullable=False) # Panduan/JSON dari user
-    usage_count = Column(Integer, default=0, nullable=False)
-    
-    # Embedding for vector similarity RAG (3072 dimensions)
-    embedding = Column(Vector(3072), nullable=True)
-    
-    tenant = relationship("Tenant")
-
 class CommodityTrend(Base):
 
     """

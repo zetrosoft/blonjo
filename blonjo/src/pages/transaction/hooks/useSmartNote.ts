@@ -40,6 +40,8 @@ export function useSmartNote() {
         description: res.parsed_data.description || local.description,
         transaction_date: res.parsed_data.transaction_date || local.transaction_date,
         items: res.parsed_data.items || local.items,
+        payment_method: res.parsed_data.payment_method || local.payment_method,
+        due_date: res.parsed_data.due_date || local.due_date,
         suggested_entries: res.suggested_entries,
       });
     } catch {

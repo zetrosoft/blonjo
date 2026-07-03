@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { 
   DollarSign, ReceiptText, Loader2, TrendingUp, ShoppingBag 
@@ -40,6 +41,7 @@ interface DashboardSummary {
   cash_balance: number;
   recent_transactions: any[];
   chart_data: any[];
+  upcoming_debts: any[];
 }
 
 export default function Dashboard() {
@@ -53,6 +55,30 @@ export default function Dashboard() {
         const summary = await fetchClient('/finance/dashboard/summary');
         console.log('Dashboard Data:', summary);
         setData(summary);
+
+        // Notify H-1 debts
+        if (summary.upcoming_debts) {
+          const today = new Date();
+          summary.upcoming_debts.forEach((tx: any) => {
+            const dueDate = new Date(tx.due_date);
+            const diffTime = dueDate.getTime() - today.getTime();
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            
+            if (diffDays === 1) {
+              toast.warning(`Pengingat: Tagihan jatuh tempo besok (H-1)`, {
+                description: `${tx.description} - ${formatRp(Number(tx.total_amount))}`
+              });
+            } else if (diffDays === 0) {
+              toast.error(`Perhatian: Tagihan jatuh tempo HARI INI`, {
+                description: `${tx.description} - ${formatRp(Number(tx.total_amount))}`
+              });
+            } else if (diffDays < 0) {
+              toast.error(`Peringatan: Tagihan TERLAMBAT ${Math.abs(diffDays)} Hari`, {
+                description: `${tx.description} - ${formatRp(Number(tx.total_amount))}`
+              });
+            }
+          });
+        }
       } catch (err) {
         console.error('Failed to load dashboard summary', err);
       } finally {
@@ -274,6 +300,68 @@ export default function Dashboard() {
                     <ReceiptText className="w-8 h-8 text-muted-foreground/30" />
                   </div>
                   <p className="text-xs font-bold text-muted-foreground/50 uppercase tracking-widest">{t('no_transactions_yet')}</p>
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Upcoming Debts */}
+      <div className="grid gap-6">
+        <Card className="col-span-full border-border/60 bg-card/20">
+          <CardHeader>
+            <CardTitle className="text-sm font-bold flex items-center gap-2 text-rose-400 uppercase tracking-wider">
+              <ReceiptText className="w-4 h-4" />
+              Daftar Jatuh Tempo (Hutang)
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-4 pb-4">
+            <div className="space-y-3">
+              {data?.upcoming_debts && data.upcoming_debts.length > 0 ? (
+                data.upcoming_debts.map((tx) => {
+                  const today = new Date();
+                  const dueDate = new Date(tx.due_date);
+                  const diffTime = dueDate.getTime() - today.getTime();
+                  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                  let badgeText = `${diffDays} Hari Lagi`;
+                  let badgeColor = "bg-sky-500/10 text-sky-500 border-sky-500/20";
+
+                  if (diffDays < 0) {
+                    badgeText = `Terlambat ${Math.abs(diffDays)} Hari`;
+                    badgeColor = "bg-rose-500/10 text-rose-500 border-rose-500/20";
+                  } else if (diffDays === 0) {
+                    badgeText = "Jatuh Tempo Hari Ini";
+                    badgeColor = "bg-rose-500/10 text-rose-500 border-rose-500/20";
+                  } else if (diffDays <= 3) {
+                    badgeText = `H-${diffDays}`;
+                    badgeColor = "bg-amber-500/10 text-amber-500 border-amber-500/20";
+                  }
+
+                  return (
+                  <div key={tx.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl border border-border/30 bg-background/30 hover:bg-background/50 transition-all gap-4">
+                    <div className="flex items-center space-x-4">
+                      <div className={cn("px-3 py-1 text-[10px] font-black border-2 rounded-lg uppercase tracking-wider text-center", badgeColor)}>
+                        {badgeText}
+                      </div>
+                      <div>
+                        <p className="text-sm font-black tracking-tight text-zinc-200">{tx.description}</p>
+                        <p className="text-xs font-medium text-muted-foreground">Jatuh Tempo: {tx.due_date}</p>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-black tabular-nums text-rose-400">
+                        {formatRp(Number(tx.total_amount))}
+                      </p>
+                      <p className="text-[10px] font-bold text-muted-foreground/70 uppercase">
+                        {tx.reference_no || 'TX'}
+                      </p>
+                    </div>
+                  </div>
+                )})
+              ) : (
+                <div className="py-10 text-center flex flex-col items-center gap-3">
+                  <p className="text-xs font-bold text-muted-foreground/50 uppercase tracking-widest">Tidak ada tagihan jatuh tempo terdekat</p>
                 </div>
               )}
             </div>

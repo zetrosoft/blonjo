@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
-from app.models.ocr import AILearningTemplate, OCRTask, OCRStatus
+from app.models.ocr import OCRTask, OCRStatus
 from app.models.inventory import Product, Contact, TenantPricingRule
 from app.services.ai_engine import get_embedding
 import json
@@ -96,49 +96,33 @@ def build_minimal_context(
 def get_rag_context(db: Session, tenant_id: int = None, query_text: str = "") -> str:
     """
     Consolidate GLOBAL RAG context from multiple sources.
-    Optimized with VECTOR SIMILARITY for primary templates.
+    Optimized with VECTOR SIMILARITY for primary templates via MCP Server.
     """
     context = ""
 
-    # 0. ON-THE-FLY SEEDING: Check if any templates missing embeddings and fix them
-    missing_vectors = db.query(AILearningTemplate).filter(AILearningTemplate.embedding == None).all()
-    if missing_vectors:
-        print(f"Detecting {len(missing_vectors)} templates without vectors. Seeding now...")
-        for mv in missing_vectors:
-            vector = get_embedding(mv.raw_ocr_text)
-            if vector:
-                mv.embedding = vector
+    # 1. PRIMARY: Semantic Search for Golden Templates via MCP Server
+    if query_text:
         try:
-            db.commit()
-            print("Templates seeded with vectors successfully.")
+            import requests
+            from app.core.config import settings
+            url = f"{settings.MCP_SERVER_URL.rstrip('/')}/api/v1/rag/search"
+            payload = {
+                "text": query_text,
+                "tenant_id": tenant_id
+            }
+            resp = requests.post(url, json=payload, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("action") == "bypass":
+                    # If we got a bypass, we just format it so the downstream caller gets the context
+                    # The downstream OCR caller might handle bypass specifically, but for now we inject it as context
+                    context += "\n--- REFERENSI PEMBELAJARAN TERKAIT ---\n"
+                    context += f"CONTOH MIRIP (95% MATCH): {data.get('matched_file')}\nHASIL EKSTRAKSI: {data.get('expected_output')}\n\n"
+                elif data.get("rag_context"):
+                    context += "\n--- REFERENSI PEMBELAJARAN TERKAIT ---\n"
+                    context += data["rag_context"] + "\n\n"
         except Exception as e:
-            print(f"Failed to seed vectors: {e}")
-            db.rollback()
-
-    # 1. PRIMARY: Semantic Search for Golden Templates (Similarity Search)
-    query_vector = get_embedding(query_text) if query_text else None
-    
-    # Check if query_vector is valid (must be a list of floats)
-    if query_vector and isinstance(query_vector, list) and len(query_vector) > 0:
-        try:
-            # Search using pgvector cosine distance (<->)
-            # We take templates ONLY if they are very similar (distance < 0.45)
-            golden_templates = db.query(AILearningTemplate).filter(
-                AILearningTemplate.embedding.op('<->')(query_vector) < 0.45
-            ).order_by(
-                AILearningTemplate.embedding.op('<->')(query_vector)
-            ).limit(1).all()
-        except Exception as ve:
-            print(f"Vector search failed: {ve}")
-            golden_templates = []
-    else:
-        # Fallback if embedding fails
-        golden_templates = []
-
-    if golden_templates:
-        context += "\n--- REFERENSI PEMBELAJARAN TERKAIT ---\n"
-        for gt in golden_templates:
-            context += f"CONTOH INPUT: {gt.raw_ocr_text[:300]}\nHASIL EKSTRAKSI: {gt.expected_output}\n\n"
+            print(f"MCP Vector search failed: {e}")
 
     # 2. SECONDARY: Historically Corrected Tasks (Only for complex/long input)
     # If the input is short (like "Saldo Kas"), we skip historical RAG to save tokens.

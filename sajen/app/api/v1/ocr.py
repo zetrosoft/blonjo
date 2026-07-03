@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, status, UploadFile, Body
 from typing import List, Annotated, Any
 
 from app.api.deps import SessionDep, CurrentUser
-from app.models.ocr import OCRTask, OCRFeedback, OCRStatus, AILearningTemplate
+from app.models.ocr import OCRTask, OCRFeedback, OCRStatus
 from app.models.log import AIParsingLog
 from app.schemas.ocr import (
     OCRTaskResponse, 
@@ -308,66 +308,123 @@ def correct_ocr_task(
         
     return task
 
-# === AI TRAINING TEMPLATES ENDPOINTS ===
+# === AI TRAINING TEMPLATES ENDPOINTS (STATELESS VIA KNOWLEDGE_VECTORS) ===
+from sqlalchemy import text
 
 @router.get("/training-templates", response_model=List[AILearningTemplateResponse])
 def get_training_templates(session: SessionDep, current_user: CurrentUser):
-    # Mengambil data Global (Public) dan data spesifik Tenant
-    return session.query(AILearningTemplate).filter(
-        (AILearningTemplate.tenant_id == current_user.tenant_id) | 
-        (AILearningTemplate.tenant_id == None)
-    ).order_by(AILearningTemplate.id.desc()).all()
+    # Mengambil data dari knowledge_vectors di database yang sama (shared db)
+    query = text("""
+        SELECT id, content as raw_ocr_text, 
+               (metadata->>'tenant_id')::int as tenant_id,
+               metadata->>'file_name' as file_name,
+               metadata->>'expected_output' as expected_output,
+               COALESCE((metadata->>'usage_count')::int, 0) as usage_count
+        FROM knowledge_vectors
+        WHERE metadata->>'app_context' = 'sajen_ocr'
+          AND ((metadata->>'tenant_id')::int = :tid OR metadata->>'tenant_id' IS NULL)
+        ORDER BY id DESC
+    """)
+    result = session.execute(query, {"tid": current_user.tenant_id}).fetchall()
+    
+    # Map back to expected schema
+    return [
+        {
+            "id": row.id,
+            "tenant_id": row.tenant_id,
+            "file_name": row.file_name,
+            "raw_ocr_text": row.raw_ocr_text,
+            "expected_output": row.expected_output,
+            "usage_count": row.usage_count
+        } for row in result
+    ]
 
 @router.post("/training-templates", response_model=AILearningTemplateResponse)
 def create_training_template(template_in: AILearningTemplateCreate, session: SessionDep, current_user: CurrentUser):
-    # Simpan dengan tenant_id user agar bisa di-edit/hapus oleh user tersebut
-    db_template = AILearningTemplate(
-        tenant_id=current_user.tenant_id, 
-        file_name=template_in.file_name,
-        raw_ocr_text=template_in.raw_ocr_text,
-        expected_output=template_in.expected_output
-    )
-    session.add(db_template)
-    session.commit()
-    session.refresh(db_template)
-    return db_template
+    # Hit MCP Server Ingest API to handle embedding and storage uniformly
+    import requests
+    from app.core.config import settings
+    url = f"{settings.MCP_SERVER_URL.rstrip('/')}/api/v1/rag/ingest"
+    payload = {
+        "raw_ocr_text": template_in.raw_ocr_text,
+        "expected_output": template_in.expected_output,
+        "tenant_id": current_user.tenant_id,
+        "file_name": template_in.file_name
+    }
+    resp = requests.post(url, json=payload, timeout=15)
+    
+    if resp.status_code != 200:
+        raise HTTPException(status_code=500, detail=f"Gagal menyimpan ke MCP: {resp.text}")
+        
+    return {
+        "id": 0, # Placeholder, since MCP uses UUID for id, but UI expects integer. We'll return 0 for now.
+        "tenant_id": current_user.tenant_id,
+        "file_name": template_in.file_name,
+        "raw_ocr_text": template_in.raw_ocr_text,
+        "expected_output": template_in.expected_output,
+        "usage_count": 0
+    }
 
 @router.put("/training-templates/{template_id}", response_model=AILearningTemplateResponse)
 def update_training_template(
-    template_id: int, 
+    template_id: str, 
     template_in: AILearningTemplateCreate, 
     session: SessionDep, 
     current_user: CurrentUser
 ):
-    template = session.query(AILearningTemplate).filter(
-        AILearningTemplate.id == template_id,
-        (AILearningTemplate.tenant_id == current_user.tenant_id) | (AILearningTemplate.tenant_id == None)
-    ).first()
-    
-    if not template:
-        raise HTTPException(status_code=404, detail="Template not found or access denied")
-    
-    template.file_name = template_in.file_name
-    template.raw_ocr_text = template_in.raw_ocr_text
-    template.expected_output = template_in.expected_output
-    
-    # Recalculate embedding if text changed
+    # For update, since MCP ingest appends, we update raw SQL directly for simplicity
     from app.services.ai_engine import get_embedding
-    template.embedding = get_embedding(template.raw_ocr_text)
+    import json
     
+    vec = get_embedding(template_in.raw_ocr_text)
+    vec_str = f"[{','.join(map(str, vec))}]" if vec else None
+    
+    meta_update = json.dumps({
+        "app_context": "sajen_ocr",
+        "tenant_id": current_user.tenant_id,
+        "file_name": template_in.file_name,
+        "expected_output": template_in.expected_output,
+        "usage_count": 0
+    })
+    
+    query = text("""
+        UPDATE knowledge_vectors 
+        SET content = :content, metadata = :meta::jsonb, embedding = :vec::halfvec
+        WHERE id::text = :id AND (metadata->>'tenant_id')::int = :tid
+        RETURNING id
+    """)
+    result = session.execute(query, {
+        "content": template_in.raw_ocr_text,
+        "meta": meta_update,
+        "vec": vec_str,
+        "id": template_id,
+        "tid": current_user.tenant_id
+    }).first()
+    
+    if not result:
+        raise HTTPException(status_code=404, detail="Template not found or access denied")
+        
     session.commit()
-    session.refresh(template)
-    return template
+    
+    return {
+        "id": 0,
+        "tenant_id": current_user.tenant_id,
+        "file_name": template_in.file_name,
+        "raw_ocr_text": template_in.raw_ocr_text,
+        "expected_output": template_in.expected_output,
+        "usage_count": 0
+    }
 
 @router.delete("/training-templates/{template_id}")
-def delete_training_template(template_id: int, session: SessionDep, current_user: CurrentUser):
-    template = session.query(AILearningTemplate).filter(
-        AILearningTemplate.id == template_id,
-        (AILearningTemplate.tenant_id == current_user.tenant_id) | (AILearningTemplate.tenant_id == None)
-    ).first()
-    if not template:
+def delete_training_template(template_id: str, session: SessionDep, current_user: CurrentUser):
+    query = text("""
+        DELETE FROM knowledge_vectors 
+        WHERE id::text = :id AND (metadata->>'tenant_id')::int = :tid
+        RETURNING id
+    """)
+    result = session.execute(query, {"id": template_id, "tid": current_user.tenant_id}).first()
+    if not result:
         raise HTTPException(status_code=404, detail="Template not found")
-    session.delete(template)
     session.commit()
     return {"message": "Deleted successfully"}
 

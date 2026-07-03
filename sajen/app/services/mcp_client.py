@@ -74,7 +74,7 @@ class MCPClient:
                         "token_out": 0,
                     }
             except Exception as e:
-                print(f"[MCPClient] parse_transaction gagal, fallback ke AI lokal. Error: {e}")
+                print(f"[MCPClient] parse_transaction gagal, fallback ke AI lokal. Error: {repr(e)}")
 
         # Fallback lokal — return full dict termasuk processor & token info
         from app.services.ai_engine import call_ai_text
@@ -129,7 +129,7 @@ class MCPClient:
                     text_content = res["content"][0].get("text", "")
                     return json.loads(text_content)
             except Exception as e:
-                print(f"[MCPClient] ocr_receipt gagal, fallback ke AI lokal. Error: {e}")
+                print(f"[MCPClient] ocr_receipt gagal, fallback ke AI lokal. Error: {repr(e)}")
                 
         # Fallback lokal
         from app.services.ai_engine import call_ai_vision

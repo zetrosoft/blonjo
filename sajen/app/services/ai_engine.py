@@ -106,30 +106,27 @@ def _get_ollama_client():
             continue
     return None, None
 
+import requests
+
 def get_embedding(text: str) -> list:
     """
-    Generate vector embedding using Ollama with auto-switch.
-    Pads the result to 3072 dimensions to match database schema.
+    Generate vector embedding by calling MCP Server directly.
+    Pads the result to 3072 dimensions to match database schema if needed.
     """
-    client, host = _get_ollama_client()
-    if not client:
-        print("All Ollama hosts for embedding are offline.")
-        return None
-
     try:
-        response = client.embeddings(model="nomic-embed-text", prompt=text)
-        vec = response["embedding"]
+        url = f"{settings.MCP_SERVER_URL.rstrip('/')}/api/v1/rag/embed"
+        resp = requests.post(url, json={"text": text}, timeout=10)
+        resp.raise_for_status()
+        vec = resp.json().get("embedding")
         
-        # Pad with zeros to 3072 to match DB Vector type
-        if len(vec) < 3072:
+        if vec and len(vec) < 3072:
             import numpy as np
             vec = np.pad(vec, (0, 3072 - len(vec)), 'constant').tolist()
             
         return vec
     except Exception as e:
-        print(f"Ollama Embedding failed on {host}: {e}")
-
-    return None
+        print(f"MCP Server Embedding failed: {e}")
+        return None
 
 def _get_best_model_name(client: Client, preferred_model: str) -> str:
     """

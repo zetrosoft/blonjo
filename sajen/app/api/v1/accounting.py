@@ -17,7 +17,7 @@ from app.schemas.accounting import (
 )
 from app.models.accounting import Account, Transaction, TransactionType, JournalMapping, JournalMappingLine
 from app.models.log import AIParsingLog, AIModelQuota, ParserType
-from app.models.ocr import AILearningTemplate, OCRTask, OCRStatus
+from app.models.ocr import OCRTask, OCRStatus
 from app.services.accounting import (
     create_transaction_with_journal, 
     update_transaction_draft, 
@@ -205,6 +205,10 @@ async def parse_transaction_note(
     # ── Auto Journal Suggestion ───────────────────────────────────────────────
     suggested_entries = []
     try:
+        # Standardize 'type' to 'transaction_type' if needed
+        if "type" in final_parsed_data and "transaction_type" not in final_parsed_data:
+            final_parsed_data["transaction_type"] = final_parsed_data.pop("type")
+            
         t_type_str = final_parsed_data.get("transaction_type")
         t_amount = final_parsed_data.get("total_amount", 0)
         t_items = final_parsed_data.get("items", [])
@@ -219,7 +223,8 @@ async def parse_transaction_note(
                 current_user.tenant_id,
                 TransactionType(t_type_str),
                 Decimal(str(t_amount)),
-                is_tax_exempt=is_exempt
+                is_tax_exempt=is_exempt,
+                payment_method=final_parsed_data.get("payment_method")
             )
     except Exception as e:
         print(f"Auto-journal suggestion error: {e}")
@@ -430,6 +435,23 @@ def get_transactions(
         Transaction.transaction_date.desc(),
         Transaction.id.desc()
     ).offset(skip).limit(limit).all()
+
+@router.get("/transactions/debts/upcoming", response_model=List[TransactionResponse])
+def get_upcoming_debts(
+    session: SessionDep,
+    current_user: CurrentUser,
+    limit: int = 20
+):
+    """
+    Retrieve upcoming debts (Hutang) sorted by due date ascending.
+    Only returns transactions that have a due_date and haven't been fully paid (we assume here all with due_date are relevant).
+    """
+    return session.query(Transaction).filter(
+        Transaction.tenant_id == current_user.tenant_id,
+        Transaction.due_date.isnot(None)
+    ).order_by(
+        Transaction.due_date.asc()
+    ).limit(limit).all()
 
 
 @router.get("/transactions/{transaction_id}", response_model=TransactionResponse)

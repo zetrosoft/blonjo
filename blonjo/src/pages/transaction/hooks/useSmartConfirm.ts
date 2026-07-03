@@ -108,6 +108,8 @@ export function useSmartConfirm(
           description:      parsedResult.description,
           transaction_type: parsedResult.transaction_type,
           total_amount:     parsedResult.total_amount,
+          payment_method:   parsedResult.payment_method,
+          due_date:         parsedResult.due_date,
           status,
           entries: entries.map(e => ({
             account_id: parseInt(e.account_id),
