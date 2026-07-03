@@ -38,7 +38,6 @@ const UomPage = lazy(() => import('./pages/master-data/UomPage'));
 const JournalMappingPage = lazy(() => import('./pages/master-data/JournalMappingPage'));
 const MasterDataHub = lazy(() => import('./pages/master-data/MasterDataHub'));
 const PricingRulePage = lazy(() => import('./pages/master-data/PricingRulePage'));
-const PriceListPage = lazy(() => import('./pages/master-data/PriceListPage'));
 
 
 // Report pages

@@ -5,6 +5,8 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { Badge } from '../../components/ui/badge';
 import { Search, ShoppingCart, Calendar, User, FileText, ChevronDown, ChevronUp, RefreshCw, FileSpreadsheet, ArrowLeftRight } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { PaginationControls } from '@/components/ui/pagination-controls';
 import { fetchClient } from '../../api/client';
 import { formatRp } from '../../lib/utils';
 import { toast } from 'sonner';
@@ -32,6 +34,8 @@ export default function PurchasingHistory() {
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
   const [expandedRows, setExpandedRows] = useState<Record<number, boolean>>({});
 
   const loadData = async () => {
@@ -112,6 +116,7 @@ export default function PurchasingHistory() {
   const totalSpent = purchases.filter(p => p.status === 'posted').reduce((acc, p) => acc + p.amount, 0);
   const draftSpent = purchases.filter(p => p.status === 'draft').reduce((acc, p) => acc + p.amount, 0);
   const totalPurchases = purchases.length;
+  const paginatedPurchases = filteredPurchases.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
   return (
     <div className="space-y-6 p-6">
@@ -210,7 +215,7 @@ export default function PurchasingHistory() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredPurchases.map(p => {
+                  paginatedPurchases.map(p => {
                     const isExpanded = !!expandedRows[p.id];
                     return (
                       <React.Fragment key={p.id}>
@@ -288,6 +293,7 @@ export default function PurchasingHistory() {
                 )}
               </TableBody>
             </Table>
+            <PaginationControls totalItems={filteredPurchases.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
           </div>
         </CardContent>
       </Card>

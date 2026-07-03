@@ -53,6 +53,8 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
   const [saving, setSaving] = useState(false);
   const [rulesList, setRulesList] = useState<PricingRule[]>([]);
   const [loadingRules, setLoadingRules] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
 
   // Tab & Manual Mode states
   const [inputMode, setInputMode] = useState<'ai' | 'manual'>('ai');
@@ -294,6 +296,10 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
     updated[index][key] = val;
     setManualTiers(updated);
   };
+
+  const handleOpenInfo = () => {};
+
+  const paginatedRules = rulesList.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
   return (
     <div className={cn("space-y-6", !hideHeader && "p-6 max-w-6xl mx-auto")}>
@@ -585,7 +591,7 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
                         </TableCell>
                       </TableRow>
                     ) : (
-                      rulesList.map(rule => (
+                      paginatedRules.map(rule => (
                         <TableRow key={rule.id} className="hover:bg-muted/20">
                           <TableCell className="align-top py-3">
                             <div className="space-y-1">
@@ -616,6 +622,7 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
                     )}
                   </TableBody>
                 </Table>
+                <PaginationControls totalItems={rulesList.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
               </div>
             </CardContent>
           </Card>

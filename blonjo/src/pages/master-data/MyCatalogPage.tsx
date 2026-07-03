@@ -33,6 +33,8 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
   const [items, setItems] = useState<MyCatalogItem[]>([]);
   const [pricingRules, setPricingRules] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [rowsPerPage, setRowsPerPage] = useState(10);
   const [isStockMaintenance, setIsStockMaintenance] = useState(false);
 
   // Edit states
@@ -44,6 +46,8 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
   const [savingItem, setSavingItem] = useState(false);
   const [activeRule, setActiveRule] = useState<any | null>(null);
   const [editRulePayload, setEditRulePayload] = useState<any | null>(null);
+
+  const paginatedItems = items.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
   const loadCatalog = async () => {
     setLoading(true);
@@ -231,7 +235,7 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
                       <p className="text-muted-foreground">{t('mc_empty')}</p>
                     </TableCell>
                   </TableRow>
-                ) : items.map((item) => {
+                ) : paginatedItems.map((item) => {
                   const matchedRules = pricingRules.filter(r => isRuleMatch(r, item));
                   return (
                     <TableRow key={item.id} className="hover:bg-muted/20">
@@ -283,6 +287,7 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
                 })}
               </TableBody>
             </Table>
+            <PaginationControls totalItems={items.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
           </div>
         </CardContent>
       </Card>
