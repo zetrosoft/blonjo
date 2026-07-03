@@ -175,31 +175,16 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          {!hideHeader && (
-            <>
-              <h2 className="text-2xl font-bold tracking-tight">{t('mc_title')}</h2>
-              <p className="text-muted-foreground text-sm">
-                {t('mc_desc')}
-              </p>
-            </>
-          )}
-        </div>
-        <div className="flex items-center gap-3 bg-muted/40 p-2 rounded-lg border border-border/50">
-          <Store className="w-4 h-4 text-primary" />
-          <div className="flex items-center space-x-2">
-            <Checkbox 
-              id="stock-mt" 
-              checked={isStockMaintenance} 
-              onCheckedChange={(c: boolean) => toggleStockMaintenance(!!c)} 
-            />
-            <Label htmlFor="stock-mt" className="text-xs font-medium cursor-pointer">
-              {t('mc_stock_maintenance')}
-            </Label>
+      {!hideHeader && (
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight">{t('mc_title')}</h2>
+            <p className="text-muted-foreground text-sm">
+              {t('mc_desc')}
+            </p>
           </div>
         </div>
-      </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="bg-primary/5 border-primary/20">
@@ -218,9 +203,24 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
       <Card className="border-border/60">
         <CardHeader className="flex flex-row items-center justify-between pb-2">
           <CardTitle className="text-base font-semibold">{t('mc_my_item_list')}</CardTitle>
-          <Button variant="outline" size="sm" className="gap-2" onClick={loadCatalog}>
-            <RefreshCw className="w-3.5 h-3.5" /> {t('pr_refresh_btn')}
-          </Button>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 bg-muted/40 px-3 py-1.5 rounded-lg border border-border/50">
+              <Store className="w-3.5 h-3.5 text-primary" />
+              <div className="flex items-center space-x-2">
+                <Checkbox 
+                  id="stock-mt" 
+                  checked={isStockMaintenance} 
+                  onCheckedChange={(c: boolean) => toggleStockMaintenance(!!c)} 
+                />
+                <Label htmlFor="stock-mt" className="text-xs font-medium cursor-pointer m-0">
+                  {t('mc_stock_maintenance')}
+                </Label>
+              </div>
+            </div>
+            <Button variant="outline" size="sm" className="gap-2" onClick={loadCatalog}>
+              <RefreshCw className="w-3.5 h-3.5" /> {t('pr_refresh_btn')}
+            </Button>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="rounded-xl border border-border/50 overflow-hidden">

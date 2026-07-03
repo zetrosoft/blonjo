@@ -47,20 +47,37 @@ export default function Settings() {
     <div className="container mx-auto px-6 py-8 space-y-6">
 
       {/* ── Header ── */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between pb-6 border-b border-border/40 gap-4">
-        <div>
-          <h1 className="text-3xl font-extrabold text-foreground tracking-tight flex items-center gap-3">
-            <SettingsIcon className="w-8 h-8 text-primary animate-spin-slow" />
-            {activeTab ? getTabLabel(activeTab) : t('settings_title')}
-          </h1>
-          <p className="text-muted-foreground mt-2">
-            {activeTab === 'aitraining'
-              ? t('setting_ai_training_subtitle')
-              : activeTab 
-                ? t('settings_subtitle_tab', { tab: getTabLabel(activeTab).toLowerCase() })
-                : t('settings_subtitle_main')
-            }
-          </p>
+      <div className="flex flex-col md:flex-row md:items-start md:justify-between pb-6 border-b border-border/40 gap-4">
+        <div className="space-y-3">
+          {activeTab && (
+            <Breadcrumb>
+              <BreadcrumbList>
+                <BreadcrumbItem>
+                  <BreadcrumbLink className="cursor-pointer" onClick={() => navigate('/settings')}>
+                    {t('settings_title')}
+                  </BreadcrumbLink>
+                </BreadcrumbItem>
+                <BreadcrumbSeparator />
+                <BreadcrumbItem>
+                  <BreadcrumbPage>{getTabLabel(activeTab)}</BreadcrumbPage>
+                </BreadcrumbItem>
+              </BreadcrumbList>
+            </Breadcrumb>
+          )}
+          <div>
+            <h1 className="text-3xl font-extrabold text-foreground tracking-tight flex items-center gap-3">
+              <SettingsIcon className="w-8 h-8 text-primary animate-spin-slow" />
+              {activeTab ? getTabLabel(activeTab) : t('settings_title')}
+            </h1>
+            <p className="text-muted-foreground mt-2">
+              {activeTab === 'aitraining'
+                ? t('setting_ai_training_subtitle')
+                : activeTab 
+                  ? t('settings_subtitle_tab', { tab: getTabLabel(activeTab).toLowerCase() })
+                  : t('settings_subtitle_main')
+              }
+            </p>
+          </div>
         </div>
       </div>
 
