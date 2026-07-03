@@ -3,15 +3,6 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuthStore } from '../store/auth';
 import { useTranslation } from 'react-i18next';
 import { Settings as SettingsIcon } from 'lucide-react';
-import {
-  Breadcrumb,
-  BreadcrumbList,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbPage,
-  BreadcrumbSeparator,
-} from "../components/ui/breadcrumb";
-
 // Modular Tab Components
 import StoreSettings from './settings/StoreSettings';
 import UserSettings from './settings/UserSettings';
@@ -47,39 +38,21 @@ export default function Settings() {
     <div className="container mx-auto px-6 py-8 space-y-6">
 
       {/* ── Header ── */}
-      <div className="flex flex-col md:flex-row md:items-start md:justify-between pb-6 border-b border-border/40 gap-4">
-        <div className="space-y-3">
-          {activeTab && (
-            <Breadcrumb>
-              <BreadcrumbList>
-                <BreadcrumbItem>
-                  <BreadcrumbLink className="cursor-pointer" onClick={() => navigate('/settings')}>
-                    {t('settings_title')}
-                  </BreadcrumbLink>
-                </BreadcrumbItem>
-                <BreadcrumbSeparator />
-                <BreadcrumbItem>
-                  <BreadcrumbPage>{getTabLabel(activeTab)}</BreadcrumbPage>
-                </BreadcrumbItem>
-              </BreadcrumbList>
-            </Breadcrumb>
-          )}
-          <div>
-            <h1 className="text-3xl font-extrabold text-foreground tracking-tight flex items-center gap-3">
-              <SettingsIcon className="w-8 h-8 text-primary animate-spin-slow" />
-              {activeTab ? getTabLabel(activeTab) : t('settings_title')}
-            </h1>
-            <p className="text-muted-foreground mt-2">
-              {activeTab === 'aitraining'
-                ? t('setting_ai_training_subtitle')
-                : activeTab 
-                  ? t('settings_subtitle_tab', { tab: getTabLabel(activeTab).toLowerCase() })
-                  : t('settings_subtitle_main')
-              }
-            </p>
+      {!activeTab && (
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between pb-6 border-b border-border/40 gap-4">
+          <div className="space-y-3">
+            <div>
+              <h1 className="text-3xl font-extrabold text-foreground tracking-tight flex items-center gap-3">
+                <SettingsIcon className="w-8 h-8 text-primary animate-spin-slow" />
+                {t('settings_title')}
+              </h1>
+              <p className="text-muted-foreground mt-2">
+                {t('settings_subtitle_main')}
+              </p>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div className="w-full transition-all duration-300">
         {/* ── Hub Mode (Grid of Cards) ── */}
@@ -250,8 +223,8 @@ export default function Settings() {
         {activeTab === 'roles' && <RoleSettings />}
         {activeTab === 'voice' && <VoiceSettings />}
         {activeTab === 'aitraining' && <AITrainingSettings />}
-        {activeTab === 'my-catalog' && <MyCatalogPage hideHeader />}
-        {activeTab === 'pricing-rules' && <PricingRulePage hideHeader />}
+        {activeTab === 'my-catalog' && <MyCatalogPage />}
+        {activeTab === 'pricing-rules' && <PricingRulePage />}
         {activeTab === 'saas' && user?.is_superuser && <SaasSettings />}
       </div>
     </div>
