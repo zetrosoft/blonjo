@@ -325,8 +325,8 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
       )}
 
       <div className="grid gap-6 md:grid-cols-12">
-        {/* Left: Input Panel (5 cols) */}
-        <div className="md:col-span-5 space-y-4">
+        {/* Left: Input Panel (6 cols) */}
+        <div className="md:col-span-6 space-y-4">
           <Card className="border-indigo-500/20 shadow-md">
             <CardHeader className="pb-3 bg-muted/30">
               <div className="flex bg-muted p-1 rounded-lg">
@@ -520,7 +520,10 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
               )}
             </CardContent>
           </Card>
+        </div>
 
+        {/* Right: Parsed Preview Panel (6 cols) */}
+        <div className="md:col-span-6 space-y-4">
           {/* Parsed Preview Panel */}
           {parsedRule && (
             <Card className="border-emerald-500/30 bg-emerald-500/5 shadow-md animate-in fade-in slide-in-from-bottom-4 duration-300">
@@ -551,9 +554,10 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
             </Card>
           )}
         </div>
+      </div>
 
-        {/* Right: Active Rules List (7 cols) */}
-        <div className="md:col-span-7 space-y-4">
+      {/* Bottom: Active Rules List (Full Width) */}
+      <div className="space-y-4 mt-6">
           <Card className="shadow-md">
             <CardHeader className="pb-3 flex flex-row items-center justify-between space-y-0">
               <div>
@@ -627,7 +631,6 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
             </CardContent>
           </Card>
         </div>
-      </div>
     </div>
   );
 }
