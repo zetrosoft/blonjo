@@ -45,7 +45,7 @@ export default function PriceListPage() {
   const loadPriceList = async () => {
     setLoading(true);
     try {
-      const data = await fetchClient('/inventory/products?limit=100');
+      const data = await fetchClient('/inventory/my-catalog');
       if (Array.isArray(data)) {
         setItems(data);
       }

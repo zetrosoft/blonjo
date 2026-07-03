@@ -174,10 +174,32 @@ def get_my_catalog(session: SessionDep, current_user: CurrentUser):
         TenantInventory.tenant_id == current_user.tenant_id,
         ~Product.name.ilike('potongan%')
     ).all()
+    # Fetch active pricing rules for the tenant
+    rules = session.query(TenantPricingRule).filter(
+        TenantPricingRule.tenant_id == current_user.tenant_id,
+        TenantPricingRule.is_active == True
+    ).all()
+
     results = []
     for p in products:
         t_inv = next((ti for ti in p.tenant_inventories if ti.tenant_id == current_user.tenant_id), None)
         t_price = next((tp for tp in p.tenant_prices if tp.tenant_id == current_user.tenant_id), None)
+        
+        # Match pricing rule
+        matched_rule = None
+        for r in rules:
+            if r.product_id == p.id:
+                matched_rule = r
+                break
+        
+        if not matched_rule:
+            for r in rules:
+                if r.product_id is None and r.rule_payload:
+                    keyword = r.rule_payload.get('apply_to_keyword')
+                    if keyword and keyword.lower() in p.name.lower():
+                        matched_rule = r
+                        break
+
         p_dict = {
             "id": p.id,
             "sku": p.sku,
@@ -194,6 +216,11 @@ def get_my_catalog(session: SessionDep, current_user: CurrentUser):
             "current_stock": float(t_inv.static_stock) if t_inv else 0.0,
             "has_transactions": len(p.inventory_logs) > 0,
             "auto_adjusted": t_price.auto_adjusted if t_price else False,
+            "pricing_rule": {
+                "id": matched_rule.id,
+                "rule_type": matched_rule.rule_type,
+                "rule_payload": matched_rule.rule_payload
+            } if matched_rule else None,
         }
         results.append(p_dict)
     return results
