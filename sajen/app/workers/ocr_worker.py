@@ -191,7 +191,8 @@ def process_receipt_ocr(self, task_id: int):
         # 3. Strukturisasi Data (Temperature 0.0)
         system_instruction = (
             "Anda adalah pakar akuntansi OCR Vision. Tugas Anda adalah mengubah teks hasil pembacaan nota menjadi JSON terstruktur secara presisi.\n"
-            "PENTING: Abaikan teks teknis non-transaksi seperti 'Samsung Quad Camera', 'Galaxy A12', 'Shot with', atau watermark kamera lainnya."
+            "PENTING: Abaikan teks teknis non-transaksi seperti 'Samsung Quad Camera', 'Galaxy A12', 'Shot with', atau watermark kamera lainnya.\n"
+            "PENTING: Jika ada item yang diawali dengan kata 'Potongan' (misal: 'Potongan Harga'), abaikan dari daftar 'items' (itu adalah penjelasan diskon, BUKAN barang yang dibeli)."
         )
 
         prompt = f"""

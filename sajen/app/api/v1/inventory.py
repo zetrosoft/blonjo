@@ -65,7 +65,7 @@ def get_products(
     search: Optional[str] = None,
     category_id: Optional[int] = None
 ):
-    query = session.query(Product)
+    query = session.query(Product).filter(~Product.name.ilike('potongan%'))
     if search:
         query = query.filter(Product.name.ilike(f"%{search}%") | Product.sku.ilike(f"%{search}%"))
     if category_id:
@@ -171,7 +171,8 @@ def create_unit_conversion(
 def get_my_catalog(session: SessionDep, current_user: CurrentUser):
     """Get products subscribed by this tenant"""
     products = session.query(Product).join(TenantInventory).filter(
-        TenantInventory.tenant_id == current_user.tenant_id
+        TenantInventory.tenant_id == current_user.tenant_id,
+        ~Product.name.ilike('potongan%')
     ).all()
     results = []
     for p in products:
