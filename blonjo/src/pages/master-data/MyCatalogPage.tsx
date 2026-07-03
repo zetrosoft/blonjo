@@ -186,19 +186,6 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card className="bg-primary/5 border-primary/20">
-          <CardContent className="pt-6">
-            <div className="flex justify-between items-start">
-              <div>
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('mc_sales_item')}</p>
-                <p className="text-2xl font-bold mt-1">{items.length}</p>
-              </div>
-              <Package className="w-5 h-5 text-primary opacity-60" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
 
       <Card className="border-border/60">
         <CardHeader className="flex flex-row items-center justify-between pb-2">
