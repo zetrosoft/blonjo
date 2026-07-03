@@ -100,19 +100,53 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
     if (!rule || !item) return false;
     if (rule.product_id === item.id) return true;
     
-    // Normalisasi o -> u untuk toleransi ejaan (telur vs telor)
-    const normalizeText = (txt: string) => {
-      return (txt || '').toLowerCase().replace(/[^a-z0-9]/g, '').replace(/o/g, 'u');
+    const normalizeWords = (txt: string) => {
+      return (txt || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/o/g, 'u').split(/\s+/).filter(w => w.length > 0);
     };
+
+    const itemWords = normalizeWords(item.name);
     
-    const payloadName = normalizeText(rule.rule_payload?.product_name);
-    const itemName = normalizeText(item.name);
-    if (payloadName && itemName && payloadName === itemName) return true;
-    
-    const ruleName = normalizeText(rule.name);
-    if (ruleName && itemName && ruleName.includes(itemName)) return true;
-    
-    if (payloadName && itemName && (payloadName.includes(itemName) || itemName.includes(payloadName))) return true;
+    const checkMatch = (targetStr: string) => {
+      if (!targetStr) return false;
+      const ruleWords = normalizeWords(targetStr);
+      if (ruleWords.length === 0 || itemWords.length === 0) return false;
+      
+      const isSubset = ruleWords.every(rw => itemWords.some(iw => iw === rw || iw.includes(rw) || rw.includes(iw)));
+      if (isSubset) return true;
+      
+      const getSortedString = (words: string[]) => [...words].sort().join('');
+      const target = getSortedString(ruleWords);
+      const itemStr = getSortedString(itemWords);
+      
+      if (target === itemStr || itemStr.includes(target)) return true;
+      
+      const diceCoefficient = (s1: string, s2: string) => {
+        if (s1 === s2) return 1;
+        if (s1.length < 2 || s2.length < 2) return 0;
+        const bg1 = new Map<string, number>();
+        for (let i = 0; i < s1.length - 1; i++) {
+          const bg = s1.substring(i, i + 2);
+          bg1.set(bg, (bg1.get(bg) || 0) + 1);
+        }
+        const bg2 = new Map<string, number>();
+        for (let i = 0; i < s2.length - 1; i++) {
+          const bg = s2.substring(i, i + 2);
+          bg2.set(bg, (bg2.get(bg) || 0) + 1);
+        }
+        let intersection = 0;
+        for (const [bg, count] of bg1.entries()) {
+          if (bg2.has(bg)) {
+            intersection += Math.min(count, bg2.get(bg)!);
+          }
+        }
+        return (2.0 * intersection) / (s1.length - 1 + s2.length - 1);
+      };
+      
+      return diceCoefficient(target, itemStr) >= 0.80;
+    };
+
+    if (rule.rule_payload?.product_name && checkMatch(rule.rule_payload.product_name)) return true;
+    if (rule.name && checkMatch(rule.name)) return true;
     
     return false;
   };
