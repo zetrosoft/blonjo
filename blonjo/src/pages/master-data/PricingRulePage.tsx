@@ -116,7 +116,7 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
         method: 'POST',
         body: JSON.stringify({ text: textToParse })
       });
-      setParsedRule(res.parsed_data);
+      setParsedRule(res);
       toast.success(t('pr_toast_backend_success_title'), { description: t('pr_toast_backend_success_desc') });
     } catch (backendErr: any) {
       console.error('Local backend parsing failed', backendErr);
