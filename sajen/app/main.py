@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1 import auth, accounting, ocr, inventory, admin, roles, settings, users, reports, vibe
+from app.api.v1 import auth, accounting, ocr, inventory, admin, roles, settings, users, reports, vibe, material_control
 from app.core.config import settings as app_settings
 
 app = FastAPI(
@@ -28,6 +28,7 @@ app.include_router(accounting.router, prefix="/api/v1/finance", tags=["Accountin
 app.include_router(reports.router, prefix="/api/v1/reports", tags=["Reports"])
 app.include_router(ocr.router, prefix="/api/v1/ocr", tags=["AI & OCR"])
 app.include_router(inventory.router, prefix="/api/v1/inventory", tags=["Inventory & Stock Management"])
+app.include_router(material_control.router, prefix="/api/v1/material-control", tags=["Material & Purchase Control"])
 app.include_router(admin.router, prefix="/api/v1/saas", tags=["SaaS Admin"])
 app.include_router(roles.router, prefix="/api/v1/roles", tags=["RBAC & Roles"])
 app.include_router(settings.router, prefix="/api/v1/settings", tags=["Tenant Settings"])
