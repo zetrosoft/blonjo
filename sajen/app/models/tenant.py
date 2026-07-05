@@ -16,9 +16,9 @@ class Tenant(Base):
     ocr_quota_monthly = Column(Integer, default=1000, nullable=False)
     
     # Material Control Configurations
-    maintenance_stock = Column(Boolean, default=False, nullable=False)
-    default_po_channel_wa = Column(Boolean, default=False, nullable=False)
-    default_po_channel_email = Column(Boolean, default=False, nullable=False)
+    maintenance_stock = Column(Boolean, default=False, server_default='false', nullable=False)
+    default_po_channel_wa = Column(Boolean, default=False, server_default='false', nullable=False)
+    default_po_channel_email = Column(Boolean, default=False, server_default='false', nullable=False)
 
     # Relationships
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")

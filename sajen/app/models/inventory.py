@@ -84,9 +84,9 @@ class TenantInventory(Base):
     static_stock = Column(Numeric(15, 2), default=0.00)
 
     # Material Control Parameters
-    safety_stock = Column(Numeric(15, 2), default=0.00, nullable=False)
-    reorder_point = Column(Numeric(15, 2), default=0.00, nullable=False)
-    max_stock = Column(Numeric(15, 2), default=0.00, nullable=False)
+    safety_stock = Column(Numeric(15, 2), default=0.00, server_default='0', nullable=False)
+    reorder_point = Column(Numeric(15, 2), default=0.00, server_default='0', nullable=False)
+    max_stock = Column(Numeric(15, 2), default=0.00, server_default='0', nullable=False)
     preferred_supplier_id = Column(Integer, ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True)
     shelf_location = Column(String(50), nullable=True)
 
