@@ -263,7 +263,7 @@ export default function ItemPage() {
             </Button>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0 border-t">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-20 space-y-4">
               <RefreshCw className="w-10 h-10 text-primary animate-spin" />
@@ -283,33 +283,33 @@ export default function ItemPage() {
               <p className="text-sm text-zinc-400 dark:text-zinc-500 max-w-sm mx-auto">Mulai dengan menambahkan produk baru.</p>
             </div>
           ) : (
-            <div className="overflow-x-auto border border-zinc-200/80 dark:border-zinc-800/80 rounded-xl bg-background/30">
+            <div className="relative w-full overflow-auto">
               <Table>
                 <TableHeader className="bg-zinc-50/50 dark:bg-zinc-900/40">
                   <TableRow>
-                    <TableHead className="w-[100px]">SKU</TableHead>
-                    <TableHead>Nama Barang</TableHead>
-                    <TableHead>Kategori</TableHead>
-                    <TableHead className="text-right">Stok</TableHead>
-                    <TableHead>Satuan</TableHead>
-                    <TableHead className="text-right">Harga Beli</TableHead>
-                    <TableHead className="text-right">Harga Jual</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-center w-[100px]">Aksi</TableHead>
+                    <TableHead className="w-[100px] py-3 pl-6">SKU</TableHead>
+                    <TableHead className="py-3">Nama Barang</TableHead>
+                    <TableHead className="py-3">Kategori</TableHead>
+                    <TableHead className="text-right py-3">Stok</TableHead>
+                    <TableHead className="py-3">Satuan</TableHead>
+                    <TableHead className="text-right py-3">Harga Beli</TableHead>
+                    <TableHead className="text-right py-3">Harga Jual</TableHead>
+                    <TableHead className="py-3">Status</TableHead>
+                    <TableHead className="text-center w-[100px] py-3">Aksi</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {paginatedItems.map((item) => (
-                    <TableRow key={item.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40">
-                      <TableCell className="font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-300">{item.sku}</TableCell>
-                      <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100">{item.name}</TableCell>
-                      <TableCell className="text-xs text-zinc-500">{item.category}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-bold">{item.stock}</TableCell>
-                      <TableCell className="text-xs font-semibold text-zinc-400 capitalize">{item.uom}</TableCell>
-                      <TableCell className="text-right font-mono text-xs">{formatRp(item.purchase_price)}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-semibold text-primary">{formatRp(item.sell_price)}</TableCell>
-                      <TableCell>{getStatusBadge(item.status)}</TableCell>
-                      <TableCell className="text-center">
+                    <TableRow key={item.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40 border-b border-zinc-100 dark:border-zinc-800">
+                      <TableCell className="font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-300 py-3.5 pl-6">{item.sku}</TableCell>
+                      <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100 py-3.5">{item.name}</TableCell>
+                      <TableCell className="text-xs text-zinc-500 py-3.5">{item.category}</TableCell>
+                      <TableCell className="text-right font-mono text-xs font-bold py-3.5">{item.stock}</TableCell>
+                      <TableCell className="text-xs font-semibold text-zinc-400 capitalize py-3.5">{item.uom}</TableCell>
+                      <TableCell className="text-right font-mono text-xs py-3.5">{formatRp(item.purchase_price)}</TableCell>
+                      <TableCell className="text-right font-mono text-xs font-semibold text-primary py-3.5">{formatRp(item.sell_price)}</TableCell>
+                      <TableCell className="py-3.5">{getStatusBadge(item.status)}</TableCell>
+                      <TableCell className="text-center py-3.5">
                         <div className="flex justify-center items-center gap-1.5">
                           <Button 
                             variant="ghost" 
@@ -345,8 +345,9 @@ export default function ItemPage() {
                   ))}
                 </TableBody>
               </Table>
-<PaginationControls totalItems={filteredItems.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
-
+              <div className="px-6 py-4 border-t border-zinc-100 dark:border-zinc-800">
+                <PaginationControls totalItems={filteredItems.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
+              </div>
             </div>
           )}
         </CardContent>

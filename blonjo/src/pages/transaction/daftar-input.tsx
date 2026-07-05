@@ -259,7 +259,7 @@ export default function DaftarInputPage() {
             </div>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0 border-t">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-20 space-y-4">
               <RefreshCw className="w-10 h-10 text-primary animate-spin" />
@@ -276,45 +276,45 @@ export default function DaftarInputPage() {
               </p>
             </div>
           ) : (
-            <div className="overflow-x-auto border border-zinc-200/80 dark:border-zinc-800/80 rounded-xl bg-background/30">
+            <div className="relative w-full overflow-auto">
               <Table>
                 <TableHeader className="bg-zinc-50/50 dark:bg-zinc-900/40">
                   <TableRow>
-                    <TableHead className="w-[100px]">{t('table_date')}</TableHead>
-                    <TableHead className="w-[120px]">{t('table_ref_no')}</TableHead>
-                    <TableHead className="w-[100px]">{t('table_type')}</TableHead>
-                    <TableHead className="w-[100px]">Status</TableHead>
-                    <TableHead>{t('table_desc')}</TableHead>
-                    <TableHead className="text-right w-[150px]">{t('table_total_amount')}</TableHead>
-                    <TableHead className="text-center w-[80px]">{t('table_actions')}</TableHead>
+                    <TableHead className="w-[120px] py-3 pl-6">{t('table_date')}</TableHead>
+                    <TableHead className="w-[120px] py-3">{t('table_ref_no')}</TableHead>
+                    <TableHead className="w-[100px] py-3">{t('table_type')}</TableHead>
+                    <TableHead className="w-[100px] py-3">Status</TableHead>
+                    <TableHead className="py-3">{t('table_desc')}</TableHead>
+                    <TableHead className="text-right w-[150px] py-3">{t('table_total_amount')}</TableHead>
+                    <TableHead className="text-center w-[80px] py-3">{t('table_actions')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {paginatedItems.map((tx) => (
                     <TableRow 
                       key={tx.id}
-                      className="cursor-pointer hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40"
+                      className="cursor-pointer hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40 border-b border-zinc-100 dark:border-zinc-800"
                       onClick={() => handleViewDetail(tx.id)}
                     >
-                      <TableCell className="font-medium text-xs font-mono whitespace-nowrap">
+                      <TableCell className="font-medium text-xs font-mono whitespace-nowrap py-3.5 pl-6">
                         {tx.transaction_date}
                       </TableCell>
-                      <TableCell className="font-semibold text-xs text-primary font-mono whitespace-nowrap">
+                      <TableCell className="font-semibold text-xs text-primary font-mono whitespace-nowrap py-3.5">
                         {tx.reference_no || '-'}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="py-3.5">
                         {getTxTypeBadge(tx.transaction_type)}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="py-3.5">
                         {getStatusBadge(tx.status)}
                       </TableCell>
-                      <TableCell className="max-w-xs truncate text-sm font-medium">
+                      <TableCell className="max-w-xs truncate text-sm font-medium py-3.5">
                         {tx.description}
                       </TableCell>
-                      <TableCell className="text-right font-bold text-zinc-800 dark:text-zinc-200 text-sm">
+                      <TableCell className="text-right font-bold text-zinc-800 dark:text-zinc-200 text-sm py-3.5">
                         {formatRp(Number(tx.total_amount))}
                       </TableCell>
-                      <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
+                      <TableCell className="text-center py-3.5" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-center gap-1">
                           {tx.status === 'draft' && (
                             <AlertDialog>
@@ -387,28 +387,31 @@ export default function DaftarInputPage() {
                   ))}
                 </TableBody>
               </Table>
-<PaginationControls totalItems={filteredTransactions.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
-
+              <div className="px-6 py-4 border-t border-zinc-100 dark:border-zinc-800 flex flex-col sm:flex-row justify-between items-center gap-4">
+                <div className="flex items-center gap-3">
+                  {!loading && filteredTransactions.length > 0 && (
+                    <>
+                      <span className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">
+                        {t('show_rows')}
+                      </span>
+                      <select
+                        value={pageSize}
+                        onChange={(e) => setPageSize(Number(e.target.value))}
+                        className="bg-background border border-zinc-200 dark:border-zinc-800 rounded-md text-xs px-2 py-1 text-zinc-700 dark:text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary h-8"
+                      >
+                        <option value={20}>{t('rows_count', { count: 20 })}</option>
+                        <option value={50}>{t('rows_count', { count: 50 })}</option>
+                        <option value={100}>{t('rows_count', { count: 100 })}</option>
+                        <option value={250}>{t('rows_count', { count: 250 })}</option>
+                      </select>
+                    </>
+                  )}
+                </div>
+                <PaginationControls totalItems={filteredTransactions.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
+              </div>
             </div>
           )}
         </CardContent>
-        {!loading && filteredTransactions.length > 0 && (
-          <div className="px-6 py-4 border-t border-zinc-100 dark:border-zinc-800 flex justify-end items-center gap-3">
-            <span className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">
-              {t('show_rows')}
-            </span>
-            <select
-              value={pageSize}
-              onChange={(e) => setPageSize(Number(e.target.value))}
-              className="bg-background border border-zinc-200 dark:border-zinc-800 rounded-md text-xs px-2 py-1 text-zinc-700 dark:text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary h-8"
-            >
-              <option value={20}>{t('rows_count', { count: 20 })}</option>
-              <option value={50}>{t('rows_count', { count: 50 })}</option>
-              <option value={100}>{t('rows_count', { count: 100 })}</option>
-              <option value={250}>{t('rows_count', { count: 250 })}</option>
-            </select>
-          </div>
-        )}
       </Card>
 
       {/* Transaction Detail Dialog Extracted */}

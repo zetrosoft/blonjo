@@ -168,7 +168,7 @@ def process_receipt_ocr(self, task_id: int):
                         db=db,
                         image_bytes=img_bytes,
                         mime_type="image/jpeg",
-                        prompt="Ekstrak seluruh teks dari nota ini. Jangan lewatkan detail tulisan tangan. Jika ada tabel, baca baris demi baris."
+                        prompt="Ekstrak seluruh teks dari nota ini secara mentah. Jangan lewatkan detail tulisan tangan. Jika ada tabel, baca baris demi baris. PENTING: Jawab HANYA dengan teks ekstraksi, DILARANG KERAS menambahkan kalimat pengantar seperti 'Berikut adalah ekstraksi data...' atau kalimat percakapan apapun."
                     )
                     raw_ocr_text = vision_res['raw_text']
                     ai_processor = "gemini-vision"
@@ -181,21 +181,64 @@ def process_receipt_ocr(self, task_id: int):
             # Fallback ke Tesseract untuk PDF atau file non-image
             raw_ocr_text = get_ocr_text(task.file_path)
 
+        # Sanitize raw_ocr_text from LLM babble
+        if raw_ocr_text:
+            clean_lines = []
+            for line in raw_ocr_text.splitlines():
+                line_lower = line.lower()
+                if "berikut adalah" in line_lower or "ekstraksi data" in line_lower or "format tabel" in line_lower or "sesuai permintaan" in line_lower:
+                    continue
+                clean_lines.append(line)
+            raw_ocr_text = "\n".join(clean_lines).strip()
 
         task.raw_ocr_text = raw_ocr_text
         db.commit()
 
-        # 2. GLOBAL RAG: Ambil context lintas tenant
-        rag_examples = get_rag_context(db, task.tenant_id, raw_ocr_text)
+        # Coba ekstrak JSON langsung dari raw_ocr_text jika MCP sudah mem-parsingnya
+        import re
+        import json
+        extracted_json = None
+        
+        def try_parse_json(text_str):
+            try:
+                # Bersihkan trailing comma yang sering dihasilkan LLM
+                clean_str = re.sub(r',\s*([}\]])', r'\1', text_str)
+                return json.loads(clean_str)
+            except:
+                return None
 
-        # 3. Strukturisasi Data (Temperature 0.0)
-        system_instruction = (
-            "Anda adalah pakar akuntansi OCR Vision. Tugas Anda adalah mengubah teks hasil pembacaan nota menjadi JSON terstruktur secara presisi.\n"
-            "PENTING: Abaikan teks teknis non-transaksi seperti 'Samsung Quad Camera', 'Galaxy A12', 'Shot with', atau watermark kamera lainnya.\n"
-            "PENTING: Jika ada item yang diawali dengan kata 'Potongan' (misal: 'Potongan Harga'), abaikan dari daftar 'items' (itu adalah penjelasan diskon, BUKAN barang yang dibeli)."
-        )
+        # 1. Cari blok markdown ```json ... ``` dari belakang ke depan
+        blocks = re.findall(r'```(?:json)?\s*(.*?)\s*```', raw_ocr_text, re.DOTALL)
+        for block in reversed(blocks):
+            parsed = try_parse_json(block)
+            if isinstance(parsed, dict) and ("toko" in parsed or "merchant" in parsed or "item_belanja" in parsed or "items" in parsed):
+                extracted_json = parsed
+                break
+                
+        # 2. Jika gagal, cari kurung kurawal terluar
+        if not extracted_json:
+            start = raw_ocr_text.find('{')
+            end = raw_ocr_text.rfind('}')
+            if start != -1 and end != -1 and end > start:
+                parsed = try_parse_json(raw_ocr_text[start:end+1])
+                if isinstance(parsed, dict) and ("toko" in parsed or "merchant" in parsed):
+                    extracted_json = parsed
 
-        prompt = f"""
+        parsed_data = {}
+        prompt = ""
+        # 2. GLOBAL RAG: Ambil context lintas tenant (hanya jika butuh strukturisasi manual)
+        if not extracted_json:
+            rag_examples = get_rag_context(db, task.tenant_id, raw_ocr_text)
+
+            # 3. Strukturisasi Data (Temperature 0.0)
+            system_instruction = (
+                "Anda adalah pakar akuntansi OCR Vision. Tugas Anda adalah mengubah teks hasil pembacaan nota menjadi JSON terstruktur secara presisi.\n"
+                "PENTING: Abaikan teks teknis non-transaksi seperti 'Samsung Quad Camera', 'Galaxy A12', 'Shot with', atau watermark kamera lainnya.\n"
+                "PENTING: Jika ada item yang diawali dengan kata 'Potongan' (misal: 'Potongan Harga'), abaikan dari daftar 'items' (itu adalah penjelasan diskon, BUKAN barang yang dibeli).\n"
+                "PENTING: Jangan pernah memasukkan kalimat pengantar/obrolan AI seperti 'Berikut adalah ekstraksi data...' atau 'Tabel markdown' ke dalam value JSON (terutama untuk field description/nama merchant/toko)."
+            )
+
+            prompt = f"""
 {rag_examples}
 
 HASIL PEMBACAAN NOTA (RAW):
@@ -215,13 +258,23 @@ Skema JSON:
   ]
 }}
 """
-        # Call deterministic AI untuk strukturisasi
-        res = call_ai_text(db, prompt, system_instruction=system_instruction, temperature=0.0)
-        
-        if not res["parsed_data"]:
-            raise Exception("AI gagal menghasilkan JSON valid.")
+            # Call deterministic AI untuk strukturisasi
+            res = call_ai_text(db, prompt, system_instruction=system_instruction, temperature=0.0)
+            
+            if not res["parsed_data"]:
+                raise Exception("AI gagal menghasilkan JSON valid.")
+                
+            parsed_data = res["parsed_data"]
+            ai_processor = res.get("processor", ai_processor)
+            token_in = res.get("token_in", 0)
+            token_out = res.get("token_out", 0)
+        else:
+            parsed_data = extracted_json
+            token_in = 0
+            token_out = 0
+            prompt = "MCP provided structured JSON directly."
 
-        task.extracted_data = res["parsed_data"]
+        task.extracted_data = parsed_data
         task.status = OCRStatus.COMPLETED
         db.commit()
 
@@ -230,10 +283,10 @@ Skema JSON:
             tenant_id=task.tenant_id,
             original_text=f"OCR FILE: {task.file_name}",
             prompt=prompt,
-            parsed_result=json.dumps(res["parsed_data"]),
-            token_in=res.get("token_in", 0),
-            token_out=res.get("token_out", 0),
-            processor=res.get("processor", ai_processor)
+            parsed_result=json.dumps(parsed_data),
+            token_in=token_in,
+            token_out=token_out,
+            processor=ai_processor
         )
         db.add(new_log)
         db.commit()

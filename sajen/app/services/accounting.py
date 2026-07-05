@@ -725,21 +725,98 @@ def get_dashboard_summary(db: Session, tenant_id: int | None = None) -> dict:
             "expense": float(day_exp)
         })
     # Fetch Upcoming Debts (H-7 to any future date)
-    # Get debts that are due, sorted by nearest date
+    # Get debts that are due, sorted by nearest date (filter to Purchases on credit/tempo)
+    from sqlalchemy import or_
     upcoming_debts = db.query(Transaction).filter(
         Transaction.tenant_id == t_id,
-        Transaction.due_date.isnot(None),
-        Transaction.status == TransactionStatus.POSTED
-    ).order_by(Transaction.due_date.asc()).limit(10).all()
+        Transaction.transaction_type == TransactionType.PURCHASE,
+        or_(
+            Transaction.due_date.isnot(None),
+            Transaction.payment_method.in_(["tempo", "credit", "invoice", "utang", "hutang"])
+        )
+    ).order_by(Transaction.due_date.asc().nullslast(), Transaction.id.desc()).limit(10).all()
+
+    # ── 1. Calculate Inventory Aset (Total Pembelian - Total Penjualan) ──
+    purchase_val = db.query(func.sum(Transaction.total_amount)).filter(
+        Transaction.tenant_id == t_id,
+        Transaction.transaction_type == TransactionType.PURCHASE
+    ).scalar() or Decimal('0.00')
+    
+    sales_val = db.query(func.sum(Transaction.total_amount)).filter(
+        Transaction.tenant_id == t_id,
+        Transaction.transaction_type == TransactionType.SALES
+    ).scalar() or Decimal('0.00')
+    
+    total_inventory_value = purchase_val - sales_val
+
+    # Calculate low stock count for info
+    from app.models.setting import AppSetting
+    from app.models.inventory import TenantInventory, Product, InventoryLog
+    
+    setting = db.query(AppSetting).filter(
+        AppSetting.tenant_id == t_id, 
+        AppSetting.key == "stock_maintenance"
+    ).first()
+    is_static = setting.value.lower() == "true" if setting else False
+    low_stock_count = 0
+    products = db.query(Product).all()
+    for p in products:
+        ti = db.query(TenantInventory).filter(
+            TenantInventory.tenant_id == t_id,
+            TenantInventory.product_id == p.id
+        ).first()
+        if is_static:
+            qty = ti.static_stock if ti else Decimal('0.00')
+        else:
+            in_qty = db.query(func.sum(InventoryLog.quantity)).join(Transaction).filter(
+                Transaction.tenant_id == t_id,
+                InventoryLog.product_id == p.id,
+                InventoryLog.log_type == "in"
+            ).scalar() or Decimal('0.00')
+            out_qty = db.query(func.sum(InventoryLog.quantity)).join(Transaction).filter(
+                Transaction.tenant_id == t_id,
+                InventoryLog.product_id == p.id,
+                InventoryLog.log_type == "out"
+            ).scalar() or Decimal('0.00')
+            qty = in_qty - out_qty
+        if qty < 10:
+            low_stock_count += 1
+
+    # ── 2. Top 5 Purchased Products (by purchase total amount: quantity * price_per_unit) ──
+    top_products = db.query(
+        Product.name,
+        func.sum(InventoryLog.quantity * InventoryLog.price_per_unit).label("total_amount")
+    ).join(Product, Product.id == InventoryLog.product_id).join(Transaction).filter(
+        Transaction.tenant_id == t_id,
+        InventoryLog.log_type == "in"
+    ).group_by(Product.name).order_by(func.sum(InventoryLog.quantity * InventoryLog.price_per_unit).desc()).limit(5).all()
+    
+    top_products_list = [{"name": name, "qty": float(amount)} for name, amount in top_products]
+
+    # ── 3. Purchase Distribution per Supplier (jml uang per supplier) ──
+    from app.models.inventory import Contact
+    purchase_by_supplier = db.query(
+        Contact.name,
+        func.sum(InventoryLog.quantity * InventoryLog.price_per_unit).label("total_amount")
+    ).join(Contact, Contact.id == InventoryLog.contact_id).join(Transaction, Transaction.id == InventoryLog.transaction_id).filter(
+        Transaction.tenant_id == t_id,
+        Transaction.transaction_type == TransactionType.PURCHASE
+    ).group_by(Contact.name).order_by(func.sum(InventoryLog.quantity * InventoryLog.price_per_unit).desc()).all()
+    
+    supplier_purchases = [{"name": row[0], "amount": float(row[1])} for row in purchase_by_supplier]
 
     return {
-        "total_revenue": total_revenue,
-        "total_expense": total_expense,
-        "net_profit": net_profit,
-        "cash_balance": cash_balance,
+        "total_revenue": float(total_revenue),
+        "total_expense": float(total_expense),
+        "net_profit": float(net_profit),
+        "cash_balance": float(cash_balance),
         "recent_transactions": recent_transactions,
         "chart_data": chart_data,
-        "upcoming_debts": upcoming_debts
+        "upcoming_debts": upcoming_debts,
+        "total_inventory_value": float(total_inventory_value),
+        "low_stock_count": low_stock_count,
+        "top_products": top_products_list,
+        "supplier_purchases": supplier_purchases
     }
 
 def adjust_summary_sales_hpp(db: Session, tenant_id: int, transaction_date: date):

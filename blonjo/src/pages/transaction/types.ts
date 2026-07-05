@@ -68,6 +68,7 @@ export interface SmartNoteProps {
   onReset: () => void;
   onLoadExample: () => void;
   onFileUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onPhotoCaptured?: (file: File) => void;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   onOpenConfirm: () => void;
   saving: boolean;

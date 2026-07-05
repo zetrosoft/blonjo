@@ -40,58 +40,104 @@ def _map_rich_schema_to_frontend(extracted_data: dict) -> dict:
         # Periksa apakah item di dalam array juga sudah format lama
         items = extracted_data.get("items") or []
         if not items or (isinstance(items[0], dict) and "name" in items[0]):
+            # Sanitize LLM babble from description if it exists
+            desc = extracted_data.get("description", "")
+            if isinstance(desc, str) and ("Berikut adalah" in desc or "ekstraksi data" in desc or "format tabel" in desc):
+                tgl = extracted_data.get("transaction_date", "")
+                supplier = extracted_data.get("toko") or extracted_data.get("contact_name") or "Supplier"
+                item_names = [i.get("name", "Item") for i in items[:3]] if items else []
+                item_str = ", ".join(item_names)
+                if len(items) > 3:
+                    item_str += f" dan {len(items)-3} item lainnya"
+                
+                if extracted_data.get("transaction_type") == "purchase":
+                    extracted_data["description"] = f"Pembelian di {supplier} pada {tgl}"
+                    if item_str:
+                        extracted_data["description"] += f" ({item_str})"
+                else:
+                    extracted_data["description"] = f"Transaksi di {supplier} pada {tgl}"
+
             return extracted_data
             
     # 2. Lakukan pemetaan dari skema baru ke skema lama
-    transaction_sec = extracted_data.get("transaction") or {}
+    transaction_sec = extracted_data.get("transaction") or extracted_data.get("info_transaksi") or {}
     merchant_sec = extracted_data.get("merchant") or {}
-    summary_sec = extracted_data.get("summary") or {}
+    summary_sec = extracted_data.get("summary") or extracted_data.get("rincian_pembayaran") or {}
     tx_type = extracted_data.get("transaction_type") or "purchase"
     
-    tgl_nota = transaction_sec.get("date") or extracted_data.get("transaction_date") or ""
-    supplier_nota = merchant_sec.get("brand_name") or extracted_data.get("description") or "Supplier"
-    invoice_no = transaction_sec.get("invoice_number") or ""
-    alamat_nota = merchant_sec.get("address") or ""
+    tgl_nota = transaction_sec.get("date") or transaction_sec.get("tanggal") or extracted_data.get("transaction_date") or ""
+    
+    # Perbaiki tanggal jika tertukar (misal DD/MM/YY terbaca YY/MM/DD) atau masih 2-digit
+    if tgl_nota:
+        try:
+            tgl_clean = tgl_nota.replace("/", "-")
+            parts = tgl_clean.split("-")
+            if len(parts) == 3:
+                # Pola YYYY-MM-DD
+                if len(parts[0]) == 4:
+                    y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+                    if y < 2015 and d >= 20:
+                        new_y = 2000 + d
+                        new_d = y % 100
+                        tgl_nota = f"{new_y}-{m:02d}-{new_d:02d}"
+                # Pola DD-MM-YY (2 digit tahun)
+                elif len(parts[0]) <= 2 and len(parts[2]) <= 2:
+                    d, m, y = int(parts[0]), int(parts[1]), int(parts[2])
+                    # Pastikan tahun terformat 4 digit (20xx)
+                    new_y = 2000 + y if y < 100 else y
+                    tgl_nota = f"{new_y}-{m:02d}-{d:02d}"
+        except Exception as e:
+            print(f"Date correction in ocr error: {e}")
+
+    supplier_nota = merchant_sec.get("brand_name") or extracted_data.get("toko") or "Supplier"
+    invoice_no = transaction_sec.get("invoice_number") or transaction_sec.get("no_nota") or ""
+    alamat_nota = merchant_sec.get("address") or extracted_data.get("alamat") or ""
     
     # Ambil list item untuk deskripsi
-    items_list = extracted_data.get("items") or []
-    item_names = [i.get("product_name") or i.get("name") or "Item" for i in items_list[:3]]
+    items_list = extracted_data.get("items") or extracted_data.get("item_belanja") or []
+    item_names = [i.get("product_name") or i.get("nama_barang") or i.get("name") or "Item" for i in items_list[:3]]
     item_str = ", ".join(item_names)
     if len(items_list) > 3:
         item_str += f" dan {len(items_list)-3} item lainnya"
 
     # Template Deskripsi sesuai permintaan user
     if tx_type == "purchase":
-        desc = f"Belanja tanggal {tgl_nota} di {supplier_nota}:\n {item_str}"
-        if alamat_nota:
-            desc += f"\nAlamat: {alamat_nota}"
+        desc = f"Pembelian di {supplier_nota}"
+        if tgl_nota:
+            desc += f" pada {tgl_nota}"
+        if item_str:
+            desc += f" ({item_str})"
     else:
-        desc = supplier_nota
+        desc = f"Transaksi di {supplier_nota}"
+        if tgl_nota:
+             desc += f" pada {tgl_nota}"
 
     mapped_data = {
         "transaction_date": tgl_nota,
         "reference_no": invoice_no,
         "description": desc,
-        "total_amount": summary_sec.get("grand_total") or extracted_data.get("total_amount") or 0.0,
+        "contact_name": supplier_nota,
+        "contact_address": alamat_nota,
+        "total_amount": summary_sec.get("grand_total") or summary_sec.get("total") or extracted_data.get("total_amount") or 0.0,
         "transaction_type": tx_type,
         "items": []
     }
     
     # Petakan list items
-    new_items = extracted_data.get("items") or []
+    new_items = extracted_data.get("items") or extracted_data.get("item_belanja") or []
     for item in new_items:
         if not isinstance(item, dict):
             continue
         # Jika item sudah dalam format lama, pertahankan
-        if "name" in item:
+        if "name" in item and "product_name" not in item and "nama_barang" not in item:
             mapped_data["items"].append(item)
             continue
             
         mapped_data["items"].append({
-            "name": item.get("product_name") or "",
-            "qty": item.get("quantity") or 1,
-            "price": item.get("unit_price") or 0.0,
-            "total": item.get("subtotal") or 0.0,
+            "name": item.get("product_name") or item.get("nama_barang") or item.get("name") or "",
+            "qty": item.get("quantity") or item.get("kuantitas") or item.get("qty") or 1,
+            "price": item.get("unit_price") or item.get("harga_satuan") or item.get("price") or 0.0,
+            "total": item.get("subtotal") or item.get("jumlah") or item.get("total") or 0.0,
             "contact_name": supplier_nota,
             "contact_address": alamat_nota
         })

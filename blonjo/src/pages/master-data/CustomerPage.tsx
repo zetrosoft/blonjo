@@ -37,6 +37,34 @@ export default function CustomerPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Customer | null>(null);
 
+  // Profile and history states
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [profileDialogOpen, setProfileDialogOpen] = useState(false);
+  const [customerHistory, setCustomerHistory] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+
+  const handleOpenProfile = async (customer: Customer) => {
+    setSelectedCustomer(customer);
+    setProfileDialogOpen(true);
+    setLoadingHistory(true);
+    try {
+      const txs = await fetchClient('/finance/transactions?limit=250');
+      if (Array.isArray(txs)) {
+        const filtered = txs.filter((tx: any) => {
+          const hasContactLog = tx.inventory_logs?.some((log: any) => log.contact?.id === customer.id);
+          const hasNameInDesc = tx.description?.toLowerCase().includes(customer.name.toLowerCase());
+          return hasContactLog || hasNameInDesc;
+        });
+        setCustomerHistory(filtered);
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error('Gagal mengambil riwayat transaksi pelanggan');
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
   const [formData, setFormData] = useState({
     name: '',
     phone: '',
@@ -244,7 +272,7 @@ export default function CustomerPage() {
             </Button>
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0 border-t">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-20 space-y-4">
               <RefreshCw className="w-10 h-10 text-primary animate-spin" />
@@ -264,33 +292,38 @@ export default function CustomerPage() {
               <p className="text-sm text-zinc-400 dark:text-zinc-500 max-w-sm mx-auto">Mulai dengan menambahkan pelanggan baru.</p>
             </div>
           ) : (
-            <div className="overflow-x-auto border border-zinc-200/80 dark:border-zinc-800/80 rounded-xl bg-background/30">
+            <div className="relative w-full overflow-auto">
               <Table>
                 <TableHeader className="bg-zinc-50/50 dark:bg-zinc-900/40">
                   <TableRow>
-                    <TableHead className="w-[100px]">Kode</TableHead>
-                    <TableHead>Nama Pelanggan</TableHead>
-                    <TableHead>Kategori Tier</TableHead>
-                    <TableHead>Telepon</TableHead>
-                    <TableHead>Alamat</TableHead>
-                    <TableHead className="text-right">Piutang Toko</TableHead>
-                    <TableHead className="text-center w-[100px]">Aksi</TableHead>
+                    <TableHead className="w-[100px] py-3 pl-6">Kode</TableHead>
+                    <TableHead className="py-3">Nama Pelanggan</TableHead>
+                    <TableHead className="py-3">Kategori Tier</TableHead>
+                    <TableHead className="py-3">Telepon</TableHead>
+                    <TableHead className="py-3">Alamat</TableHead>
+                    <TableHead className="text-right py-3">Piutang Toko</TableHead>
+                    <TableHead className="text-center w-[100px] py-3">Aksi</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {paginatedItems.map((cust) => (
-                    <TableRow key={cust.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40">
-                      <TableCell className="font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-300">{cust.code}</TableCell>
-                      <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100">
-                        {toSentenceCase(cust.name)}
+                    <TableRow key={cust.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40 border-b border-zinc-100 dark:border-zinc-800">
+                      <TableCell className="font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-300 py-3.5 pl-6">{cust.code}</TableCell>
+                      <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100 py-3.5">
+                        <button 
+                          onClick={() => handleOpenProfile(cust)} 
+                          className="hover:underline hover:text-primary text-left font-bold"
+                        >
+                          {toSentenceCase(cust.name)}
+                        </button>
                       </TableCell>
-                      <TableCell>{getTierBadge(cust.tier)}</TableCell>
-                      <TableCell className="text-xs font-mono">{cust.phone || '-'}</TableCell>
-                      <TableCell className="max-w-xs truncate text-xs text-zinc-500">{cust.address || '-'}</TableCell>
-                      <TableCell className="text-right font-mono text-xs font-extrabold text-indigo-600 dark:text-indigo-500">
+                      <TableCell className="py-3.5">{getTierBadge(cust.tier)}</TableCell>
+                      <TableCell className="text-xs font-mono py-3.5">{cust.phone || '-'}</TableCell>
+                      <TableCell className="max-w-xs truncate text-xs text-zinc-500 py-3.5">{cust.address || '-'}</TableCell>
+                      <TableCell className="text-right font-mono text-xs font-extrabold text-indigo-600 dark:text-indigo-500 py-3.5">
                         {cust.receivable_balance > 0 ? formatRp(cust.receivable_balance) : '-'}
                       </TableCell>
-                      <TableCell className="text-center">
+                      <TableCell className="text-center py-3.5">
                         <div className="flex justify-center items-center gap-1.5">
                           <Button 
                             variant="ghost" 
@@ -314,8 +347,9 @@ export default function CustomerPage() {
                   ))}
                 </TableBody>
               </Table>
-<PaginationControls totalItems={filteredCustomers.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
-
+              <div className="px-6 py-4 border-t border-zinc-100 dark:border-zinc-800">
+                <PaginationControls totalItems={filteredCustomers.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
+              </div>
             </div>
           )}
         </CardContent>
@@ -406,6 +440,83 @@ export default function CustomerPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Customer Profile & History Dialog */}
+      <Dialog open={profileDialogOpen} onOpenChange={setProfileDialogOpen}>
+        <DialogContent className="sm:max-w-[600px] max-h-[85vh] overflow-y-auto bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-850">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black uppercase tracking-wider text-zinc-800 dark:text-zinc-200">
+              Profil & Riwayat Pelanggan
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Informasi lengkap dan histori transaksi penjualan dengan pelanggan ini.
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedCustomer && (
+            <div className="space-y-6 py-4">
+              {/* Profile Card */}
+              <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800/80 bg-zinc-50 dark:bg-zinc-900/40 grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Nama Pelanggan</p>
+                  <p className="text-sm font-bold text-zinc-900 dark:text-zinc-200">{selectedCustomer.name}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Kode Pelanggan</p>
+                  <p className="text-xs font-mono font-semibold text-zinc-500 dark:text-zinc-400">{selectedCustomer.code}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Kategori Tier</p>
+                  <div className="mt-0.5">{getTierBadge(selectedCustomer.tier)}</div>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground font-mono">Piutang Toko</p>
+                  <p className="text-sm font-black text-indigo-600 dark:text-indigo-400">{formatRp(selectedCustomer.receivable_balance)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Nomor Telepon</p>
+                  <p className="text-xs font-mono text-zinc-700 dark:text-zinc-300">{selectedCustomer.phone || '-'}</p>
+                </div>
+                <div className="col-span-2">
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Alamat</p>
+                  <p className="text-xs text-zinc-700 dark:text-zinc-300">{selectedCustomer.address || '-'}</p>
+                </div>
+              </div>
+
+              {/* Transaction History */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-black uppercase tracking-widest text-zinc-800 dark:text-zinc-300">Histori Penjualan</h4>
+                {loadingHistory ? (
+                  <div className="flex items-center justify-center py-10">
+                    <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                  </div>
+                ) : customerHistory.length > 0 ? (
+                  <div className="space-y-2 max-h-[250px] overflow-y-auto pr-1">
+                    {customerHistory.map((tx: any) => (
+                      <div key={tx.id} className="flex justify-between items-center p-2.5 rounded-lg border border-zinc-200 dark:border-border/30 bg-zinc-50 dark:bg-background/50 hover:bg-zinc-100 dark:hover:bg-background transition text-xs">
+                        <div>
+                          <p className="font-bold text-zinc-800 dark:text-zinc-200">{tx.description}</p>
+                          <p className="text-[10px] text-muted-foreground">{tx.transaction_date} | {tx.reference_no}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-black text-zinc-900 dark:text-zinc-100">{formatRp(Number(tx.total_amount))}</p>
+                          <p className="text-[9px] font-bold text-emerald-600 dark:text-emerald-400 uppercase">{tx.payment_method}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground/60 text-center py-6">Belum ada riwayat transaksi dengan pelanggan ini.</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setProfileDialogOpen(false)} className="text-xs">Tutup</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

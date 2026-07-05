@@ -39,6 +39,8 @@ export function useSmartNote() {
         total_amount: res.parsed_data.total_amount || local.total_amount,
         description: res.parsed_data.description || local.description,
         transaction_date: res.parsed_data.transaction_date || local.transaction_date,
+        contact_name: res.parsed_data.contact_name || local.contact_name,
+        contact_address: res.parsed_data.contact_address || local.contact_address,
         items: res.parsed_data.items || local.items,
         payment_method: res.parsed_data.payment_method || local.payment_method,
         due_date: res.parsed_data.due_date || local.due_date,

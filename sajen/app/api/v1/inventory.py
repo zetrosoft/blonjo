@@ -415,22 +415,44 @@ def create_pricing_rule(
     session: SessionDep,
     current_user: CurrentUser
 ):
-    """Save a dynamic pricing rule and optionally auto-create product if not exists"""
+    """Save a dynamic pricing rule. Link to product via product_id or fuzzy name match."""
+    import re as _re
+
+    def _normalize(s: str) -> str:
+        """Hapus semua karakter non-alphanumeric dan lowercase untuk perbandingan."""
+        return _re.sub(r'[^a-z0-9]', '', s.lower())
+
     product_id = rule_in.product_id
     if not product_id and rule_in.rule_payload:
         prod_name = rule_in.rule_payload.get("product_name")
         if prod_name:
-            product = session.query(Product).filter(Product.name.ilike(prod_name)).first()
-            if not product:
-                import uuid
-                product = Product(
-                    sku=f"PRD-{str(uuid.uuid4())[:6].upper()}",
-                    name=prod_name,
-                    base_unit="pcs"
-                )
-                session.add(product)
-                session.flush()
-            product_id = product.id
+            # Cari produk yang sudah ada di tenant ini dengan pencocokan nama
+            products = session.query(Product).join(TenantInventory).filter(
+                TenantInventory.tenant_id == current_user.tenant_id
+            ).all()
+
+            norm_search = _normalize(prod_name)
+            matched_product = None
+            best_score = 0
+
+            for p in products:
+                norm_p = _normalize(p.name)
+                # Exact normalized match
+                if norm_search == norm_p:
+                    matched_product = p
+                    break
+                # Substring match (both directions) on normalized strings
+                if norm_search in norm_p or norm_p in norm_search:
+                    # Prefer longer match (more specific)
+                    score = min(len(norm_search), len(norm_p))
+                    if score > best_score:
+                        best_score = score
+                        matched_product = p
+
+            if matched_product:
+                product_id = matched_product.id
+            # Jika tidak ditemukan, tetap simpan rule tanpa product_id
+            # (rule bisa berlaku global atau di-link manual nanti)
 
     db_rule = TenantPricingRule(
         tenant_id=current_user.tenant_id,
@@ -443,6 +465,45 @@ def create_pricing_rule(
         rule_payload=rule_in.rule_payload
     )
     session.add(db_rule)
+    session.commit()
+    session.refresh(db_rule)
+    return db_rule
+
+@router.put("/pricing-rules/{rule_id}", response_model=TenantPricingRuleResponse)
+def update_pricing_rule(
+    rule_id: int,
+    rule_in: TenantPricingRuleCreate,
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    """Update a pricing rule"""
+    db_rule = session.query(TenantPricingRule).filter(
+        TenantPricingRule.id == rule_id,
+        TenantPricingRule.tenant_id == current_user.tenant_id
+    ).first()
+    
+    if not db_rule:
+        raise HTTPException(status_code=404, detail="Pricing rule not found")
+        
+    db_rule.name = rule_in.name
+    db_rule.rule_type = rule_in.rule_type
+    db_rule.product_id = rule_in.product_id
+    db_rule.valid_from = rule_in.valid_from
+    db_rule.valid_to = rule_in.valid_to
+    db_rule.is_active = rule_in.is_active
+    db_rule.rule_payload = rule_in.rule_payload
+    
+    if db_rule.product_id:
+        existing_ti = session.query(TenantInventory).filter(
+            TenantInventory.tenant_id == current_user.tenant_id,
+            TenantInventory.product_id == db_rule.product_id
+        ).first()
+        if not existing_ti:
+            ti = TenantInventory(tenant_id=current_user.tenant_id, product_id=db_rule.product_id)
+            tp = TenantProductPrice(tenant_id=current_user.tenant_id, product_id=db_rule.product_id)
+            session.add(ti)
+            session.add(tp)
+    
     session.commit()
     session.refresh(db_rule)
     return db_rule

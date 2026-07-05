@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Input } from '../../components/ui/input';
 import { 
   Plus, Settings2, Package, TrendingUp, RefreshCw, 
-  Store, Calculator, ExternalLink, Loader2, Save 
+  Store, Calculator, ExternalLink, Loader2, Save, Search
 } from 'lucide-react';
 import { cn, formatRp } from '../../lib/utils';
 import { toast } from 'sonner';
@@ -47,7 +47,16 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
   const [activeRule, setActiveRule] = useState<any | null>(null);
   const [editRulePayload, setEditRulePayload] = useState<any | null>(null);
 
-  const paginatedItems = items.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredAndSortedItems = items
+    .filter(item => 
+      item.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+      item.sku.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const paginatedItems = filteredAndSortedItems.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
   const loadCatalog = async () => {
     setLoading(true);
@@ -99,11 +108,11 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
   const isRuleMatch = (rule: any, item: MyCatalogItem) => {
     if (!rule || !item) return false;
     if (rule.product_id === item.id) return true;
+    if (rule.product_id && rule.product_id !== item.id) return false;
     
     const normalizeWords = (txt: string) => {
       return (txt || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/o/g, 'u').split(/\s+/).filter(w => w.length > 0);
     };
-
     const itemWords = normalizeWords(item.name);
     
     const checkMatch = (targetStr: string) => {
@@ -142,11 +151,10 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
         return (2.0 * intersection) / (s1.length - 1 + s2.length - 1);
       };
       
-      return diceCoefficient(target, itemStr) >= 0.80;
+      return diceCoefficient(target, itemStr) >= 0.95;
     };
 
     if (rule.rule_payload?.product_name && checkMatch(rule.rule_payload.product_name)) return true;
-    if (rule.name && checkMatch(rule.name)) return true;
     
     return false;
   };
@@ -230,6 +238,19 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
         <CardHeader className="flex flex-row items-center justify-between pb-2">
           <CardTitle className="text-base font-semibold">{t('mc_my_item_list')}</CardTitle>
           <div className="flex items-center gap-3">
+            <div className="relative w-64 mr-2">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder={t('mc_search_placeholder')}
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value);
+                  setCurrentPage(1);
+                }}
+                className="pl-9 h-9 text-xs bg-muted/40"
+              />
+            </div>
             <div className="flex items-center gap-2 bg-muted/40 px-3 py-1.5 rounded-lg border border-border/50">
               <Store className="w-3.5 h-3.5 text-primary" />
               <div className="flex items-center space-x-2">
@@ -321,7 +342,7 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
                 })}
               </TableBody>
             </Table>
-            <PaginationControls totalItems={items.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
+            <PaginationControls totalItems={filteredAndSortedItems.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
           </div>
         </CardContent>
       </Card>

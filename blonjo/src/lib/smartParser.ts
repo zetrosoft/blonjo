@@ -36,6 +36,7 @@ export interface ParsedTransaction {
   total_amount: number;
   transaction_date: string;
   contact_name?: string; // Tambahkan ini
+  contact_address?: string;
   payment_method?: string;
   due_date?: string;
   items: ParsedItem[];
@@ -216,11 +217,14 @@ export function extractItems(text: string): ParsedItem[] {
   let globalContact: string | undefined = undefined;
   
   for (const rawLine of lines) {
+    if (rawLine.includes('|') && rawLine.includes('---')) continue;
     if (SKIP_PATTERN.test(rawLine)) continue;
     if (isDateLine(rawLine)) continue;
     
     // 1. Bersihkan noise di awal baris (bullet points, dash, space)
     let lineContent = rawLine.replace(/^[\s•\-\*]+/, '').trim();
+    if (lineContent.startsWith('"') || lineContent.startsWith('{') || lineContent.startsWith('}')) continue;
+    
     let currentContact: string | undefined = undefined;
     
     // 2. Tanda ":" adalah pemisah struktural (Header Supplier : Daftar Items)

@@ -102,6 +102,7 @@ export default function Transactions() {
           onReset={smartNote.handleReset}
           onLoadExample={smartNote.handleLoadExample}
           onFileUpload={ocr.handleFileUpload}
+          onPhotoCaptured={ocr.uploadFileDirectly}
           fileInputRef={ocr.fileInputRef}
           onOpenConfirm={smartConfirm.open}
           saving={smartConfirm.saving}

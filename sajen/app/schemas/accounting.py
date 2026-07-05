@@ -114,6 +114,11 @@ class DashboardSummaryResponse(BaseModel):
     cash_balance: Decimal
     recent_transactions: List[TransactionResponse]
     chart_data: List[dict]
+    upcoming_debts: List[TransactionResponse]
+    total_inventory_value: Decimal
+    low_stock_count: int
+    top_products: List[dict]
+    supplier_purchases: List[dict]
     model_config = ConfigDict(from_attributes=True)
 
 class ParseNoteRequest(BaseModel):
@@ -178,3 +183,7 @@ class AIModelQuotaResponse(BaseModel):
     token_count: int
     usage_date: date
     model_config = ConfigDict(from_attributes=True)
+
+class TransactionPayoffRequest(BaseModel):
+    payment_account_id: int
+    payment_date: date

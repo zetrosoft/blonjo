@@ -13,7 +13,8 @@ from app.schemas.accounting import (
     AIParsingLogResponse,
     AIModelQuotaResponse,
     JournalMappingCreate,
-    JournalMappingResponse
+    JournalMappingResponse,
+    TransactionPayoffRequest
 )
 from app.models.accounting import Account, Transaction, TransactionType, JournalMapping, JournalMappingLine
 from app.models.log import AIParsingLog, AIModelQuota, ParserType
@@ -169,6 +170,57 @@ async def parse_transaction_note(
                     item_name = str(items[0].get("name", "")).lower()
                     if item_name not in low_text:
                         final_parsed_data["items"] = []
+
+            # ── SAPU BERSIH: Sanitize Supplier Name & Description ──
+            # 1. Ekstrak nama toko dari JSON mentah dalam input teks jika ada
+            extracted_toko = None
+            toko_match = re.search(r'"(?:toko|brand_name|merchant|nama_toko)"\s*:\s*"([^"]+)"', text)
+            if toko_match:
+                extracted_toko = toko_match.group(1).strip()
+            
+            # Jika contact_name kosong, '|', atau salah deteksi pelanggan (KUSUMA) padahal beli
+            c_name = final_parsed_data.get("contact_name") or ""
+            if not c_name or c_name == "|" or c_name.strip() == "" or (final_parsed_data.get("transaction_type") == "purchase" and "KUSUMA" in c_name.upper() and extracted_toko):
+                if extracted_toko:
+                    final_parsed_data["contact_name"] = extracted_toko
+                elif c_name == "|":
+                    final_parsed_data["contact_name"] = ""
+
+            # 2. Perbaiki tanggal yang tertukar (misal DD/MM/YY terbaca YY/MM/DD)
+            tgl = final_parsed_data.get("transaction_date") or ""
+            if tgl:
+                try:
+                    parts = tgl.split("-")
+                    if len(parts) == 3:
+                        y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
+                        if y < 2015 and d >= 20:
+                            new_y = 2000 + d
+                            new_d = y % 100
+                            final_parsed_data["transaction_date"] = f"{new_y}-{m:02d}-{new_d:02d}"
+                except Exception as e:
+                    print(f"Date correction error: {e}")
+
+            # 3. Re-generate Description yang bersih dan manusiawi
+            desc = final_parsed_data.get("description") or ""
+            items = final_parsed_data.get("items") or []
+            tgl = final_parsed_data.get("transaction_date") or today_date
+            supplier = final_parsed_data.get("contact_name") or extracted_toko or "Supplier"
+            
+            # Jika deskripsi mengandung LLM babble atau tidak standar
+            has_babble = any(kw in desc for kw in ["Berikut adalah", "ekstraksi data", "tabel data", "markdown", "format tabel", "|"])
+            if not desc or has_babble:
+                item_names = [i.get("name", "Item") for i in items[:3]]
+                item_str = ", ".join(item_names)
+                if len(items) > 3:
+                    item_str += f" dan {len(items)-3} item lainnya"
+                
+                if final_parsed_data.get("transaction_type") == "purchase":
+                    new_desc = f"Pembelian di {supplier} pada {tgl}"
+                    if item_str:
+                        new_desc += f" ({item_str})"
+                    final_parsed_data["description"] = new_desc
+                else:
+                    final_parsed_data["description"] = f"Transaksi di {supplier} pada {tgl}"
 
     # ── Local Fallback terakhir jika semua gagal ─────────────────────────────
     if not final_parsed_data:
@@ -542,3 +594,88 @@ def delete_transaction_api(
         tenant_id=current_user.tenant_id
     )
     return None
+
+@router.post("/transactions/{transaction_id}/pay", response_model=TransactionResponse)
+def pay_transaction_api(
+    transaction_id: int,
+    payoff: TransactionPayoffRequest,
+    session: SessionDep,
+    current_user: User = Depends(check_role([UserRole.ADMIN, UserRole.MANAGER]))
+):
+    """
+    Pay off an outstanding purchase debt.
+    Updates the payment method to 'lunas' and creates a matching payment journal.
+    """
+    from fastapi import HTTPException
+    from app.models.accounting import JournalEntry
+    from app.services.accounting import _generate_reference_no
+    
+    # 1. Fetch original transaction
+    original_tx = session.query(Transaction).filter(
+        Transaction.id == transaction_id,
+        Transaction.tenant_id == current_user.tenant_id
+    ).first()
+    
+    if not original_tx:
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+        
+    if original_tx.transaction_type != TransactionType.PURCHASE:
+        raise HTTPException(status_code=400, detail="Only purchase transactions can be paid off.")
+        
+    # 2. Get Utang Usaha Account (2-1101)
+    utang_account = session.query(Account).filter(
+        Account.tenant_id == current_user.tenant_id,
+        Account.code == "2-1101"
+    ).first()
+    if not utang_account:
+        raise HTTPException(status_code=400, detail="Akun Utang Usaha (2-1101) tidak ditemukan untuk tenant ini.")
+        
+    # 3. Get Payment Account (Kas / Bank)
+    pay_account = session.query(Account).filter(
+        Account.tenant_id == current_user.tenant_id,
+        Account.id == payoff.payment_account_id
+    ).first()
+    if not pay_account or not pay_account.code.startswith("1-11"):
+        raise HTTPException(status_code=400, detail="Akun pembayaran harus berupa Kas/Bank.")
+        
+    amount = original_tx.total_amount
+    
+    # 4. Create Payoff Transaction Journal
+    ref_no = _generate_reference_no(session, TransactionType.EXPENSE, current_user.tenant_id)
+    pay_tx = Transaction(
+        tenant_id=current_user.tenant_id,
+        transaction_date=payoff.payment_date,
+        reference_no=ref_no,
+        description=f"Pelunasan Utang untuk Nota {original_tx.reference_no or original_tx.id}",
+        transaction_type=TransactionType.EXPENSE,
+        status="posted",
+        total_amount=amount,
+        payment_method="cash",
+        created_by_id=current_user.id
+    )
+    session.add(pay_tx)
+    session.flush()
+    
+    # Debit: Utang Usaha (reducing debt)
+    entry_debit = JournalEntry(
+        transaction_id=pay_tx.id,
+        account_id=utang_account.id,
+        debit=amount,
+        credit=0.00
+    )
+    # Credit: Kas/Bank (reducing cash)
+    entry_credit = JournalEntry(
+        transaction_id=pay_tx.id,
+        account_id=pay_account.id,
+        debit=0.00,
+        credit=amount
+    )
+    session.add(entry_debit)
+    session.add(entry_credit)
+    
+    # 5. Mark original transaction as paid
+    original_tx.payment_method = "lunas"
+    
+    session.commit()
+    session.refresh(original_tx)
+    return original_tx

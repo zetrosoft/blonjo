@@ -41,15 +41,20 @@ export function useOcrUpload(
 
           // Susun teks dari hasil OCR
           let text = '';
-          if (task.raw_ocr_text) {
-            text = `Pembelian ${task.raw_ocr_text}`;
-          } else {
-            const d = task.extracted_data;
+          const d = task.extracted_data;
+          
+          if (d && (d.items?.length > 0 || d.total_amount)) {
             text = `${d.description || 'Nota Baru'} :\n`;
             d.items?.forEach((item: any) => {
-              text += `• ${item.name} ${item.qty} set @ ${item.price}\n`;
+              const qtyStr = item.qty ? `${item.qty} ${item.unit || 'pcs'} @ ` : '';
+              const priceStr = item.price || item.unit_price || item.harga_satuan || 0;
+              text += `• ${item.name || item.nama_barang} ${qtyStr}${priceStr}\n`;
             });
-            if (d.total_amount) text += `Total: ${d.total_amount}`;
+            if (d.total_amount || d.total) text += `Total: ${d.total_amount || d.total}`;
+          } else if (task.raw_ocr_text) {
+            text = `Pembelian ${task.raw_ocr_text}`;
+          } else {
+            text = 'Nota Baru';
           }
 
           setNoteText(text);
@@ -68,30 +73,33 @@ export function useOcrUpload(
     }, 2000);
   }, [setNoteText, onParse, stopPolling]);
 
-  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const uploadFileDirectly = useCallback(async (file: File) => {
     setIsUploading(true);
     const formData = new FormData();
     formData.append('file', file);
 
     try {
       const result = await fetchClient('/ocr/upload', { method: 'POST', body: formData });
-      toast.info('File diunggah', { description: 'Sedang memproses data dengan AI...' });
+      toast.info('File dari kamera diunggah', { description: 'Sedang memproses data dengan AI...' });
       pollOCRStatus(result.id);
     } catch (error: any) {
       setIsUploading(false);
       toast.error('Gagal mengunggah', { description: error.message });
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   }, [pollOCRStatus]);
+
+  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await uploadFileDirectly(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }, [uploadFileDirectly]);
 
   return {
     isUploading,
     currentOcrTaskId,
     fileInputRef,
     handleFileUpload,
+    uploadFileDirectly,
   };
 }

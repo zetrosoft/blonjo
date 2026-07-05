@@ -7,10 +7,12 @@ import { VoiceRecorder } from '../../components/VoiceRecorder';
 import { ParsePreview, CONFIDENCE_MAP } from '../../components/ParsePreview';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../components/ui/tooltip';
 import {
-  Sparkles, RotateCcw, Wand2, Send, FileText, ChevronRight, Loader2, Plus, AlertCircle
+  Sparkles, RotateCcw, Wand2, Send, FileText, ChevronRight, Loader2, Plus, AlertCircle, Camera
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { SmartNoteProps } from './types';
+import { CameraModal } from '../../components/CameraModal';
+import { toast } from 'sonner';
 
 export function SmartNoteTab({
   noteText,
@@ -23,12 +25,14 @@ export function SmartNoteTab({
   onReset,
   onLoadExample,
   onFileUpload,
+  onPhotoCaptured,
   fileInputRef,
   onOpenConfirm,
   saving,
   updateParsed
 }: SmartNoteProps) {
   const { t } = useTranslation();
+  const [isCameraOpen, setIsCameraOpen] = React.useState(false);
 
   return (
     <div className="grid gap-4 lg:grid-cols-5">
@@ -57,6 +61,27 @@ export function SmartNoteTab({
               />
               <div className="absolute right-3 bottom-3 z-20 flex flex-col gap-2.5">
                 <TooltipProvider>
+                  {/* Tombol Kamera */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div className="relative group">
+                        <Button
+                          size="icon"
+                          variant="outline"
+                          className="h-11 w-11 rounded-full border-2 border-primary/40 bg-background/95 backdrop-blur-sm transition-all duration-300 shadow-lg hover:border-primary hover:scale-110 active:scale-95 group-hover:shadow-primary/20"
+                          onClick={() => setIsCameraOpen(true)}
+                          disabled={isUploading}
+                        >
+                          <Camera className="h-5 w-5 text-primary" />
+                        </Button>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent side="left" className="bg-zinc-900 text-white border-zinc-800">
+                      <p className="font-bold">Kamera (Foto / Scan)</p>
+                      <p className="text-[10px] opacity-70">Ambil foto struk atau scan QR/barcode</p>
+                    </TooltipContent>
+                  </Tooltip>
+
                   {/* Tombol Upload */}
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -244,6 +269,16 @@ export function SmartNoteTab({
           </CardContent>
         </Card>
       </div>
+
+      <CameraModal
+        isOpen={isCameraOpen}
+        onClose={() => setIsCameraOpen(false)}
+        onPhotoCaptured={(file) => onPhotoCaptured?.(file)}
+        onBarcodeScanned={(code) => {
+          setNoteText(noteText ? `${noteText}\nBarcode: ${code}` : `Barcode: ${code}`);
+          toast.success('Barcode disalin ke catatan', { description: code });
+        }}
+      />
     </div>
   );
 }

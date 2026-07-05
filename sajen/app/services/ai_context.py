@@ -51,7 +51,8 @@ def _get_matched_pricing_rules(tenant_id: int, keywords: List[str], db: Session)
     
     matched = []
     for r in rules:
-        p_name = r.rule_payload.get("product_name", "").lower()
+        p_name_raw = r.rule_payload.get("product_name")
+        p_name = (p_name_raw if p_name_raw is not None else "").lower()
         if any(kw in p_name for kw in keywords):
             matched.append({
                 "name": r.name,

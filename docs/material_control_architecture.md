@@ -340,6 +340,10 @@ Agar material benar-benar terkontrol sempurna, fitur-fitur pengelolaan persediaa
 
 ### 🚀 Fitur Lanjutan yang Lebih Advance (Fase Sekarang):
 *   **Part/Product Substitution:** Rekomendasi produk alternatif kompatibel berbasis AI (via MCP Server) jika produk yang dicari kosong (misal: Kampas rem motor Beat merk A kosong, sistem merekomendasikan kampas rem motor Vario merk B).
+*   **Inter-Tenant Stock Pooling & Auto-Balancing:** Untuk grup tenant multi-cabang, merekomendasikan transfer stok antar outlet terdekat jika salah satu outlet berada di bawah ROP sebelum memesan ke supplier eksternal.
+*   **Raw Material Yield-Loss & Shrinkage Analytics:** Menganalisis penyusutan bahan baku dari barang beli vs resep barang jadi yang terjual untuk memantau HPP riil dan kebocoran stok.
+*   **Supplier SLA Scorecard & Price Variance Lock:** Penilaian otomatis reliabilitas harga/lead time supplier serta penguncian harga kontrak untuk mendeteksi kenaikan harga sepihak.
+*   **Predictive Dynamic Buffer Cash Allocation:** Penahanan otomatis rencana belanja non-kritis jika diprediksi ada pengeluaran rutin operasional besar dalam waktu dekat demi menjaga likuiditas kas aman.
 *   **Staff/Resource Commission Tracker:** POS mencatat staf/mekanik/waiter yang melayani jasa/produk tertentu untuk perhitungan komisi otomatis yang terhubung ke pembukuan.
 
 ---
