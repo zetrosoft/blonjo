@@ -83,8 +83,16 @@ class TenantInventory(Base):
     # Static stock column, used ONLY if Stock Maintenance is ON (Checked)
     static_stock = Column(Numeric(15, 2), default=0.00)
 
+    # Material Control Parameters
+    safety_stock = Column(Numeric(15, 2), default=0.00, nullable=False)
+    reorder_point = Column(Numeric(15, 2), default=0.00, nullable=False)
+    max_stock = Column(Numeric(15, 2), default=0.00, nullable=False)
+    preferred_supplier_id = Column(Integer, ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True)
+    shelf_location = Column(String(50), nullable=True)
+
     tenant = relationship("Tenant")
     product = relationship("Product", back_populates="tenant_inventories")
+    preferred_supplier = relationship("Contact")
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "product_id", name="uq_tenant_inventory_product"),
@@ -173,3 +181,56 @@ class Contact(Base):
     __table_args__ = (
         UniqueConstraint("tenant_id", "name", "contact_type", name="uq_contact_tenant_name_type"),
     )
+
+class PurchasePlan(Base):
+    """
+    Purchase Planning / Auto-Replenishment Proposal for Purchasing Department.
+    """
+    __tablename__ = "purchase_plans"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(50), default="DRAFT", nullable=False) # 'DRAFT', 'APPROVED', 'COMPLETED'
+    send_via_wa = Column(Boolean, default=False, nullable=False)
+    send_via_email = Column(Boolean, default=False, nullable=False)
+    total_amount = Column(Numeric(15, 2), default=0.00, nullable=False)
+    planned_date = Column(Date, default=date.today, nullable=False)
+    created_at = Column(Date, default=date.today, nullable=False)
+
+    tenant = relationship("Tenant")
+    items = relationship("PurchasePlanItem", back_populates="purchase_plan", cascade="all, delete-orphan")
+
+class PurchasePlanItem(Base):
+    """
+    Detailed Items proposed inside a PurchasePlan.
+    """
+    __tablename__ = "purchase_plan_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    purchase_plan_id = Column(Integer, ForeignKey("purchase_plans.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
+    supplier_contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True)
+    qty = Column(Numeric(15, 2), nullable=False)
+    unit_price = Column(Numeric(15, 2), nullable=False)
+    subtotal = Column(Numeric(15, 2), nullable=False)
+
+    purchase_plan = relationship("PurchasePlan", back_populates="items")
+    product = relationship("Product")
+    supplier = relationship("Contact")
+
+class StockDiscard(Base):
+    """
+    Tracking wasted, expired, or spoiled raw materials and finished goods.
+    Triggers automated PSAK adjusting journal (Beban Kerusakan Persediaan).
+    """
+    __tablename__ = "stock_discards"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
+    qty = Column(Numeric(15, 2), nullable=False)
+    reason = Column(String(50), nullable=False) # 'EXPIRED', 'DAMAGED', 'SPOILED'
+    created_at = Column(Date, default=date.today, nullable=False)
+
+    tenant = relationship("Tenant")
+    product = relationship("Product")
