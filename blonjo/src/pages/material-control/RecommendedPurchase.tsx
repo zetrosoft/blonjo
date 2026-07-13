@@ -1,17 +1,23 @@
-import React, { useState, useEffect } from 'react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
+import React, { useState, useEffect, useRef } from 'react';
+import { Card, CardContent, CardHeader } from '../../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
 import { Input } from '../../components/ui/input';
 import {
-  Sparkles, ArrowRight, RefreshCw, ChevronDown, ChevronUp, CheckCircle,
+  AlertDialog, AlertDialogAction, AlertDialogCancel,
+  AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle
+} from '../../components/ui/alert-dialog';
+import {
+  Sparkles, RefreshCw, ChevronDown, ChevronUp,
   ClipboardList, Plus, Trash2, Check, X, Calendar, PackageCheck, Pencil
 } from 'lucide-react';
 import { fetchClient } from '../../api/client';
 import { formatRp } from '../../lib/utils';
 import { toast } from 'sonner';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,6 +67,7 @@ interface PurchasePlan {
 // ─── Tab 1: Rekomendasi Restock ───────────────────────────────────────────────
 
 function RekomRestock() {
+  const { t } = useTranslation();
   const [recommendations, setRecommendations] = useState<GroupedRecommendation[]>([]);
   const [loading, setLoading] = useState(true);
   const [generatingDraftId, setGeneratingDraftId] = useState<number | null>(null);
@@ -70,11 +77,10 @@ function RekomRestock() {
     setLoading(true);
     try {
       const data = await fetchClient('/material-control/recommendations');
-      setRecommendations(data || []);
+      setRecommendations(Array.isArray(data) ? data : []);
       setExpandedGroups({});
     } catch (error) {
-      console.error('Failed to load recommendations:', error);
-      toast.error('Gagal memuat rekomendasi belanja.');
+      toast.error(t('mc_rp_load_failed'));
     } finally {
       setLoading(false);
     }
@@ -101,11 +107,10 @@ function RekomRestock() {
         }))
       };
       await fetchClient('/purchase-plans', { method: 'POST', body: JSON.stringify(payload) });
-      toast.success(`Draft pesanan untuk ${group.supplier_name} berhasil dibuat!`);
+      toast.success(t('mc_rp_toast_draft_success', { name: group.supplier_name }));
       setRecommendations(prev => prev.filter(r => r.supplier_id !== group.supplier_id));
     } catch (error) {
-      console.error('Failed to generate draft:', error);
-      toast.error(`Gagal membuat draft pesanan untuk ${group.supplier_name}.`);
+      toast.error(t('mc_rp_toast_draft_failed', { name: group.supplier_name }));
     } finally {
       setGeneratingDraftId(null);
     }
@@ -115,6 +120,25 @@ function RekomRestock() {
     const groupTotal = (group.items || []).reduce((sum, item) => sum + (item.qty * item.unit_price), 0);
     return acc + groupTotal;
   }, 0);
+
+  if (loading) return (
+    <div className="flex flex-col items-center justify-center py-20 gap-2 bg-white rounded-xl border border-zinc-200 shadow-sm">
+      <RefreshCw className="h-8 w-8 animate-spin text-primary" />
+      <p className="text-muted-foreground text-sm font-medium">{t('mc_rp_restock_loading')}</p>
+    </div>
+  );
+
+  if (recommendations.length === 0) return (
+    <div className="flex flex-col items-center justify-center py-20 gap-3 bg-white rounded-xl border border-zinc-200 shadow-sm">
+      <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 mb-2">
+        <CheckCircle className="h-6 w-6" />
+      </div>
+      <h3 className="font-bold text-lg text-zinc-900">{t('mc_rp_restock_empty')}</h3>
+      <p className="text-muted-foreground text-sm text-center max-w-md">
+        {t('mc_rp_restock_empty_desc')}
+      </p>
+    </div>
+  );
 
   return (
     <div className="space-y-4">
@@ -126,115 +150,98 @@ function RekomRestock() {
               <Sparkles className="h-3 w-3 animate-pulse" /> AI-Powered Procurement
             </Badge>
           </div>
-          <CardTitle className="text-2xl mt-2 font-extrabold tracking-tight">Estimasi Kebutuhan Anggaran Belanja</CardTitle>
+          <CardTitle className="text-2xl mt-2 font-extrabold tracking-tight">{t('mc_rp_budget_estimate')}</CardTitle>
           <div className="text-4xl font-bold font-mono mt-2">{formatRp(totalEstimatedBudget)}</div>
         </CardHeader>
       </Card>
 
       <div className="flex justify-end">
         <Button onClick={loadData} variant="outline" className="gap-2">
-          <RefreshCw className="h-4 w-4" /> Perbarui Data
+          <RefreshCw className="h-4 w-4" /> {t('common_refresh')}
         </Button>
       </div>
 
       <div className="space-y-4">
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-2 bg-white rounded-xl border border-zinc-200 shadow-sm">
-            <RefreshCw className="h-8 w-8 animate-spin text-primary" />
-            <p className="text-muted-foreground text-sm font-medium">Menghitung kalkulasi restock otomatis...</p>
-          </div>
-        ) : recommendations.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 gap-3 bg-white rounded-xl border border-zinc-200 shadow-sm">
-            <div className="h-12 w-12 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-600 mb-2">
-              <CheckCircle className="h-6 w-6" />
-            </div>
-            <h3 className="font-bold text-lg text-zinc-900">Stok Aman</h3>
-            <p className="text-muted-foreground text-sm text-center max-w-md">
-              Seluruh tingkat persediaan Anda dalam kondisi prima. Tidak ada restock yang perlu dilakukan saat ini.
-            </p>
-          </div>
-        ) : (
-          recommendations.map((group, idx) => {
-            const groupCost = (group.items || []).reduce((sum, item) => sum + (item.qty * item.unit_price), 0);
-            const isExpanded = !!expandedGroups[group.supplier_id];
-            return (
-              <Card key={group.supplier_id || idx} className="border border-zinc-200 dark:border-zinc-800 shadow-sm overflow-hidden">
-                <CardHeader
-                  className="bg-zinc-50/60 dark:bg-zinc-900/30 py-4 px-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 cursor-pointer hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 transition-colors"
-                  onClick={() => toggleGroup(group.supplier_id)}
-                >
-                  <div className="flex items-center gap-3">
-                    {isExpanded ? <ChevronUp className="h-5 w-5 text-zinc-500" /> : <ChevronDown className="h-5 w-5 text-zinc-500" />}
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                      <span className="font-bold text-base text-zinc-900 dark:text-zinc-50">{group.supplier_name}</span>
-                      <span className="text-zinc-300 dark:text-zinc-700 hidden sm:inline">|</span>
-                      <span className="text-sm text-muted-foreground">
-                        Last Purchase: <strong className="text-zinc-700 dark:text-zinc-300">{group.last_purchase_date}</strong>
-                      </span>
-                      <span className="text-zinc-300 dark:text-zinc-700 hidden sm:inline">|</span>
-                      <span className="text-sm text-muted-foreground">
-                        Next Purchase: <strong className="text-emerald-600 dark:text-emerald-400">{group.next_purchase_date}</strong>
-                      </span>
-                    </div>
+        {recommendations.map((group, idx) => {
+          const groupCost = (group.items || []).reduce((sum, item) => sum + (item.qty * item.unit_price), 0);
+          const isExpanded = !!expandedGroups[group.supplier_id];
+          return (
+            <Card key={group.supplier_id || idx} className="border border-zinc-200 dark:border-zinc-800 shadow-sm overflow-hidden">
+              <CardHeader
+                className="bg-zinc-50/60 dark:bg-zinc-900/30 py-4 px-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 cursor-pointer hover:bg-zinc-100/50 dark:hover:bg-zinc-800/50 transition-colors"
+                onClick={() => toggleGroup(group.supplier_id)}
+              >
+                <div className="flex items-center gap-3">
+                  {isExpanded ? <ChevronUp className="h-5 w-5 text-zinc-500" /> : <ChevronDown className="h-5 w-5 text-zinc-500" />}
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <span className="font-bold text-base text-zinc-900 dark:text-zinc-50">{group.supplier_name}</span>
+                    <span className="text-zinc-300 dark:text-zinc-700 hidden sm:inline">|</span>
+                    <span className="text-sm text-muted-foreground">
+                      {t('mc_rp_last_purchase')}: <strong className="text-zinc-700 dark:text-zinc-300">{group.last_purchase_date}</strong>
+                    </span>
+                    <span className="text-zinc-300 dark:text-zinc-700 hidden sm:inline">|</span>
+                    <span className="text-sm text-muted-foreground">
+                      {t('mc_rp_next_purchase')}: <strong className="text-emerald-600 dark:text-emerald-400">{group.next_purchase_date}</strong>
+                    </span>
                   </div>
-                  <div className="flex items-center gap-3 pl-8 sm:pl-0">
-                    <div className="text-right hidden sm:block">
-                      <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{formatRp(groupCost)}</p>
-                    </div>
-                    <Button
-                      size="sm"
-                      className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
-                      onClick={(e) => handleGeneratePurchaseDraft(group, e)}
-                      disabled={generatingDraftId === group.supplier_id}
-                    >
-                      {generatingDraftId === group.supplier_id ? (
-                        <><RefreshCw className="h-3 w-3 animate-spin" /> Proses...</>
-                      ) : (
-                        <>Buat Draft Pesanan <ArrowRight className="h-3 w-3" /></>
-                      )}
-                    </Button>
+                </div>
+                <div className="flex items-center gap-3 pl-8 sm:pl-0">
+                  <div className="text-right hidden sm:block">
+                    <p className="text-sm font-bold text-zinc-900 dark:text-zinc-100">{formatRp(groupCost)}</p>
                   </div>
-                </CardHeader>
+                  <Button
+                    size="sm"
+                    className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
+                    onClick={(e) => handleGeneratePurchaseDraft(group, e)}
+                    disabled={generatingDraftId === group.supplier_id}
+                  >
+                    {generatingDraftId === group.supplier_id ? (
+                      <><RefreshCw className="h-3 w-3 animate-spin" /> {t('common_processing')}...</>
+                    ) : (
+                      <>{t('mc_rp_create_draft')} <ArrowRight className="h-3 w-3" /></>
+                    )}
+                  </Button>
+                </div>
+              </CardHeader>
 
-                {isExpanded && (
-                  <CardContent className="p-0 border-t border-zinc-100 dark:border-zinc-800">
-                    <div className="w-full overflow-x-auto">
-                      <Table className="w-full border-collapse">
-                        <TableHeader className="bg-white dark:bg-zinc-950">
-                          <TableRow>
-                            <TableHead className="w-[60px] pl-6 py-2.5 text-xs font-bold">No</TableHead>
-                            <TableHead className="py-2.5 text-xs font-bold">Item Name</TableHead>
-                            <TableHead className="text-right py-2.5 text-xs font-bold">Qty</TableHead>
-                            <TableHead className="text-center py-2.5 text-xs font-bold">Unit</TableHead>
-                            <TableHead className="text-right py-2.5 text-xs font-bold">Unit Price</TableHead>
-                            <TableHead className="text-right pr-6 py-2.5 text-xs font-bold">Subtotal</TableHead>
+              {isExpanded && (
+                <CardContent className="p-0 border-t border-zinc-100 dark:border-zinc-800">
+                  <div className="w-full overflow-x-auto">
+                    <Table className="w-full border-collapse">
+                      <TableHeader className="bg-white dark:bg-zinc-950">
+                        <TableRow>
+                          <TableHead className="w-[60px] pl-6 py-2.5 text-xs font-bold">No</TableHead>
+                          <TableHead className="py-2.5 text-xs font-bold">{t('mc_rp_col_product')}</TableHead>
+                          <TableHead className="text-right py-2.5 text-xs font-bold">{t('mc_rp_col_qty')}</TableHead>
+                          <TableHead className="text-center py-2.5 text-xs font-bold">{t('mc_rp_col_unit')}</TableHead>
+                          <TableHead className="text-right py-2.5 text-xs font-bold">{t('mc_rp_col_price')}</TableHead>
+                          <TableHead className="text-right pr-6 py-2.5 text-xs font-bold">{t('mc_rp_col_total')}</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(group.items || []).map((item, itemIdx) => (
+                          <TableRow key={item.product_id} className="hover:bg-zinc-50/30 dark:hover:bg-zinc-900/20">
+                            <TableCell className="pl-6 py-3 font-semibold text-zinc-500 text-xs">{itemIdx + 1}</TableCell>
+                            <TableCell className="py-3 font-bold text-zinc-900 dark:text-zinc-100 text-sm">
+                              {item.product_name}
+                              <div className="text-[10px] text-muted-foreground font-mono mt-0.5">{item.sku || '-'}</div>
+                            </TableCell>
+                            <TableCell className="py-3 text-right font-bold text-indigo-600 dark:text-indigo-400">{item.qty}</TableCell>
+                            <TableCell className="py-3 text-center text-xs text-muted-foreground uppercase">{item.unit}</TableCell>
+                            <TableCell className="py-3 text-right text-xs">{formatRp(item.unit_price)}</TableCell>
+                            <TableCell className="py-3 pr-6 text-right font-semibold text-zinc-700 dark:text-zinc-300">
+                              {formatRp(item.qty * item.unit_price)}
+                            </TableCell>
                           </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {(group.items || []).map((item, itemIdx) => (
-                            <TableRow key={item.product_id} className="hover:bg-zinc-50/30 dark:hover:bg-zinc-900/20">
-                              <TableCell className="pl-6 py-3 font-semibold text-zinc-500 text-xs">{itemIdx + 1}</TableCell>
-                              <TableCell className="py-3 font-bold text-zinc-900 dark:text-zinc-100 text-sm">
-                                {item.product_name}
-                                <div className="text-[10px] text-muted-foreground font-mono mt-0.5">{item.sku || '-'}</div>
-                              </TableCell>
-                              <TableCell className="py-3 text-right font-bold text-indigo-600 dark:text-indigo-400">{item.qty}</TableCell>
-                              <TableCell className="py-3 text-center text-xs text-muted-foreground uppercase">{item.unit}</TableCell>
-                              <TableCell className="py-3 text-right text-xs">{formatRp(item.unit_price)}</TableCell>
-                              <TableCell className="py-3 pr-6 text-right font-semibold text-zinc-700 dark:text-zinc-300">
-                                {formatRp(item.qty * item.unit_price)}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </CardContent>
-                )}
-              </Card>
-            );
-          })
-        )}
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </CardContent>
+              )}
+            </Card>
+          );
+        })}
       </div>
     </div>
   );
@@ -255,16 +262,8 @@ function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-// Status options yang bisa dipilih
-const STATUS_OPTIONS = [
-  { value: 'draft', label: 'Draft' },
-  { value: 'pending_approval', label: 'Menunggu Approval' },
-  { value: 'approved', label: 'Disetujui' },
-  { value: 'completed', label: 'Selesai' },
-  { value: 'cancelled', label: 'Dibatalkan' },
-];
-
 function ListRencanaBelanja() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [plans, setPlans] = useState<PurchasePlan[]>([]);
   const [loading, setLoading] = useState(true);
@@ -272,11 +271,9 @@ function ListRencanaBelanja() {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [approvingId, setApprovingId] = useState<number | null>(null);
   const [executingId, setExecutingId] = useState<number | null>(null);
+  const [planToDelete, setPlanToDelete] = useState<number | null>(null);
 
-  // Checkbox state per plan: key = planId, value = Set of checked item IDs
   const [checkedItems, setCheckedItems] = useState<Record<number, Set<number>>>({});
-
-  // Edit qty per item: key = itemId, value = qty string
   const [editingQty, setEditingQty] = useState<Record<number, string>>({});
 
   const loadPlans = async () => {
@@ -287,13 +284,11 @@ function ListRencanaBelanja() {
         new Date(a.planned_date).getTime() - new Date(b.planned_date).getTime()
       );
       setPlans(sorted);
-      // Init checked state kosong untuk semua plan
       const initChecked: Record<number, Set<number>> = {};
       sorted.forEach((p: PurchasePlan) => { initChecked[p.id] = new Set(); });
       setCheckedItems(initChecked);
     } catch (err) {
-      console.error('Gagal memuat rencana belanja:', err);
-      toast.error('Gagal memuat daftar rencana belanja.');
+      toast.error(t('mc_rp_plans_load_failed'));
     } finally {
       setLoading(false);
     }
@@ -323,18 +318,18 @@ function ListRencanaBelanja() {
     });
   };
 
-  const handleDelete = async (id: number, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!window.confirm('Hapus rencana belanja ini?')) return;
-    setDeletingId(id);
+  const handleDelete = async () => {
+    if (!planToDelete) return;
+    setDeletingId(planToDelete);
     try {
-      await fetchClient(`/material-control/purchase-plans/${id}`, { method: 'DELETE' });
-      toast.success('Rencana belanja berhasil dihapus.');
-      setPlans(prev => prev.filter(p => p.id !== id));
+      await fetchClient(`/material-control/purchase-plans/${planToDelete}`, { method: 'DELETE' });
+      toast.success(t('mc_rp_plans_delete_success'));
+      setPlans(prev => prev.filter(p => p.id !== planToDelete));
     } catch (err) {
-      toast.error('Gagal menghapus rencana belanja.');
+      toast.error(t('mc_rp_plans_delete_failed'));
     } finally {
       setDeletingId(null);
+      setPlanToDelete(null);
     }
   };
 
@@ -343,53 +338,43 @@ function ListRencanaBelanja() {
     setApprovingId(id);
     try {
       await fetchClient(`/material-control/purchase-plans/${id}/approve`, { method: 'POST' });
-      toast.success('Rencana belanja berhasil disetujui!');
+      toast.success(t('mc_rp_plans_approve_success'));
       loadPlans();
     } catch (err) {
-      toast.error('Gagal menyetujui rencana belanja.');
+      toast.error(t('mc_rp_plans_approve_failed'));
     } finally {
       setApprovingId(null);
     }
   };
 
-  /**
-   * Partial Complete: hanya item yang dicentang ditandai is_purchased = true
-   * complete_plan = false → status plan tetap (tidak jadi COMPLETED kecuali semua item sudah dibeli)
-   */
   const handlePartialComplete = async (plan: PurchasePlan, e: React.MouseEvent) => {
     e.stopPropagation();
     const checked = checkedItems[plan.id] || new Set<number>();
     if (checked.size === 0) {
-      toast.warning('Centang minimal 1 item yang sudah dibeli terlebih dahulu.');
+      toast.warning(t('mc_rp_plans_select_item'));
       return;
     }
     setExecutingId(plan.id);
     try {
-      const res = await fetchClient(`/material-control/purchase-plans/${plan.id}/execute`, {
+      await fetchClient(`/material-control/purchase-plans/${plan.id}/execute`, {
         method: 'POST',
         body: JSON.stringify({
           purchased_item_ids: Array.from(checked),
           complete_plan: false
         })
       });
-      toast.success(`${checked.size} item ditandai sudah dibeli.`);
-      // Reset checkboxes & reload
+      toast.success(t('mc_rp_plans_execute_success'));
       setCheckedItems(prev => ({ ...prev, [plan.id]: new Set() }));
       loadPlans();
     } catch (err) {
-      toast.error('Gagal mengeksekusi partial complete.');
+      toast.error(t('mc_rp_plans_execute_failed'));
     } finally {
       setExecutingId(null);
     }
   };
 
-  /**
-   * Complete: semua item dalam plan ditandai is_purchased = true,
-   * status plan → COMPLETED
-   */
   const handleComplete = async (plan: PurchasePlan, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm('Tandai seluruh rencana belanja ini sebagai Selesai?')) return;
     setExecutingId(plan.id);
     try {
       await fetchClient(`/material-control/purchase-plans/${plan.id}/execute`, {
@@ -399,11 +384,11 @@ function ListRencanaBelanja() {
           complete_plan: true
         })
       });
-      toast.success('Rencana belanja selesai!');
+      toast.success(t('mc_rp_plans_complete_success'));
       setCheckedItems(prev => ({ ...prev, [plan.id]: new Set() }));
       loadPlans();
     } catch (err) {
-      toast.error('Gagal menyelesaikan rencana belanja.');
+      toast.error(t('mc_rp_plans_complete_failed'));
     } finally {
       setExecutingId(null);
     }
@@ -411,20 +396,31 @@ function ListRencanaBelanja() {
 
   return (
     <div className="space-y-4">
+      <AlertDialog open={!!planToDelete} onOpenChange={() => setPlanToDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t('mc_rp_plans_delete_confirm')}</AlertDialogTitle>
+            <AlertDialogDescription>{t('mc_rp_plans_delete_desc')}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common_cancel')}</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete} className="bg-red-600">{t('common_delete')}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          Daftar rencana belanja, diurutkan berdasarkan tanggal belanja terdekat.
-        </p>
+        <p className="text-sm text-muted-foreground">{t('mc_rp_plans_desc')}</p>
         <div className="flex gap-2">
           <Button onClick={loadPlans} variant="outline" size="sm" className="gap-2">
-            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+            <RefreshCw className="h-3.5 w-3.5" /> {t('common_refresh')}
           </Button>
           <Button
             size="sm"
             className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white"
             onClick={() => navigate('/material-control/purchase-plan')}
           >
-            <Plus className="h-3.5 w-3.5" /> Buat Rencana Baru
+            <Plus className="h-3.5 w-3.5" /> {t('mc_rp_plans_new')}
           </Button>
         </div>
       </div>
@@ -432,23 +428,14 @@ function ListRencanaBelanja() {
       {loading ? (
         <div className="flex flex-col items-center justify-center py-20 gap-2 bg-white rounded-xl border border-zinc-200 shadow-sm">
           <RefreshCw className="h-8 w-8 animate-spin text-primary" />
-          <p className="text-muted-foreground text-sm">Memuat daftar rencana belanja...</p>
+          <p className="text-muted-foreground text-sm">{t('mc_rp_plans_loading')}</p>
         </div>
       ) : plans.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 gap-3 bg-white rounded-xl border border-zinc-200 shadow-sm">
           <div className="h-12 w-12 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-500 mb-2">
             <ClipboardList className="h-6 w-6" />
           </div>
-          <h3 className="font-bold text-lg text-zinc-900">Belum Ada Rencana Belanja</h3>
-          <p className="text-muted-foreground text-sm text-center max-w-md">
-            Buat rencana belanja baru dari menu Form Rencana Belanja.
-          </p>
-          <Button
-            className="mt-2 gap-2 bg-indigo-600 hover:bg-indigo-700 text-white"
-            onClick={() => navigate('/material-control/purchase-plan')}
-          >
-            <Plus className="h-4 w-4" /> Buat Rencana Belanja
-          </Button>
+          <h3 className="font-bold text-lg text-zinc-900">{t('mc_rp_plans_empty')}</h3>
         </div>
       ) : (
         <div className="space-y-3">
@@ -464,7 +451,6 @@ function ListRencanaBelanja() {
 
             return (
               <Card key={plan.id} className="border border-zinc-200 dark:border-zinc-800 shadow-sm overflow-hidden">
-                {/* ── Header (click to expand) ── */}
                 <CardHeader
                   className="bg-zinc-50/60 dark:bg-zinc-900/30 py-3.5 px-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 cursor-pointer hover:bg-zinc-100/50 transition-colors"
                   onClick={() => togglePlan(plan.id)}
@@ -481,30 +467,26 @@ function ListRencanaBelanja() {
                         </Badge>
                         {isOverdue && isActive && (
                           <Badge className="text-[10px] px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400">
-                            Terlambat
+                            {t('mc_rp_overdue')}
                           </Badge>
                         )}
                       </div>
                       <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
                         <span className="flex items-center gap-1">
                           <Calendar className="h-3 w-3" />
-                          Tgl Belanja: <strong className="text-zinc-700 dark:text-zinc-300 ml-1">{formatDate(plan.planned_date)}</strong>
+                          {t('mc_rp_date')}: <strong className="text-zinc-700 dark:text-zinc-300 ml-1">{formatDate(plan.planned_date)}</strong>
                         </span>
                         <span>•</span>
-                        <span>{plan.items?.length || 0} item</span>
-                        <span>•</span>
-                        <span>Dibuat: {formatDate(plan.created_at)}</span>
+                        <span>{plan.items?.length || 0} {t('mc_rp_items')}</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Action buttons */}
                   <div className="flex items-center gap-2 pl-7 sm:pl-0" onClick={e => e.stopPropagation()}>
                     <p className="text-sm font-bold text-indigo-600 dark:text-indigo-400 font-mono mr-1">
                       {formatRp(plan.total_amount)}
                     </p>
 
-                    {/* Approve — tampil jika draft atau pending */}
                     {(plan.status === 'draft' || plan.status === 'pending_approval') && (
                       <Button
                         size="sm" variant="outline"
@@ -515,15 +497,14 @@ function ListRencanaBelanja() {
                         {approvingId === plan.id
                           ? <RefreshCw className="h-3 w-3 animate-spin" />
                           : <Check className="h-3 w-3" />}
-                        Approve
+                        {t('common_approve')}
                       </Button>
                     )}
 
-                    {/* Delete */}
                     <Button
                       size="sm" variant="ghost"
                       className="h-8 w-8 p-0 text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20"
-                      onClick={(e) => handleDelete(plan.id, e)}
+                      onClick={() => setPlanToDelete(plan.id)}
                       disabled={deletingId === plan.id}
                     >
                       {deletingId === plan.id
@@ -533,35 +514,65 @@ function ListRencanaBelanja() {
                   </div>
                 </CardHeader>
 
-                {/* ── Expanded: item table ── */}
                 {isExpanded && (
                   <CardContent className="p-0 border-t border-zinc-100 dark:border-zinc-800">
-                    {(plan.items || []).length === 0 ? (
-                      <p className="text-xs text-muted-foreground p-5 text-center">Tidak ada item dalam rencana ini.</p>
-                    ) : (
-                      <>
-                        <div className="w-full overflow-x-auto">
-                          <Table className="w-full border-collapse">
-                            <TableHeader className="bg-white dark:bg-zinc-950">
-                              <TableRow>
-                                {/* Checkbox "check all" — hanya jika plan masih aktif */}
-                                <TableHead className="w-[46px] pl-5 py-2.5 text-xs">
-                                  {isActive && (
+                    <div className="w-full overflow-x-auto">
+                      <Table className="w-full border-collapse">
+                        <TableHeader className="bg-white dark:bg-zinc-950">
+                          <TableRow>
+                            <TableHead className="w-[46px] pl-5 py-2.5 text-xs">
+                              {isActive && (
+                                <input
+                                  type="checkbox"
+                                  checked={allChecked}
+                                  ref={el => { if (el) el.indeterminate = someChecked; }}
+                                  onChange={() => toggleCheckAll(plan)}
+                                  className="w-4 h-4 rounded border-zinc-300 text-indigo-600 cursor-pointer"
+                                />
+                              )}
+                            </TableHead>
+                            <TableHead className="py-2.5 text-xs font-bold">{t('mc_rp_col_product')}</TableHead>
+                            <TableHead className="py-2.5 text-xs font-bold">{t('mc_rp_col_supplier')}</TableHead>
+                            <TableHead className="text-right py-2.5 text-xs font-bold">{t('mc_rp_col_qty')}</TableHead>
+                            <TableHead className="text-right py-2.5 text-xs font-bold">{t('mc_rp_col_price')}</TableHead>
+                            <TableHead className="text-right pr-5 py-2.5 text-xs font-bold">{t('mc_rp_col_total')}</TableHead>
+                            <TableHead className="text-center py-2.5 text-xs font-bold">{t('mc_rp_col_status')}</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {plan.items.map((item) => {
+                            const isChecked = planChecked.has(item.id);
+                            return (
+                              <TableRow key={item.id} className={`hover:bg-zinc-50/30 dark:hover:bg-zinc-900/20 ${item.is_purchased ? 'opacity-60' : ''}`}>
+                                <TableCell className="pl-5 py-3 text-center">
+                                  {isActive && !item.is_purchased && (
                                     <input
                                       type="checkbox"
-                                      checked={allChecked}
-                                      ref={el => { if (el) el.indeterminate = someChecked; }}
-                                      onChange={() => toggleCheckAll(plan)}
+                                      checked={isChecked}
+                                      onChange={() => toggleItemCheck(plan.id, item.id)}
                                       className="w-4 h-4 rounded border-zinc-300 text-indigo-600 cursor-pointer"
                                     />
                                   )}
-                                </TableHead>
-                                <TableHead className="py-2.5 text-xs font-bold">Produk</TableHead>
-                                <TableHead className="py-2.5 text-xs font-bold">Supplier</TableHead>
-                                <TableHead className="text-right py-2.5 text-xs font-bold">Qty</TableHead>
-                                <TableHead className="text-right py-2.5 text-xs font-bold">Harga Satuan</TableHead>
-                                <TableHead className="text-right pr-5 py-2.5 text-xs font-bold">Subtotal</TableHead>
-                                <TableHead className="text-center py-2.5 text-xs font-bold">Dibeli</TableHead>
+                                </TableCell>
+                                <TableCell className="py-3">
+                                  <div className="font-medium text-sm text-zinc-900 dark:text-zinc-100">{item.product_name}</div>
+                                  <div className="text-[10px] text-muted-foreground font-mono">{item.sku || '-'}</div>
+                                </TableCell>
+                                <TableCell className="py-3 text-xs text-muted-foreground">{item.supplier_name || '-'}</TableCell>
+                                <TableCell className="py-3 text-right font-bold text-indigo-600 dark:text-indigo-400">{Number(item.qty)}</TableCell>
+                                <TableCell className="py-3 text-right text-xs font-mono">{formatRp(Number(item.unit_price))}</TableCell>
+                                <TableCell className="py-3 pr-5 text-right text-sm font-semibold">{formatRp(Number(item.qty) * Number(item.unit_price))}</TableCell>
+                                <TableCell className="py-3 text-center">
+                                  {item.is_purchased ? (
+                                    <Badge className="text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                                      <Check className="h-2.5 w-2.5 mr-1" />{t('mc_rp_status_purchased')}
+                                    </Badge>
+                                  ) : (
+                                    <Badge className="text-[10px] bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+                                      {t('mc_rp_status_pending')}
+                                    </Badge>
+                                  )}
+                                </TableCell>
                               </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -671,8 +682,8 @@ function ListRencanaBelanja() {
                           <div className="flex items-center justify-between px-5 py-3 bg-zinc-50/40 dark:bg-zinc-900/20 border-t border-zinc-100 dark:border-zinc-800">
                             <p className="text-xs text-muted-foreground">
                               {planChecked.size > 0
-                                ? <><strong className="text-indigo-600">{planChecked.size}</strong> item dicentang</>
-                                : 'Centang item yang sudah dibeli'}
+                                ? <><strong className="text-indigo-600">{planChecked.size}</strong> {t('mc_rp_items')} {t('mc_rp_status_purchased').toLowerCase()}</>
+                                : t('mc_rp_check_hint')}
                             </p>
                             <div className="flex items-center gap-2">
                               <Button
@@ -684,7 +695,7 @@ function ListRencanaBelanja() {
                                 {executingId === plan.id
                                   ? <RefreshCw className="h-3 w-3 animate-spin" />
                                   : <PackageCheck className="h-3 w-3" />}
-                                Partial Complete
+                                {t('mc_rp_btn_partial_complete')}
                               </Button>
                               <Button
                                 size="sm"
@@ -695,7 +706,7 @@ function ListRencanaBelanja() {
                                 {executingId === plan.id
                                   ? <RefreshCw className="h-3 w-3 animate-spin" />
                                   : <PackageCheck className="h-3 w-3" />}
-                                Complete
+                                {t('mc_rp_btn_complete')}
                               </Button>
                             </div>
                           </div>
@@ -716,6 +727,7 @@ function ListRencanaBelanja() {
 // ─── Main Component: Tabbed ────────────────────────────────────────────────────
 
 export default function RecommendedPurchase() {
+  const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<'restock' | 'plans'>('restock');
 
   return (
@@ -723,10 +735,8 @@ export default function RecommendedPurchase() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">Rekomendasi Belanja</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Kelola rekomendasi restock cerdas dan rencana belanja Anda.
-          </p>
+          <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">{t('mc_rp_title')}</h1>
+          <p className="text-sm text-muted-foreground mt-1">{t('mc_rp_subtitle')}</p>
         </div>
       </div>
 
@@ -741,7 +751,7 @@ export default function RecommendedPurchase() {
           }`}
         >
           <Sparkles className="h-4 w-4" />
-          Rekomendasi Restock
+          {t('mc_rp_tab_restock')}
         </button>
         <button
           onClick={() => setActiveTab('plans')}
@@ -752,7 +762,7 @@ export default function RecommendedPurchase() {
           }`}
         >
           <ClipboardList className="h-4 w-4" />
-          List Rencana Belanja
+          {t('mc_rp_tab_plans')}
         </button>
       </div>
 
@@ -761,3 +771,4 @@ export default function RecommendedPurchase() {
     </div>
   );
 }
+
