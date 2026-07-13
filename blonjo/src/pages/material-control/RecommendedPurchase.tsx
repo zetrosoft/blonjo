@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Card, CardContent, CardHeader } from '../../components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
@@ -11,7 +11,8 @@ import {
 } from '../../components/ui/alert-dialog';
 import {
   Sparkles, RefreshCw, ChevronDown, ChevronUp,
-  ClipboardList, Plus, Trash2, Check, X, Calendar, PackageCheck, Pencil
+  ClipboardList, Plus, Trash2, Check, X, Calendar, PackageCheck, Pencil,
+  CheckCircle, ArrowRight
 } from 'lucide-react';
 import { fetchClient } from '../../api/client';
 import { formatRp } from '../../lib/utils';
@@ -539,42 +540,6 @@ function ListRencanaBelanja() {
                             <TableHead className="text-center py-2.5 text-xs font-bold">{t('mc_rp_col_status')}</TableHead>
                           </TableRow>
                         </TableHeader>
-                        <TableBody>
-                          {plan.items.map((item) => {
-                            const isChecked = planChecked.has(item.id);
-                            return (
-                              <TableRow key={item.id} className={`hover:bg-zinc-50/30 dark:hover:bg-zinc-900/20 ${item.is_purchased ? 'opacity-60' : ''}`}>
-                                <TableCell className="pl-5 py-3 text-center">
-                                  {isActive && !item.is_purchased && (
-                                    <input
-                                      type="checkbox"
-                                      checked={isChecked}
-                                      onChange={() => toggleItemCheck(plan.id, item.id)}
-                                      className="w-4 h-4 rounded border-zinc-300 text-indigo-600 cursor-pointer"
-                                    />
-                                  )}
-                                </TableCell>
-                                <TableCell className="py-3">
-                                  <div className="font-medium text-sm text-zinc-900 dark:text-zinc-100">{item.product_name}</div>
-                                  <div className="text-[10px] text-muted-foreground font-mono">{item.sku || '-'}</div>
-                                </TableCell>
-                                <TableCell className="py-3 text-xs text-muted-foreground">{item.supplier_name || '-'}</TableCell>
-                                <TableCell className="py-3 text-right font-bold text-indigo-600 dark:text-indigo-400">{Number(item.qty)}</TableCell>
-                                <TableCell className="py-3 text-right text-xs font-mono">{formatRp(Number(item.unit_price))}</TableCell>
-                                <TableCell className="py-3 pr-5 text-right text-sm font-semibold">{formatRp(Number(item.qty) * Number(item.unit_price))}</TableCell>
-                                <TableCell className="py-3 text-center">
-                                  {item.is_purchased ? (
-                                    <Badge className="text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-                                      <Check className="h-2.5 w-2.5 mr-1" />{t('mc_rp_status_purchased')}
-                                    </Badge>
-                                  ) : (
-                                    <Badge className="text-[10px] bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                                      {t('mc_rp_status_pending')}
-                                    </Badge>
-                                  )}
-                                </TableCell>
-                              </TableRow>
-                            </TableHeader>
                             <TableBody>
                               {plan.items.map((item, itemIdx) => {
                                 const isChecked = planChecked.has(item.id);
@@ -666,7 +631,7 @@ function ListRencanaBelanja() {
                                         </Badge>
                                       ) : (
                                         <Badge className="text-[10px] bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                                          Belum
+                                          {t('mc_rp_status_pending')}
                                         </Badge>
                                       )}
                                     </TableCell>
@@ -711,10 +676,8 @@ function ListRencanaBelanja() {
                             </div>
                           </div>
                         )}
-                      </>
+                      </CardContent>
                     )}
-                  </CardContent>
-                )}
               </Card>
             );
           })}
