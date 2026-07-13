@@ -6,25 +6,34 @@ from decimal import Decimal
 # ─── PURCHASE PLAN SCHEMAS ─────────────────────────────────────────
 
 class PurchasePlanItemCreate(BaseModel):
-    product_id: int
+    product_id: Optional[int] = None
+    custom_product_name: Optional[str] = None
     supplier_contact_id: Optional[int] = None
     qty: Decimal = Field(..., max_digits=15, decimal_places=2)
     unit_price: Decimal = Field(..., max_digits=15, decimal_places=2)
+    is_purchased: Optional[bool] = False
 
 class PurchasePlanItemResponse(BaseModel):
     id: int
     purchase_plan_id: int
-    product_id: int
-    product_name: str
-    sku: str
+    product_id: Optional[int] = None
+    custom_product_name: Optional[str] = None
+    product_name: Optional[str] = None
+    sku: Optional[str] = None
     supplier_contact_id: Optional[int]
     supplier_name: Optional[str]
     qty: Decimal
     unit_price: Decimal
     subtotal: Decimal
+    is_purchased: bool
 
     class Config:
         from_attributes = True
+
+class PurchasePlanExecuteRequest(BaseModel):
+    purchased_item_ids: List[int]
+    complete_plan: bool = False
+
 
 class PurchasePlanCreate(BaseModel):
     planned_date: date = Field(default_factory=date.today)
@@ -76,3 +85,7 @@ class CashflowProjectionItem(BaseModel):
     inflow_amount: Decimal
     ending_cash: Decimal
     status: str  # 'AMAN' atau 'WARNING'
+    accuracy_inflow_pct: Optional[float] = None
+    accuracy_outflow_pct: Optional[float] = None
+    is_capital_inflow: bool = False
+    capital_inflow_amount: Decimal = Decimal("0.00")

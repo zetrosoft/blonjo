@@ -34,6 +34,8 @@ export interface Transaction {
   created_at: string;
   entries: TransactionEntry[];
   inventory_logs: InventoryLog[];
+  due_date?: string | null;
+  payment_method?: string | null;
 }
 
 export interface Account {

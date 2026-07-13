@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { LayoutGrid, Package, History, Store, Plus, ArrowRight, Boxes } from 'lucide-react';
+import { LayoutGrid, Package, History, Store, Plus, ArrowRight, Boxes, FileText, DollarSign, AlertTriangle, BarChart2 } from 'lucide-react';
 
 export default function MaterialControlHub() {
   const { t } = useTranslation();
@@ -12,8 +12,8 @@ export default function MaterialControlHub() {
   const cards = [
     {
       title: t('menu_inventory_control'),
-      desc: 'Kelola status stok, nilai HPP, total nilai persediaan, serta lakukan penyesuaian stok fisik barang secara real-time.',
-      btnText: 'Buka Kontrol Stok',
+      desc: t('mc_hub_inv_desc'),
+      btnText: t('mc_hub_inv_btn'),
       icon: Boxes,
       path: '/material-control/inventory',
       color: 'text-blue-500',
@@ -21,8 +21,8 @@ export default function MaterialControlHub() {
     },
     {
       title: t('menu_purchasing_history'),
-      desc: 'Pantau riwayat invoice belanja barang dagangan, detail item pembelian, harga modal dari supplier, dan status pembayaran.',
-      btnText: 'Buka Riwayat Belanja',
+      desc: t('mc_hub_purch_desc'),
+      btnText: t('mc_hub_purch_btn'),
       icon: History,
       path: '/material-control/purchases',
       color: 'text-emerald-500',
@@ -30,8 +30,8 @@ export default function MaterialControlHub() {
     },
     {
       title: t('menu_stock_level'),
-      desc: 'Analisis tingkat kesehatan stok vs Reorder Point (ROP) dengan visual progress bar dinamis untuk mencegah kehabisan stok.',
-      btnText: 'Buka Level Stok',
+      desc: t('mc_hub_stock_desc'),
+      btnText: t('mc_hub_stock_btn'),
       icon: Store,
       path: '/material-control/stock-level',
       color: 'text-indigo-500',
@@ -39,12 +39,48 @@ export default function MaterialControlHub() {
     },
     {
       title: t('menu_recommended_purchase'),
-      desc: 'Rekomendasi pembelian ulang otomatis berbasis kecepatan konsumsi harian (daily velocity) untuk mengoptimalkan perputaran modal.',
-      btnText: 'Buka Rekomendasi',
+      desc: t('mc_hub_recom_desc') || 'Rekomendasi pembelian ulang otomatis berbasis kecepatan konsumsi harian.',
+      btnText: t('mc_hub_recom_btn') || 'Buka Rekomendasi',
       icon: Plus,
       path: '/material-control/recommended',
       color: 'text-amber-500',
       bg: 'bg-amber-50 dark:bg-amber-950/30'
+    },
+    {
+      title: t('menu_purchase_plan_form') || 'Form Rencana Belanja',
+      desc: 'Tulis kebutuhan barang dagang bebas dengan suara atau teks untuk membuat rencana belanja secara akurat.',
+      btnText: 'Buka Rencana Belanja',
+      icon: FileText,
+      path: '/material-control/purchase-plan',
+      color: 'text-cyan-500',
+      bg: 'bg-cyan-50 dark:bg-cyan-950/30'
+    },
+    {
+      title: t('menu_budgeting') || 'Proyeksi Kas Harian',
+      desc: 'Prediksi likuiditas kas toko berdasarkan rata-rata harian omzet masuk, rencana belanja material, dan tagihan jatuh tempo.',
+      btnText: 'Buka Proyeksi',
+      icon: DollarSign,
+      path: '/material-control/budgeting',
+      color: 'text-rose-500',
+      bg: 'bg-rose-50 dark:bg-rose-950/30'
+    },
+    {
+      title: t('menu_waste') || 'Waste Tracking',
+      desc: 'Catat dan monitor penyusutan atau pembuangan barang rusak untuk penyesuaian HPP otomatis.',
+      btnText: 'Buka Waste Tracking',
+      icon: AlertTriangle,
+      path: '/material-control/waste',
+      color: 'text-orange-500',
+      bg: 'bg-orange-50 dark:bg-orange-950/30'
+    },
+    {
+      title: t('menu_projection_accuracy') || 'Monitor Akurasi',
+      desc: 'Bandingkan proyeksi arus kas masuk/keluar harian dengan transaksi aktual ter-POSTING untuk mengukur tingkat akurasi.',
+      btnText: 'Buka Monitor Akurasi',
+      icon: BarChart2,
+      path: '/material-control/projection-accuracy',
+      color: 'text-fuchsia-500',
+      bg: 'bg-fuchsia-50 dark:bg-fuchsia-950/30'
     }
   ];
 
@@ -58,10 +94,10 @@ export default function MaterialControlHub() {
             {t('menu_material_control')}
           </span>
           <h1 className="text-3xl font-extrabold tracking-tight text-zinc-950 dark:text-zinc-50 leading-tight">
-            Dashboard Pengendalian Material & Stok
+            {t('mc_hub_welcome_title')}
           </h1>
           <p className="text-sm text-zinc-500 dark:text-zinc-400 leading-relaxed">
-            Kelola efisiensi perputaran stok toko sembako Anda, pantau pengeluaran purchasing, dan cegah kekosongan item terlaris secara otomatis.
+            {t('mc_hub_welcome_desc')}
           </p>
         </div>
         {/* Glow ambient background */}

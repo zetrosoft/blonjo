@@ -31,6 +31,7 @@ interface Purchase {
 }
 
 export default function PurchasingHistory() {
+  const { t } = useTranslation();
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -91,7 +92,7 @@ export default function PurchasingHistory() {
       }
     } catch (err) {
       console.error('Failed to load purchases', err);
-      toast.error('Gagal memuat riwayat pembelian dari server');
+      toast.error(t('mc_purch_load_failed'));
       setPurchases([]);
     } finally {
       setLoading(false);
@@ -124,11 +125,11 @@ export default function PurchasingHistory() {
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Purchasing History</h2>
           <p className="text-muted-foreground mt-1 text-sm">
-            Riwayat belanja persediaan barang dagangan dari supplier.
+            {t('mc_purch_desc')}
           </p>
         </div>
         <Button onClick={loadData} variant="outline" className="gap-2">
-          <RefreshCw className="h-4 w-4" /> Aktualkan Data
+          <RefreshCw className="h-4 w-4" /> {t('mc_btn_refresh')}
         </Button>
       </div>
 
@@ -136,34 +137,34 @@ export default function PurchasingHistory() {
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="relative overflow-hidden bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border-indigo-500/20">
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-medium">Total Pengeluaran Belanja (Posted)</CardTitle>
+            <CardTitle className="text-sm font-medium">{t('mc_total_purchase_posted')}</CardTitle>
             <ShoppingCart className="h-4 w-4 text-indigo-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{formatRp(totalSpent)}</div>
-            <p className="text-xs text-muted-foreground mt-1">Pembelian barang dagang yang sudah dijurnal</p>
+            <p className="text-xs text-muted-foreground mt-1">{t('mc_posted_purchase_desc')}</p>
           </CardContent>
         </Card>
 
         <Card className="relative overflow-hidden bg-gradient-to-br from-amber-500/10 to-orange-500/10 border-amber-500/20">
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-medium">Nilai Draft Pembelian</CardTitle>
+            <CardTitle className="text-sm font-medium">{t('mc_draft_purchase_value')}</CardTitle>
             <ArrowLeftRight className="h-4 w-4 text-amber-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">{formatRp(draftSpent)}</div>
-            <p className="text-xs text-muted-foreground mt-1">Menunggu konfirmasi / barang masuk</p>
+            <p className="text-xs text-muted-foreground mt-1">{t('mc_draft_purchase_desc')}</p>
           </CardContent>
         </Card>
 
         <Card className="relative overflow-hidden bg-gradient-to-br from-blue-500/10 to-sky-500/10 border-blue-500/20">
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-            <CardTitle className="text-sm font-medium">Jumlah Transaksi Belanja</CardTitle>
+            <CardTitle className="text-sm font-medium">{t('mc_purchase_tx_count')}</CardTitle>
             <FileSpreadsheet className="h-4 w-4 text-blue-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{totalPurchases}</div>
-            <p className="text-xs text-muted-foreground mt-1">Total nota pembelian tercatat</p>
+            <p className="text-xs text-muted-foreground mt-1">{t('mc_purchase_tx_count_desc')}</p>
           </CardContent>
         </Card>
       </div>
@@ -171,12 +172,12 @@ export default function PurchasingHistory() {
       {/* History Table */}
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-lg">Daftar Nota Pembelian</CardTitle>
+          <CardTitle className="text-lg">{t('mc_purchase_invoice_list')}</CardTitle>
           <div className="flex flex-col gap-3 mt-4 md:flex-row md:items-center justify-between">
             <div className="relative flex-1 max-w-sm">
               <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Cari Supplier, No Ref, atau Keterangan..."
+                placeholder={t('mc_search_supplier_ref')}
                 className="pl-9"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
@@ -184,38 +185,32 @@ export default function PurchasingHistory() {
             </div>
           </div>
         </CardHeader>
-        <CardContent>
-          <div className="relative w-full overflow-auto border rounded-md">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[40px]"></TableHead>
-                  <TableHead className="w-[120px]">Tanggal</TableHead>
-                  <TableHead className="w-[150px]">No. Referensi</TableHead>
-                  <TableHead>Supplier</TableHead>
-                  <TableHead>Keterangan</TableHead>
-                  <TableHead className="text-right">Total Belanja</TableHead>
-                  <TableHead className="text-center w-[120px]">Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading ? (
+        <CardContent className="p-0 border-t">
+          {loading ? (
+            <div className="flex flex-col items-center justify-center py-20 gap-2">
+              <RefreshCw className="h-10 w-10 animate-spin text-primary" />
+              <p className="text-muted-foreground text-sm">{t('mc_loading_purchases')}</p>
+            </div>
+          ) : filteredPurchases.length === 0 ? (
+            <div className="text-center py-16 text-muted-foreground">
+              {t('mc_no_purchases_found')}
+            </div>
+          ) : (
+            <div className="relative w-full overflow-auto">
+              <Table>
+                <TableHeader className="bg-zinc-50/50 dark:bg-zinc-900/40">
                   <TableRow>
-                    <TableCell colSpan={7} className="h-32 text-center">
-                      <div className="flex flex-col items-center justify-center gap-2">
-                        <RefreshCw className="h-6 w-6 animate-spin text-primary" />
-                        <span className="text-muted-foreground text-sm">Memuat riwayat belanja...</span>
-                      </div>
-                    </TableCell>
+                    <TableHead className="w-[40px] py-3"></TableHead>
+                    <TableHead className="w-[120px] py-3 whitespace-nowrap">{t('mc_col_date')}</TableHead>
+                    <TableHead className="w-[150px] py-3">{t('mc_col_ref_no')}</TableHead>
+                    <TableHead className="py-3">{t('mc_col_supplier')}</TableHead>
+                    <TableHead className="py-3">{t('mc_col_description')}</TableHead>
+                    <TableHead className="text-right py-3">{t('mc_col_total_spent')}</TableHead>
+                    <TableHead className="text-center w-[120px] py-3">{t('mc_col_status')}</TableHead>
                   </TableRow>
-                ) : filteredPurchases.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={7} className="h-32 text-center text-muted-foreground">
-                      Tidak ada transaksi pembelian yang ditemukan.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  paginatedPurchases.map(p => {
+                </TableHeader>
+                <TableBody>
+                  {paginatedPurchases.map(p => {
                     const isExpanded = !!expandedRows[p.id];
                     return (
                       <React.Fragment key={p.id}>
@@ -227,10 +222,10 @@ export default function PurchasingHistory() {
                               <ChevronDown className="h-4 w-4 text-muted-foreground" />
                             )}
                           </TableCell>
-                          <TableCell className="font-medium">
+                          <TableCell className="font-medium whitespace-nowrap">
                             <span className="flex items-center gap-1.5 text-sm">
-                              <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
-                              {p.date}
+                              <Calendar className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              {p.date?.split('T')[0] || p.date}
                             </span>
                           </TableCell>
                           <TableCell className="font-mono text-xs font-semibold">{p.refNo}</TableCell>
@@ -252,23 +247,23 @@ export default function PurchasingHistory() {
                             )}
                           </TableCell>
                         </TableRow>
-
+ 
                         {/* Collapsible Detail Row */}
                         {isExpanded && (
                           <TableRow className="bg-muted/20 border-t border-b hover:bg-muted/20">
                             <TableCell colSpan={7} className="p-4">
                               <div className="space-y-3 pl-8">
                                 <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground border-b pb-1">
-                                  <FileText className="h-4 w-4" /> Rincian Barang yang Dibeli
+                                  <FileText className="h-4 w-4" /> {t('mc_purchased_items_detail')}
                                 </div>
                                 <Table className="border rounded-md bg-card">
                                   <TableHeader className="bg-muted/40">
                                     <TableRow>
-                                      <TableHead>Nama Barang</TableHead>
-                                      <TableHead className="text-right w-[100px]">Qty</TableHead>
-                                      <TableHead className="w-[100px]">Satuan</TableHead>
-                                      <TableHead className="text-right w-[150px]">Harga Satuan</TableHead>
-                                      <TableHead className="text-right w-[180px]">Total</TableHead>
+                                      <TableHead>{t('mc_col_product_name')}</TableHead>
+                                      <TableHead className="text-right w-[100px]">{t('mc_plan_col_qty')}</TableHead>
+                                      <TableHead className="w-[100px]">{t('mc_col_uom')}</TableHead>
+                                      <TableHead className="text-right w-[150px]">{t('mc_plan_col_unit_price')}</TableHead>
+                                      <TableHead className="text-right w-[180px]">{t('mc_plan_col_subtotal')}</TableHead>
                                     </TableRow>
                                   </TableHeader>
                                   <TableBody>
@@ -289,12 +284,14 @@ export default function PurchasingHistory() {
                         )}
                       </React.Fragment>
                     );
-                  })
-                )}
-              </TableBody>
-            </Table>
-            <PaginationControls totalItems={filteredPurchases.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
-          </div>
+                  })}
+                </TableBody>
+              </Table>
+              <div className="px-6 py-4 border-t border-zinc-100 dark:border-zinc-800">
+                <PaginationControls totalItems={filteredPurchases.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

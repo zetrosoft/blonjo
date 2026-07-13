@@ -25,7 +25,17 @@ import type { Transaction } from './types';
 
 // ── Helper formatters (pure, tidak bergantung hooks) ────────────────────
 
-const formatDateForInput = (date: Date) => date.toISOString().split('T')[0];
+const formatDateForInput = (date: Date) => {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
+
+const getFirstDayOfMonth = () => {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), 1);
+};
 
 export default function DaftarInputPage() {
   const [currentPage, setCurrentPage] = useState(1);
@@ -37,7 +47,7 @@ export default function DaftarInputPage() {
   const [loading, setLoading]           = useState(true);
   const [searchQuery, setSearchQuery]   = useState('');
   const [typeFilter, setTypeFilter]     = useState('all');
-  const [fromDate, setFromDate]         = useState(formatDateForInput(new Date('2024-01-01')));
+  const [fromDate, setFromDate]         = useState(formatDateForInput(getFirstDayOfMonth()));
   const [toDate, setToDate]             = useState(formatDateForInput(new Date()));
   const [pageSize, setPageSize]         = useState(50);
 
@@ -48,16 +58,18 @@ export default function DaftarInputPage() {
   const loadTransactions = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchClient('/finance/transactions');
+      const data = await fetchClient(`/finance/transactions?start_date=${fromDate}&end_date=${toDate}&limit=${pageSize}`);
       setTransactions(data);
     } catch (err: any) {
       toast.error(t('toast_err_load_transactions', { error: err.message || err }));
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [t, fromDate, toDate, pageSize]);
 
-  useEffect(() => { loadTransactions(); }, [pageSize]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    loadTransactions();
+  }, [loadTransactions]);
 
   const handleViewDetail = useCallback((txId: number) => {
     setDetailTxId(txId);

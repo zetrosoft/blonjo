@@ -64,10 +64,10 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
     const val = e.target.value;
     setStory(val);
     
-    // Check for @ mention
+    // Check for \ (backslash) or item: mention
     const cursor = e.target.selectionStart;
     const textBeforeCursor = val.slice(0, cursor);
-    const match = textBeforeCursor.match(/@([a-zA-Z0-9 ]*)$/);
+    const match = textBeforeCursor.match(/(?:\\|item:)([a-zA-Z0-9 ]*)$/i);
     
     if (match) {
       setShowMention(true);
@@ -114,9 +114,10 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
   const [manualRuleType, setManualRuleType] = useState<'tiered' | 'bundle_multiple' | 'formula'>('tiered');
   
   // Tiered states
-  const [manualTiers, setManualTiers] = useState<Array<{ qty_threshold: number; unit_price: number }>>([
-    { qty_threshold: 5, unit_price: 0 }
+  const [manualTiers, setManualTiers] = useState<Array<{ qty_threshold: number; unit_price: number; unit: string }>>([
+    { qty_threshold: 5, unit_price: 0, unit: 'pcs' }
   ]);
+  const [uoms, setUoms] = useState<any[]>([]);
   
   // Bundle multiple states
   const [manualBasePrice, setManualBasePrice] = useState<number>(0);
@@ -156,10 +157,31 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
     }
   };
 
+  const loadUoms = async () => {
+    try {
+      const data = await fetchClient('/inventory/uoms');
+      if (Array.isArray(data)) {
+        setUoms(data);
+      }
+    } catch (err) {
+      console.error("Failed to load UOMs", err);
+    }
+  };
+
   useEffect(() => {
     loadRules();
     loadProducts();
+    loadUoms();
   }, []);
+
+  useEffect(() => {
+    if (selectedProductId) {
+      const prod = products.find(p => p.id === Number(selectedProductId));
+      if (prod && prod.base_unit) {
+        setManualTiers(prev => prev.map(t => ({ ...t, unit: t.unit || prod.base_unit })));
+      }
+    }
+  }, [selectedProductId, products]);
 
   // Parse helper function
   const performParse = async (textToParse: string) => {
@@ -225,7 +247,7 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
     if (manualRuleType === 'tiered') {
       payload.tiers = manualTiers.map(t => ({
         qty_threshold: Number(t.qty_threshold),
-        unit: prod.base_unit,
+        unit: t.unit || prod.base_unit || 'pcs',
         unit_price: Number(t.unit_price)
       }));
     } else if (manualRuleType === 'bundle_multiple') {
@@ -296,7 +318,7 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
     }
     
     if (ruleType === 'tiered' && payload?.tiers) {
-      setManualTiers(payload.tiers.map((t: any) => ({ qty_threshold: t.qty_threshold, unit_price: t.unit_price })));
+      setManualTiers(payload.tiers.map((t: any) => ({ qty_threshold: t.qty_threshold, unit_price: t.unit_price, unit: t.unit || 'pcs' })));
     } else if (ruleType === 'bundle_multiple' && payload?.bundle_rules) {
       setManualBasePrice(payload.bundle_rules.base_price || 0);
       setManualBundleQty(payload.bundle_rules.bundle_qty || 2);
@@ -322,7 +344,7 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
     if (manualRuleType === 'tiered') {
       payload.tiers = manualTiers.map(t => ({
         qty_threshold: Number(t.qty_threshold),
-        unit: prod.base_unit,
+        unit: t.unit || prod.base_unit || 'pcs',
         unit_price: Number(t.unit_price)
       }));
     } else if (manualRuleType === 'bundle_multiple') {
@@ -434,7 +456,8 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
   const [searchQuery, setSearchQuery] = useState('');
 
   const addTier = () => {
-    setManualTiers([...manualTiers, { qty_threshold: 0, unit_price: 0 }]);
+    const prod = products.find(p => p.id === Number(selectedProductId));
+    setManualTiers([...manualTiers, { qty_threshold: 0, unit_price: 0, unit: prod?.base_unit || 'pcs' }]);
   };
 
   const removeTier = (index: number) => {
@@ -443,8 +466,8 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
     }
   };
 
-  const updateTier = (index: number, key: 'qty_threshold' | 'unit_price', val: number) => {
-    const updated = [...manualTiers];
+  const updateTier = (index: number, key: 'qty_threshold' | 'unit_price' | 'unit', val: any) => {
+    const updated = [...manualTiers] as any[];
     updated[index][key] = val;
     setManualTiers(updated);
   };
@@ -637,6 +660,26 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
                                 onChange={(e) => updateTier(idx, 'qty_threshold', Number(e.target.value))}
                                 className="h-8 text-xs font-mono"
                               />
+                            </div>
+                            <div className="flex-[1.2]">
+                              <select
+                                value={tier.unit || 'pcs'}
+                                onChange={(e) => updateTier(idx, 'unit', e.target.value)}
+                                className="w-full bg-background border border-input rounded-md px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring h-8"
+                              >
+                                {(() => {
+                                  const prod = products.find(p => p.id === Number(selectedProductId));
+                                  const units = new Set<string>();
+                                  if (prod?.base_unit) units.add(prod.base_unit);
+                                  uoms.forEach(u => {
+                                    if (u.code) units.add(u.code);
+                                  });
+                                  if (units.size === 0) units.add('pcs');
+                                  return Array.from(units).map(unit => (
+                                    <option key={unit} value={unit}>{unit}</option>
+                                  ));
+                                })()}
+                              </select>
                             </div>
                             <div className="flex-[1.5]">
                               <Input 
@@ -912,6 +955,26 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
                                 onChange={(e) => updateTier(idx, 'qty_threshold', Number(e.target.value))}
                                 className="h-8 text-xs font-mono"
                               />
+                            </div>
+                            <div className="flex-[1.2]">
+                              <select
+                                value={tier.unit || 'pcs'}
+                                onChange={(e) => updateTier(idx, 'unit', e.target.value)}
+                                className="w-full bg-background border border-input rounded-md px-2 py-1 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring h-8"
+                              >
+                                {(() => {
+                                  const prod = products.find(p => p.id === Number(selectedProductId));
+                                  const units = new Set<string>();
+                                  if (prod?.base_unit) units.add(prod.base_unit);
+                                  uoms.forEach(u => {
+                                    if (u.code) units.add(u.code);
+                                  });
+                                  if (units.size === 0) units.add('pcs');
+                                  return Array.from(units).map(unit => (
+                                    <option key={unit} value={unit}>{unit}</option>
+                                  ));
+                                })()}
+                              </select>
                             </div>
                             <div className="flex-[1.5]">
                               <Input 

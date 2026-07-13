@@ -20,6 +20,8 @@ interface Supplier {
   phone: string;
   address: string;
   outstanding_balance: number;
+  sales_visit_day?: string;
+  sales_visit_interval?: number;
 }
 
 export default function SupplierPage() {
@@ -41,6 +43,54 @@ export default function SupplierPage() {
   const [profileDialogOpen, setProfileDialogOpen] = useState(false);
   const [supplierHistory, setSupplierHistory] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+
+  // States for name edit via similar suppliers dropdown
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [selectedMergeName, setSelectedMergeName] = useState('');
+  const [isUpdatingName, setIsUpdatingName] = useState(false);
+
+  const getSimilarSuppliers = (currentName: string) => {
+    if (!currentName) return [];
+    return suppliers.filter(s => {
+      if (s.id === selectedSupplier?.id) return false;
+      const cNameLower = currentName.toLowerCase();
+      const sNameLower = s.name.toLowerCase();
+      
+      // Kata pecahan
+      const words1 = cNameLower.split(/\s+/).filter(w => w.length > 2);
+      const words2 = sNameLower.split(/\s+/).filter(w => w.length > 2);
+      
+      const hasSimilarWord = words1.some(w => words2.some(w2 => w2.includes(w) || w.includes(w2)));
+      const isSubStr = sNameLower.includes(cNameLower) || cNameLower.includes(sNameLower);
+      
+      return hasSimilarWord || isSubStr;
+    });
+  };
+
+  const handleUpdateSupplierName = async () => {
+    if (!selectedSupplier || !selectedMergeName) return;
+    setIsUpdatingName(true);
+    try {
+      await fetchClient(`/inventory/contacts/${selectedSupplier.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: selectedMergeName,
+          phone: selectedSupplier.phone,
+          address: selectedSupplier.address
+        })
+      });
+      toast.success('Nama pemasok berhasil diperbarui');
+      setSelectedSupplier(prev => prev ? { ...prev, name: selectedMergeName } : null);
+      setIsEditingName(false);
+      loadSuppliers();
+    } catch (err) {
+      console.error(err);
+      toast.error('Gagal memperbarui nama pemasok');
+    } finally {
+      setIsUpdatingName(false);
+    }
+  };
 
   const handleOpenProfile = async (supplier: Supplier) => {
     setSelectedSupplier(supplier);
@@ -68,7 +118,9 @@ export default function SupplierPage() {
     name: '',
     phone: '',
     address: '',
-    current_balance: '0'
+    current_balance: '0',
+    sales_visit_day: '',
+    sales_visit_interval: '7'
   });
 
   const toSentenceCase = (str: string) => {
@@ -89,7 +141,9 @@ export default function SupplierPage() {
           name: supp.name,
           phone: supp.phone || '',
           address: supp.address || '',
-          outstanding_balance: Number(supp.current_balance)
+          outstanding_balance: Number(supp.current_balance),
+          sales_visit_day: supp.sales_visit_day || '',
+          sales_visit_interval: supp.sales_visit_interval || 7
         }));
         setSuppliers(mappedSuppliers);
       } else {
@@ -115,7 +169,9 @@ export default function SupplierPage() {
       name: '',
       phone: '',
       address: '',
-      current_balance: '0'
+      current_balance: '0',
+      sales_visit_day: '',
+      sales_visit_interval: '7'
     });
     setIsDialogOpen(true);
   };
@@ -126,7 +182,9 @@ export default function SupplierPage() {
       name: supplier.name,
       phone: supplier.phone,
       address: supplier.address,
-      current_balance: supplier.outstanding_balance.toString()
+      current_balance: supplier.outstanding_balance.toString(),
+      sales_visit_day: supplier.sales_visit_day || '',
+      sales_visit_interval: (supplier.sales_visit_interval || 7).toString()
     });
     setIsDialogOpen(true);
   };
@@ -145,7 +203,9 @@ export default function SupplierPage() {
         contact_type: 'supplier',
         phone: formData.phone || null,
         address: formData.address || null,
-        current_balance: parseFloat(formData.current_balance) || 0
+        current_balance: parseFloat(formData.current_balance) || 0,
+        sales_visit_day: formData.sales_visit_day || null,
+        sales_visit_interval: parseInt(formData.sales_visit_interval) || 7
       };
 
       if (editingSupplier) {
@@ -375,6 +435,36 @@ export default function SupplierPage() {
                   placeholder="Saldo utang awal..."
                 />
               </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="visit_day">Hari Kunjungan Sales</Label>
+                  <select
+                    id="visit_day"
+                    value={formData.sales_visit_day}
+                    onChange={(e) => setFormData({ ...formData, sales_visit_day: e.target.value })}
+                    className="flex h-10 w-full rounded-md border border-zinc-200 bg-transparent px-3 py-2 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-zinc-400 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-50"
+                  >
+                    <option value="" className="text-zinc-500">Pilih Hari (Opsional)</option>
+                    <option value="Senin">Senin</option>
+                    <option value="Selasa">Selasa</option>
+                    <option value="Rabu">Rabu</option>
+                    <option value="Kamis">Kamis</option>
+                    <option value="Jumat">Jumat</option>
+                    <option value="Sabtu">Sabtu</option>
+                    <option value="Minggu">Minggu</option>
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="visit_interval">Interval Kunjungan (Hari)</Label>
+                  <Input
+                    id="visit_interval"
+                    type="number"
+                    value={formData.sales_visit_interval}
+                    onChange={(e) => setFormData({ ...formData, sales_visit_interval: e.target.value })}
+                    placeholder="Berapa hari sekali..."
+                  />
+                </div>
+              </div>
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
@@ -429,9 +519,58 @@ export default function SupplierPage() {
             <div className="space-y-6 py-4">
               {/* Profile Card */}
               <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800/80 bg-zinc-50 dark:bg-zinc-900/40 grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Nama Pemasok</p>
-                  <p className="text-sm font-bold text-zinc-900 dark:text-zinc-200">{selectedSupplier.name}</p>
+                <div className="col-span-2 md:col-span-1">
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground flex justify-between items-center">
+                    <span>Nama Pemasok</span>
+                    {!isEditingName && (
+                      <button 
+                        onClick={() => {
+                          setIsEditingName(true);
+                          const similar = getSimilarSuppliers(selectedSupplier.name);
+                          if (similar.length > 0) {
+                            setSelectedMergeName(similar[0].name);
+                          } else {
+                            setSelectedMergeName('');
+                          }
+                        }}
+                        className="text-[9px] text-indigo-600 dark:text-indigo-400 hover:underline font-bold"
+                      >
+                        Koreksi Nama
+                      </button>
+                    )}
+                  </p>
+                  {isEditingName ? (
+                    <div className="mt-1 flex items-center gap-1.5">
+                      <select
+                        value={selectedMergeName}
+                        onChange={(e) => setSelectedMergeName(e.target.value)}
+                        className="text-xs bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded p-1 flex-1 max-w-[180px]"
+                      >
+                        <option value="">-- Pilih Nama Terdekat --</option>
+                        {getSimilarSuppliers(selectedSupplier.name).map((s) => (
+                          <option key={s.id} value={s.name}>{s.name}</option>
+                        ))}
+                      </select>
+                      <Button 
+                        size="sm" 
+                        onClick={handleUpdateSupplierName} 
+                        disabled={isUpdatingName || !selectedMergeName}
+                        className="h-7 text-[10px] px-2 py-0"
+                      >
+                        {isUpdatingName ? '...' : 'Simpan'}
+                      </Button>
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        onClick={() => setIsEditingName(false)}
+                        className="h-7 text-[10px] px-2 py-0"
+                      >
+                        Batal
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="text-sm font-bold text-zinc-900 dark:text-zinc-200">{selectedSupplier.name}</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Kode Pemasok</p>
@@ -445,9 +584,17 @@ export default function SupplierPage() {
                   <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Sisa Utang Dagang</p>
                   <p className="text-sm font-black text-rose-600 dark:text-rose-400">{formatRp(selectedSupplier.outstanding_balance)}</p>
                 </div>
+                 <div>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Kunjungan Sales</p>
+                  <p className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
+                    {selectedSupplier.sales_visit_day 
+                      ? `${selectedSupplier.sales_visit_day} (${selectedSupplier.sales_visit_interval} hari sekali)` 
+                      : '-'}
+                  </p>
+                </div>
                 <div className="col-span-2">
                   <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Alamat</p>
-                  <p className="text-xs text-zinc-700 dark:text-zinc-300">{selectedSupplier.address || '-'}</p>
+                  <p className="text-xs text-zinc-770 dark:text-zinc-300">{selectedSupplier.address || '-'}</p>
                 </div>
               </div>
 
@@ -481,7 +628,16 @@ export default function SupplierPage() {
           )}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setProfileDialogOpen(false)} className="text-xs">Tutup</Button>
+            <Button 
+              variant="outline" 
+              onClick={() => {
+                setProfileDialogOpen(false);
+                setIsEditingName(false);
+              }} 
+              className="text-xs"
+            >
+              Tutup
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

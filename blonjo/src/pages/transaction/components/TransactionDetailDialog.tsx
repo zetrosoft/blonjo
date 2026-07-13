@@ -39,9 +39,14 @@ export function TransactionDetailDialog({
   const [isEditing, setIsEditing] = useState(false);
   const [editItems, setEditItems] = useState<any[]>([]);
 
+  const [isRescheduling, setIsRescheduling] = useState(false);
+  const [newDueDate, setNewDueDate] = useState('');
+  const [savingDueDate, setSavingDueDate] = useState(false);
+
   const loadDetail = useCallback(async (id: number) => {
     setLoadingDetail(true);
     setIsEditing(false);
+    setIsRescheduling(false);
     try {
       const data = await fetchClient(`/finance/transactions/${id}`);
       setSelectedTx(data);
@@ -59,8 +64,29 @@ export function TransactionDetailDialog({
     } else {
       setSelectedTx(null);
       setIsEditing(false);
+      setIsRescheduling(false);
     }
   }, [isOpen, txId, loadDetail]);
+
+  const handleSaveDueDate = async () => {
+    if (!selectedTx || !newDueDate) return;
+    setSavingDueDate(true);
+    try {
+      await fetchClient(`/finance/transactions/${selectedTx.id}/reschedule`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ due_date: newDueDate })
+      });
+      toast.success("Jadwal jatuh tempo berhasil diperbarui!");
+      setIsRescheduling(false);
+      onSuccess();
+      loadDetail(selectedTx.id);
+    } catch (err: any) {
+      toast.error(err.message || "Gagal mengubah tanggal jatuh tempo");
+    } finally {
+      setSavingDueDate(false);
+    }
+  };
 
   const handleDelete = useCallback(async () => {
     if (!txId) return;
@@ -317,6 +343,55 @@ export function TransactionDetailDialog({
                   <span className="font-mono text-zinc-900 dark:text-zinc-100">
                     {selectedTx.transaction_date}
                   </span>
+                </div>
+                {/* Due Date section with Edit */}
+                <div className="flex items-center gap-2.5 text-zinc-500 dark:text-zinc-400 text-xs">
+                  <CalendarDays className="w-4 h-4 text-rose-500/70" />
+                  <span className="font-semibold text-zinc-700 dark:text-zinc-300">
+                    Jatuh Tempo:
+                  </span>
+                  {isRescheduling ? (
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="date"
+                        value={newDueDate}
+                        onChange={(e) => setNewDueDate(e.target.value)}
+                        className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-[10px] rounded p-1 outline-none text-zinc-950 dark:text-zinc-100"
+                      />
+                      <Button
+                        onClick={handleSaveDueDate}
+                        disabled={savingDueDate}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white h-6 px-2 text-[10px] font-bold"
+                      >
+                        {savingDueDate ? '...' : 'Simpan'}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        onClick={() => setIsRescheduling(false)}
+                        className="h-6 px-1.5 text-[10px]"
+                      >
+                        Batal
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-bold text-rose-600 dark:text-rose-400">
+                        {selectedTx.due_date || '-'}
+                      </span>
+                      {selectedTx.transaction_type === 'purchase' && selectedTx.payment_method !== 'lunas' && (
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setNewDueDate(selectedTx.due_date || selectedTx.transaction_date);
+                            setIsRescheduling(true);
+                          }}
+                          className="h-5 px-1.5 text-[9px] border-zinc-200 text-zinc-700 dark:text-zinc-300"
+                        >
+                          Ubah
+                        </Button>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-2.5 text-zinc-500 dark:text-zinc-400 text-xs">
                   <Receipt className="w-4 h-4 text-primary/70" />

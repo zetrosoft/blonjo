@@ -8,3 +8,4 @@ from app.models.accounting import Account, Transaction, JournalEntry
 from app.models.inventory import Product, Contact, InventoryLog, Uom, PurchasePlan, PurchasePlanItem, StockDiscard
 from app.models.ocr import OCRTask, OCRFeedback
 from app.models.log import AIParsingLog, AIModelQuota
+from app.models.cashflow import CashflowProjectionSnapshot

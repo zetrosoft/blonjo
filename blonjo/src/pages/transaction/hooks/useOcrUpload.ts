@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
-import { fetchClient } from '../../../api/client';
+import { fetchClient, ApiError } from '../../../api/client';
 import { parseNoteText, type ParsedTransaction } from '../../../lib/smartParser';
 
 /**
@@ -31,9 +31,7 @@ export function useOcrUpload(
 
     pollRef.current = setInterval(async () => {
       try {
-        const tasks = await fetchClient('/ocr/tasks');
-        const task = tasks.find((t: any) => t.id === taskId);
-        if (!task) return;
+        const task = await fetchClient(`/ocr/tasks/${taskId}`);
 
         if (task.status === 'completed' || task.status === 'corrected') {
           stopPolling();
@@ -68,6 +66,7 @@ export function useOcrUpload(
           toast.error('OCR Gagal', { description: task.error_message || 'Gagal mengekstrak data struk.' });
         }
       } catch (err) {
+        if (err instanceof ApiError && err.status === 404) return; // task belum ready, skip iteration
         console.error('[useOcrUpload] Polling error:', err);
       }
     }, 2000);

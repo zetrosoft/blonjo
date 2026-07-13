@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -8,15 +8,18 @@ from app.models.inventory import PurchasePlan, StockDiscard
 from app.schemas.material_control import (
     PurchasePlanCreate, PurchasePlanResponse,
     StockDiscardCreate, StockDiscardResponse,
-    CashflowProjectionItem
+    CashflowProjectionItem, PurchasePlanExecuteRequest
 )
 from app.services.material_control import (
     get_replenishment_recommendations,
     list_purchase_plans,
     create_purchase_plan,
     approve_purchase_plan,
+    delete_purchase_plan,
     record_stock_discard,
-    generate_cashflow_projection
+    generate_cashflow_projection,
+    execute_purchase_plan_items,
+    get_projection_accuracy
 )
 
 router = APIRouter()
@@ -53,13 +56,15 @@ def get_purchase_plans(
                 "id": it.id,
                 "purchase_plan_id": it.purchase_plan_id,
                 "product_id": it.product_id,
-                "product_name": it.product.name,
-                "sku": it.product.sku,
+                "custom_product_name": it.custom_product_name,
+                "product_name": it.product.name if it.product else it.custom_product_name,
+                "sku": it.product.sku if it.product else "N/A",
                 "supplier_contact_id": it.supplier_contact_id,
                 "supplier_name": it.supplier.name if it.supplier else None,
                 "qty": it.qty,
                 "unit_price": it.unit_price,
-                "subtotal": it.subtotal
+                "subtotal": it.subtotal,
+                "is_purchased": it.is_purchased
             })
         results.append({
             "id": plan.id,
@@ -92,13 +97,15 @@ def create_new_purchase_plan(
             "id": it.id,
             "purchase_plan_id": it.purchase_plan_id,
             "product_id": it.product_id,
-            "product_name": it.product.name,
-            "sku": it.product.sku,
+            "custom_product_name": it.custom_product_name,
+            "product_name": it.product.name if it.product else it.custom_product_name,
+            "sku": it.product.sku if it.product else "N/A",
             "supplier_contact_id": it.supplier_contact_id,
             "supplier_name": it.supplier.name if it.supplier else None,
             "qty": it.qty,
             "unit_price": it.unit_price,
-            "subtotal": it.subtotal
+            "subtotal": it.subtotal,
+            "is_purchased": it.is_purchased
         })
     return {
         "id": plan.id,
@@ -131,14 +138,17 @@ def approve_pending_purchase_plan(
             "id": it.id,
             "purchase_plan_id": it.purchase_plan_id,
             "product_id": it.product_id,
-            "product_name": it.product.name,
-            "sku": it.product.sku,
+            "custom_product_name": it.custom_product_name,
+            "product_name": it.product.name if it.product else it.custom_product_name,
+            "sku": it.product.sku if it.product else "N/A",
             "supplier_contact_id": it.supplier_contact_id,
             "supplier_name": it.supplier.name if it.supplier else None,
             "qty": it.qty,
             "unit_price": it.unit_price,
-            "subtotal": it.subtotal
+            "subtotal": it.subtotal,
+            "is_purchased": it.is_purchased
         })
+
     return {
         "id": plan.id,
         "tenant_id": plan.tenant_id,
@@ -150,6 +160,73 @@ def approve_pending_purchase_plan(
         "created_at": plan.created_at,
         "items": items_mapped
     }
+
+
+@router.post("/purchase-plans/{plan_id}/execute", response_model=PurchasePlanResponse)
+def execute_pending_purchase_plan(
+    plan_id: int,
+    req_body: PurchasePlanExecuteRequest,
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    """
+    Mark specific items inside a purchase plan as purchased.
+    Optionally transition the plan status to COMPLETED.
+    """
+    plan = execute_purchase_plan_items(
+        db=session, 
+        tenant_id=current_user.tenant_id, 
+        plan_id=plan_id,
+        purchased_item_ids=req_body.purchased_item_ids,
+        complete_plan=req_body.complete_plan
+    )
+    if not plan:
+        raise HTTPException(status_code=404, detail="Purchase plan not found")
+
+    items_mapped = []
+    for it in plan.items:
+        items_mapped.append({
+            "id": it.id,
+            "purchase_plan_id": it.purchase_plan_id,
+            "product_id": it.product_id,
+            "custom_product_name": it.custom_product_name,
+            "product_name": it.product.name if it.product else it.custom_product_name,
+            "sku": it.product.sku if it.product else "N/A",
+            "supplier_contact_id": it.supplier_contact_id,
+            "supplier_name": it.supplier.name if it.supplier else None,
+            "qty": it.qty,
+            "unit_price": it.unit_price,
+            "subtotal": it.subtotal,
+            "is_purchased": it.is_purchased
+        })
+
+    return {
+        "id": plan.id,
+        "tenant_id": plan.tenant_id,
+        "status": plan.status,
+        "send_via_wa": plan.send_via_wa,
+        "send_via_email": plan.send_via_email,
+        "total_amount": plan.total_amount,
+        "planned_date": plan.planned_date,
+        "created_at": plan.created_at,
+        "items": items_mapped
+    }
+
+
+@router.delete("/purchase-plans/{plan_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_existing_purchase_plan(
+    plan_id: int,
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    """
+    Delete a purchase plan proposal.
+    """
+    success = delete_purchase_plan(db=session, tenant_id=current_user.tenant_id, plan_id=plan_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Purchase plan not found")
+    return
+
 
 # ─── STOCK DISCARD ENDPOINTS (WASTE TRACKING) ─────────────────────
 
@@ -183,5 +260,20 @@ def get_cashflow_projection(
 ):
     """
     Fetch a linear 30-day daily cashflow projection based on average sales, ROP plans, and debt due dates.
+    Saves snapshot automatically for later accuracy comparison.
     """
     return generate_cashflow_projection(db=session, tenant_id=current_user.tenant_id)
+
+
+@router.get("/cashflow-projection/accuracy", response_model=List[dict])
+def get_cashflow_accuracy(
+    session: SessionDep,
+    current_user: CurrentUser,
+    days: int = Query(default=30, ge=1, le=90, description="Jumlah hari ke belakang untuk dievaluasi")
+):
+    """
+    Compare projected vs actual cashflow for past days.
+    Actual values are lazily filled from POSTED transactions.
+    Returns accuracy percentage per day.
+    """
+    return get_projection_accuracy(db=session, tenant_id=current_user.tenant_id, days=days)

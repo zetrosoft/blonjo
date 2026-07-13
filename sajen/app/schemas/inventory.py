@@ -96,6 +96,8 @@ class ContactBase(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
     current_balance: Decimal = Field(default=Decimal('0.00'))
+    sales_visit_day: Optional[str] = None
+    sales_visit_interval: Optional[int] = 7
 
 class ContactCreate(ContactBase):
     pass
@@ -106,11 +108,13 @@ class ContactUpdate(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
     current_balance: Optional[Decimal] = None
+    sales_visit_day: Optional[str] = None
+    sales_visit_interval: Optional[int] = None
 
 class ContactResponse(ContactBase):
     id: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -158,3 +162,7 @@ class UomResponse(UomBase):
     id: int
     
     model_config = ConfigDict(from_attributes=True)
+
+class StockAdjustRequest(BaseModel):
+    qty: float
+    notes: str

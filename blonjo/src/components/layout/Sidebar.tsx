@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { LayoutDashboard, ReceiptText, ShoppingCart, TrendingUp, Settings, BookOpen, PieChart, ChevronLeft, ChevronRight, ChevronDown, ChartBar, Package, Users, User, Ruler, Plus, History, Store, Shield, Mic2, Wand2, ShieldCheck, FileText, Receipt, Scale, Landmark, Wallet, GitBranch, Boxes, Tag, DollarSign } from 'lucide-react';
+import { LayoutDashboard, ReceiptText, ShoppingCart, TrendingUp, Settings, BookOpen, PieChart, ChevronLeft, ChevronRight, ChevronDown, ChartBar, Package, Users, User, Ruler, Plus, History, Store, Shield, Mic2, Wand2, ShieldCheck, FileText, Receipt, Scale, Landmark, Wallet, GitBranch, Boxes, Tag, DollarSign, AlertTriangle, BarChart2, Compass } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { useTheme } from '../theme-provider';
@@ -69,7 +69,11 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         { label: 'menu_inventory_control', path: '/material-control/inventory', icon: Package },
         { label: 'menu_purchasing_history', path: '/material-control/purchases', icon: History },
         { label: 'menu_stock_level', path: '/material-control/stock-level', icon: TrendingUp },
-        { label: 'menu_recommended_purchase', path: '/material-control/recommended', icon: ShoppingCart }
+        { label: 'menu_recommended_purchase', path: '/material-control/recommended', icon: ShoppingCart },
+        { label: 'menu_purchase_plan_form', path: '/material-control/purchase-plan', icon: FileText },
+        { label: 'menu_budgeting', path: '/material-control/budgeting', icon: DollarSign },
+        { label: 'menu_waste', path: '/material-control/waste', icon: AlertTriangle },
+        { label: 'menu_projection_accuracy', path: '/material-control/projection-accuracy', icon: BarChart2 }
       ]
     },
     {
@@ -84,7 +88,16 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         { label: 'menu_cash_flow', path: '/reports/cash-flow', icon: Wallet }
       ]
     },
-    { icon: TrendingUp, label: 'menu_insights', path: '/insights' },
+    {
+      icon: TrendingUp,
+      label: 'menu_insights',
+      path: '/insights',
+      subItems: [
+        { label: '💬 Vibes Chat', path: '/insights/vibes-chat', icon: Wand2 },
+        { label: '📊 Analitik Visual', path: '/insights/analytics', icon: BarChart2 },
+        { label: '🌐 Market Intelligence', path: '/insights/market-intelligence', icon: Compass }
+      ]
+    },
     {
       icon: Settings,
       label: 'menu_settings',
@@ -103,7 +116,6 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         { label: 'menu_journal_mapping', path: '/master-data/journal-mapping', icon: GitBranch },
         { label: 'menu_coa', path: '/coa', icon: BookOpen }
       ]
-
     }
   ];
 
@@ -120,6 +132,8 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       setExpandedMenus(prev => ({ ...prev, '/material-control': true }));
     } else if (path.startsWith('/master-data')) {
       setExpandedMenus(prev => ({ ...prev, '/master-data': true }));
+    } else if (path.startsWith('/insights')) {
+      setExpandedMenus(prev => ({ ...prev, '/insights': true }));
     }
   }, [location.pathname]);
 

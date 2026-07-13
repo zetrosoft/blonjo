@@ -15,11 +15,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../../components/ui/alert-dialog";
-import { Wand2, Upload, FileText, CheckCircle, Eye, Edit3, Loader2, Trash2, Calendar, BarChart3 } from 'lucide-react';
+import { Wand2, Upload, FileText, CheckCircle, Eye, Edit3, Loader2, Trash2, Calendar, BarChart3, Camera } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '../../lib/utils';
 import { VoiceRecorder } from '../../components/VoiceRecorder';
 import { fetchClient } from '../../api/client';
+import { CameraModal } from '../../components/CameraModal';
 
 // Simple Markdown Table Renderer to avoid react-markdown import issues in Docker
 const renderSimpleTable = (md: string) => {
@@ -76,11 +77,12 @@ export default function AITrainingSettings() {
   const [rawOcrText, setRawOcrText] = useState('');
   const [isRawOcrDialogOpen, setIsRawOcrDialogOpen] = useState(false);
   const [isEditingResult, setIsEditingResult] = useState(false);
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | number | null>(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
-  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | number | null>(null);
   const [trainingTemplates, setTrainingTemplates] = useState<any[]>([]);
   const [isLoadingList, setIsLoadingList] = useState(false);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -137,10 +139,7 @@ export default function AITrainingSettings() {
     setInstructions(text);
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = e.target.files?.[0];
-    if (!selectedFile) return;
-
+  const processFileDirectly = async (selectedFile: File) => {
     setFile(selectedFile);
     
     // 1. UI Preview
@@ -178,6 +177,12 @@ export default function AITrainingSettings() {
         setIsExtracting(false);
       }
     }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (!selectedFile) return;
+    await processFileDirectly(selectedFile);
   };
 
   const handleProcess = async () => {
@@ -267,16 +272,20 @@ export default function AITrainingSettings() {
               <CardTitle className="text-xl">{t('ai_training_new_material')}</CardTitle>
               <p className="text-sm text-muted-foreground mt-1">{t('ai_training_new_material_desc')}</p>
             </div>
-            <div className="col-span-1 flex justify-end">
+            <div className="col-span-1 flex justify-end gap-2">
               <Input 
                 type="file" 
                 ref={fileInputRef} 
                 className="hidden" 
                 onChange={handleFileUpload}
               />
-              <Button onClick={() => fileInputRef.current?.click()} className="w-full max-w-[200px] gap-2" disabled={isExtracting}>
+              <Button onClick={() => fileInputRef.current?.click()} className="w-full max-w-[150px] gap-2" disabled={isExtracting}>
                 {isExtracting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
                 {isExtracting ? "Extracting..." : t('btn_upload_file')}
+              </Button>
+              <Button onClick={() => setIsCameraOpen(true)} className="w-full max-w-[120px] gap-2" variant="outline" disabled={isExtracting}>
+                <Camera className="w-4 h-4" />
+                Kamera
               </Button>
             </div>
           </div>
@@ -537,6 +546,13 @@ export default function AITrainingSettings() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <CameraModal
+        isOpen={isCameraOpen}
+        onClose={() => setIsCameraOpen(false)}
+        onPhotoCaptured={(file) => processFileDirectly(file)}
+        onBarcodeScanned={() => {}}
+      />
     </div>
   );
 }

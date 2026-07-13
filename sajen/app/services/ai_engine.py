@@ -9,14 +9,12 @@ from sqlalchemy.orm import Session
 from app.models.log import AIModelQuota
 from datetime import datetime
 
-# UPDATED Priority list based on live Model Service list (June 2026)
-# Standard Free Tier (Google AI Studio) limits applied
+# UPDATED Priority list — verified June 2026
 GEMINI_MODELS = [
-    {"name": "gemini-3.1-flash-lite", "limit": 1500}, # Top priority: Fastest & High RPD
-    {"name": "gemini-3-flash", "limit": 1000},      # Smart & Reliable
-    {"name": "gemini-2.5-flash", "limit": 500},       # Stable production choice
-    {"name": "gemini-1.5-flash", "limit": 1500},      # Legacy safety fallback
-    {"name": "gemini-2.5-pro", "limit": 50},         # High reasoning but very low quota
+    {"name": "gemini-2.5-flash", "limit": 500},        # Primary: Fast & reliable
+    {"name": "gemini-2.0-flash", "limit": 1500},       # Fallback: High RPD
+    {"name": "gemini-2.0-flash-lite", "limit": 1500},  # Budget fallback
+    {"name": "gemini-2.5-pro", "limit": 50},           # High reasoning, low quota
 ]
 
 def _clean_json_output(raw_text: str) -> str:
@@ -291,6 +289,64 @@ def call_ai_text(db: Session, prompt: str, system_instruction: str = None, tempe
         "error": "All AI models failed",
         "raw_output": ""
     }
+
+
+def call_ai_freetext(db: Session, prompt: str, system_instruction: str = None, temperature: float = 0.3) -> dict:
+    """
+    AI caller yang mengembalikan teks BEBAS (Markdown, narasi, dll) tanpa memaksa parse JSON.
+    Digunakan untuk endpoint yang output-nya bukan JSON, contohnya training templates process.
+    """
+    # --- 1. Try Ollama (Local -> Fallback) ---
+    client, active_host = _get_ollama_client()
+    if client:
+        model_to_use = _get_best_model_name(client, settings.OLLAMA_LLM_MODEL)
+        processor = f"ollama-{model_to_use}"
+        try:
+            full_prompt = f"{system_instruction}\n\n{prompt}" if system_instruction else prompt
+            response = client.generate(
+                model=model_to_use,
+                prompt=full_prompt,
+                stream=False,
+                options={"temperature": temperature}
+            )
+            raw_output = response.get('response', '').strip()
+            if raw_output:
+                _track_quota(db, processor, response.get('prompt_eval_count', 0) + response.get('eval_count', 0))
+                return {"raw_output": raw_output, "processor": f"{processor} ({active_host})"}
+        except Exception as e_ollama:
+            print(f"Ollama freetext failed on {active_host}: {e_ollama}. Falling back to Gemini...")
+
+    # --- 2. Try Gemini (Iterative Switching) ---
+    if settings.GOOGLE_API_KEY:
+        client = genai.Client(api_key=settings.GOOGLE_API_KEY)
+        for model_info in GEMINI_MODELS:
+            model_name = model_info["name"]
+            try:
+                print(f"Attempting freetext AI with model: {model_name}...")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config={
+                        "system_instruction": system_instruction,
+                        "temperature": temperature
+                    }
+                )
+                raw_output = response.text.strip() if response.text else ""
+                if raw_output:
+                    token_in = len(prompt.split())
+                    token_out = len(raw_output.split())
+                    _track_quota(db, model_name, token_in + token_out)
+                    return {"raw_output": raw_output, "processor": model_name}
+            except Exception as e_gemini:
+                err_msg = str(e_gemini).lower()
+                if any(kw in err_msg for kw in ["429", "quota", "exhausted", "404", "not_found"]):
+                    print(f"Gemini {model_name} failed (freetext): {e_gemini}, switching to next...")
+                    continue
+                else:
+                    print(f"Gemini Critical Error ({model_name}) freetext: {e_gemini}")
+                    break
+
+    return {"raw_output": "", "processor": "error"}
 
 
 def parse_pricing_rule(db: Session, text: str) -> dict:

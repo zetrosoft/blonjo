@@ -18,10 +18,12 @@ from app.schemas.inventory import (
     InventoryLogCreate, InventoryLogResponse,
     ContactCreate, ContactResponse, ContactUpdate,
     TenantPricingRuleCreate, TenantPricingRuleResponse,
-    UomCreate, UomResponse, UomUpdate
+    UomCreate, UomResponse, UomUpdate,
+    StockAdjustRequest
 )
 from app.services.ai_engine import get_embedding
 from app.models.setting import AppSetting
+from app.services.inventory import InventoryService
 
 # Logger setup
 logger = logging.getLogger("sajen.inventory")
@@ -60,8 +62,9 @@ def create_category(
 @router.get("/products", response_model=List[ProductResponse])
 def get_products(
     session: SessionDep,
+    current_user: CurrentUser,
     skip: int = 0,
-    limit: int = 50,
+    limit: int = 1000,
     search: Optional[str] = None,
     category_id: Optional[int] = None
 ):
@@ -85,7 +88,7 @@ def get_products(
             "unit_conversions": p.unit_conversions,
             "purchase_price": p.tenant_inventories[0].moving_average_cost if p.tenant_inventories else 0.0,
             "sell_price": p.tenant_prices[0].amount if p.tenant_prices else 0.0,
-            "current_stock": p.tenant_inventories[0].static_stock if p.tenant_inventories else 0.0,
+            "current_stock": float(InventoryService.get_stock_level(session, current_user.tenant_id, p.id)),
             "has_transactions": len(p.inventory_logs) > 0,
         }
         results.append(p_dict)
@@ -146,6 +149,59 @@ def delete_product(
     session.delete(db_product)
     session.commit()
     return None
+
+@router.post("/products/{sku}/adjust-stock")
+def adjust_product_stock(
+    sku: str,
+    adjust_in: StockAdjustRequest,
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    from datetime import date
+    from decimal import Decimal
+    from app.models.accounting import Transaction, TransactionType, TransactionStatus
+    
+    product = session.query(Product).filter(Product.sku == sku).first()
+    if not product:
+        raise HTTPException(status_code=404, detail=f"Product with sku {sku} not found")
+        
+    qty = adjust_in.qty
+    log_type = "in" if qty >= 0 else "out"
+    abs_qty = abs(qty)
+    
+    # Create dummy posted transaction for this tenant
+    tx = Transaction(
+        tenant_id=current_user.tenant_id,
+        transaction_date=date.today(),
+        description=adjust_in.notes or f"Penyesuaian Stok: {product.name}",
+        transaction_type=TransactionType.MANUAL,
+        status=TransactionStatus.POSTED,
+        total_amount=Decimal("0.00")
+    )
+    session.add(tx)
+    session.flush()
+    
+    # Create inventory log
+    log = InventoryLog(
+        product_id=product.id,
+        transaction_id=tx.id,
+        quantity=Decimal(str(abs_qty)),
+        price_per_unit=Decimal("0.00"),
+        log_type=log_type
+    )
+    session.add(log)
+    
+    # Update static stock if maintenance is on
+    InventoryService.update_stock_after_transaction(
+        db=session,
+        tenant_id=current_user.tenant_id,
+        product_id=product.id,
+        qty_change=Decimal(str(abs_qty)),
+        log_type=log_type
+    )
+    
+    session.commit()
+    return {"status": "success", "new_stock": float(InventoryService.get_stock_level(session, current_user.tenant_id, product.id))}
 
 # ==========================================
 # UNIT CONVERSION ENDPOINTS (GLOBAL)
@@ -212,8 +268,8 @@ def get_my_catalog(session: SessionDep, current_user: CurrentUser):
             "hpp": float(t_inv.moving_average_cost) if t_inv else 0.0,
             "purchase_price": float(t_inv.moving_average_cost) if t_inv else 0.0,
             "sell_price": float(t_price.amount) if t_price else 0.0,
-            "stock": float(t_inv.static_stock) if t_inv else 0.0,
-            "current_stock": float(t_inv.static_stock) if t_inv else 0.0,
+            "stock": float(InventoryService.get_stock_level(session, current_user.tenant_id, p.id)),
+            "current_stock": float(InventoryService.get_stock_level(session, current_user.tenant_id, p.id)),
             "has_transactions": len(p.inventory_logs) > 0,
             "auto_adjusted": t_price.auto_adjusted if t_price else False,
             "pricing_rule": {
@@ -329,7 +385,37 @@ def get_contacts(
     query = session.query(Contact).filter(Contact.tenant_id == current_user.tenant_id)
     if contact_type:
         query = query.filter(Contact.contact_type == contact_type)
-    return query.order_by(Contact.name).offset(skip).limit(limit).all()
+    
+    contacts = query.order_by(Contact.name).offset(skip).limit(limit).all()
+    
+    # Hitung sisa hutang dinamis untuk supplier
+    from app.models.accounting import Transaction, TransactionType
+    from app.models.inventory import InventoryLog
+    from sqlalchemy import func, or_
+    
+    for c in contacts:
+        if c.contact_type == "supplier":
+            # Dapatkan list transaction ID unik untuk supplier ini
+            tx_ids_sub = session.query(InventoryLog.transaction_id)\
+                .filter(InventoryLog.contact_id == c.id, InventoryLog.transaction_id.isnot(None))\
+                .distinct()\
+                .subquery()
+                
+            # Jumlahkan total nominal transaksi PURCHASE yang belum lunas
+            unpaid_total = session.query(func.sum(Transaction.total_amount))\
+                .filter(
+                    Transaction.id.in_(tx_ids_sub),
+                    Transaction.tenant_id == current_user.tenant_id,
+                    Transaction.transaction_type == TransactionType.PURCHASE,
+                    or_(
+                        Transaction.payment_method.is_(None),
+                        Transaction.payment_method != "lunas"
+                    )
+                ).scalar()
+            
+            c.current_balance = unpaid_total if unpaid_total is not None else 0.0
+            
+    return contacts
 
 @router.post("/contacts", response_model=ContactResponse, status_code=status.HTTP_201_CREATED)
 def create_contact(contact_in: ContactCreate, session: SessionDep, current_user: CurrentUser):
@@ -346,6 +432,8 @@ def update_contact(
     session: SessionDep,
     current_user: CurrentUser
 ):
+    from app.models.inventory import PurchasePlanItem
+    
     db_contact = session.query(Contact).filter(
         Contact.id == contact_id,
         Contact.tenant_id == current_user.tenant_id
@@ -353,8 +441,46 @@ def update_contact(
     if not db_contact:
         raise HTTPException(status_code=404, detail="Kontak tidak ditemukan")
     
+    new_name = contact_in.name
+    if new_name and new_name.strip() != db_contact.name:
+        # Cek jika ada kontak lain dengan nama sama (tipe sama, tenant sama)
+        target_contact = session.query(Contact).filter(
+            Contact.tenant_id == current_user.tenant_id,
+            Contact.name == new_name.strip(),
+            Contact.contact_type == db_contact.contact_type,
+            Contact.id != contact_id
+        ).first()
+        
+        if target_contact:
+            # Lakukan Merger Otomatis ke target_contact!
+            # 1. Alihkan log inventaris
+            session.query(InventoryLog).filter(InventoryLog.contact_id == contact_id).update(
+                {InventoryLog.contact_id: target_contact.id}
+            )
+            # 2. Alihkan preferred supplier produk di TenantInventory
+            from app.models.inventory import TenantInventory
+            session.query(TenantInventory).filter(TenantInventory.preferred_supplier_id == contact_id).update(
+                {TenantInventory.preferred_supplier_id: target_contact.id}
+            )
+            # 3. Alihkan item rencana pembelian
+            session.query(PurchasePlanItem).filter(PurchasePlanItem.supplier_contact_id == contact_id).update(
+                {PurchasePlanItem.supplier_contact_id: target_contact.id}
+            )
+            
+            # 4. Jumlahkan sisa saldo utang/piutang
+            target_contact.current_balance += db_contact.current_balance
+            
+            # 5. Hapus kontak lama duplikat
+            session.delete(db_contact)
+            session.commit()
+            session.refresh(target_contact)
+            return target_contact
+
+    # Proses update biasa jika tidak ada tabrakan nama
     update_data = contact_in.model_dump(exclude_unset=True)
     for field, value in update_data.items():
+        if field == "name" and value:
+            value = value.strip()
         setattr(db_contact, field, value)
     
     session.add(db_contact)
@@ -368,12 +494,27 @@ def delete_contact(
     session: SessionDep,
     current_user: CurrentUser
 ):
+    from app.models.inventory import PurchasePlanItem
+    
     db_contact = session.query(Contact).filter(
         Contact.id == contact_id,
         Contact.tenant_id == current_user.tenant_id
     ).first()
     if not db_contact:
         raise HTTPException(status_code=404, detail="Kontak tidak ditemukan")
+    
+    # Periksa apakah kontak digunakan di log inventaris (transaksi stock)
+    log_exists = session.query(InventoryLog).filter(InventoryLog.contact_id == contact_id).first()
+    # Periksa apakah digunakan sebagai supplier utama di produk
+    prod_exists = session.query(Product).filter(Product.preferred_supplier_id == contact_id).first()
+    # Periksa apakah digunakan di rencana pembelian
+    plan_exists = session.query(PurchasePlanItem).filter(PurchasePlanItem.supplier_contact_id == contact_id).first()
+    
+    if log_exists or prod_exists or plan_exists:
+        raise HTTPException(
+            status_code=400,
+            detail="Kontak tidak dapat dihapus karena telah digunakan dalam riwayat transaksi atau katalog produk."
+        )
     
     session.delete(db_contact)
     session.commit()
@@ -643,7 +784,7 @@ def get_public_stock(phone: str, query: str, session: SessionDep):
             "sku": p.sku,
             "base_unit": p.base_unit,
             "sell_price": float(t_price.amount) if t_price else 0.0,
-            "stock": float(t_inv.static_stock) if t_inv else 0.0,
+            "stock": float(InventoryService.get_stock_level(session, tenant_id, p.id)),
             "pricing_matrix": rules_payload
         })
         

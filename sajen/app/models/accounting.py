@@ -83,6 +83,17 @@ class Transaction(Base):
     entries = relationship("JournalEntry", back_populates="transaction", cascade="all, delete-orphan")
     inventory_logs = relationship("InventoryLog", back_populates="transaction", cascade="all, delete-orphan")
 
+    @property
+    def contact(self):
+        """
+        Reverse lookup to find the primary contact (supplier/customer) from associated inventory logs.
+        """
+        if self.inventory_logs:
+            for log in self.inventory_logs:
+                if log.contact_id:
+                    return log.contact
+        return None
+
     # Prevent duplicate reference numbers for the same tenant
     __table_args__ = (
         UniqueConstraint("tenant_id", "reference_no", name="uq_transaction_tenant_ref"),

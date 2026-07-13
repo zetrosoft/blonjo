@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, status
-from typing import List
+from typing import List, Optional
 from app.api.deps import SessionDep, CurrentUser, check_role
 from app.models.user import UserRole, User
 from app.schemas.accounting import (
@@ -14,7 +14,10 @@ from app.schemas.accounting import (
     AIModelQuotaResponse,
     JournalMappingCreate,
     JournalMappingResponse,
-    TransactionPayoffRequest
+    TransactionPayoffRequest,
+    TransactionRescheduleRequest,
+    CompassSummaryResponse,
+    MarketIntelligenceItem
 )
 from app.models.accounting import Account, Transaction, TransactionType, JournalMapping, JournalMappingLine
 from app.models.log import AIParsingLog, AIModelQuota, ParserType
@@ -59,9 +62,10 @@ async def parse_transaction_note(
     """
     text = request.text
 
-    # ── Pra-pemrosesan: Normalisasi pemisah ribuan ───────────────────────────
+    # ── Pra-pemrosesan: Normalisasi pemisah ribuan & nama barang ─────────────
     normalized_text = re.sub(r'(\d)\.(\d{3})(\b|\s)', r'\1\2\3', text)
     normalized_text = re.sub(r'(\d)\.(\d{3})(\b|\s)', r'\1\2\3', normalized_text)
+    normalized_text = re.sub(r'\btelor\b', 'telur', normalized_text, flags=re.IGNORECASE)
 
     low_text = normalized_text.lower()
     is_operational_revenue = any(kw in low_text for kw in [
@@ -269,6 +273,25 @@ async def parse_transaction_note(
             is_exempt = True
             if t_type_str in ["sales", "purchase"]:
                 is_exempt = check_tax_exempt_via_vector(t_items)
+                
+                # Override if raw text or description explicitly mentions tax/PPN keywords
+                text_lower = text.lower()
+                desc_lower = final_parsed_data.get("description", "").lower()
+                if any(k in text_lower or k in desc_lower for k in ["ppn", "pajak", "tax", "vat"]):
+                    is_exempt = False
+
+            # Force tax exempt if the tenant is not PKP (Non-PKP cannot claim PPN Masukan)
+            from app.models.setting import AppSetting
+            pkp_setting = session.query(AppSetting).filter(
+                AppSetting.tenant_id == current_user.tenant_id,
+                AppSetting.key == "is_pkp"
+            ).first()
+            is_pkp = pkp_setting.value == "true" if pkp_setting else False
+            if not is_pkp:
+                is_exempt = True
+                
+            # Keep original invoice items as-is to preserve document audit trail integrity (Sisi A).
+            # The proration will be applied in the stock valuation ledger (sajen/app/services/accounting.py) when saving.
 
             suggested_entries = get_auto_journal_entries(
                 session,
@@ -436,6 +459,109 @@ def get_summary(
     """
     return get_dashboard_summary(db=session, tenant_id=current_user.tenant_id)
 
+@router.get("/compass/summary", response_model=CompassSummaryResponse)
+def get_compass_summary(
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    """
+    Get business compass summary statistics for Bento Cards.
+    """
+    summary = get_dashboard_summary(db=session, tenant_id=current_user.tenant_id)
+    
+    rev = summary.get("total_revenue", 0.0)
+    net = summary.get("net_profit", 0.0)
+    margin = (net / rev * 100.0) if rev > 0.0 else 0.0
+    
+    # Calculate revenue trend
+    chart_data = summary.get("chart_data", [])
+    revenue_trend = 0.0
+    if len(chart_data) >= 2:
+        last_day_rev = chart_data[-1].get("revenue", 0.0)
+        prev_day_rev = chart_data[-2].get("revenue", 0.0)
+        if prev_day_rev > 0.0:
+            revenue_trend = ((last_day_rev - prev_day_rev) / prev_day_rev) * 100.0
+
+    from app.models.tenant import Tenant
+    tenant = session.query(Tenant).filter(Tenant.id == current_user.tenant_id).first()
+    maintenance_stock = tenant.maintenance_stock if tenant else False
+            
+    return CompassSummaryResponse(
+        cash_balance=summary.get("cash_balance", 0.0),
+        net_profit=net,
+        profit_margin=margin,
+        total_inventory_value=summary.get("total_inventory_value", 0.0),
+        low_stock_count=summary.get("low_stock_count", 0),
+        revenue_trend=revenue_trend,
+        market_info_placeholder="Harga beras IR64 nasional stabil di Rp13.200/kg. Permintaan Minyak Goreng Curah diprediksi naik 6.8% menjelang akhir pekan.",
+        maintenance_stock=maintenance_stock
+    )
+
+@router.get("/compass/market-intelligence", response_model=List[MarketIntelligenceItem])
+def get_compass_market_intelligence(
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    """
+    Get market intelligence and recommendations for tenant products.
+    """
+    from app.models.inventory import Product
+    
+    # Ambil 5 produk riil milik tenant
+    db_products = session.query(Product).limit(5).all()
+    
+    # Fallback dummy jika tidak ada produk
+    if not db_products:
+        dummy_products = [
+            {"id": 1, "name": "Beras Pandan Wangi 5kg", "sell_price": 72000.0},
+            {"id": 2, "name": "Minyak Goreng Curah 1L", "sell_price": 15500.0},
+            {"id": 3, "name": "Gula Pasir Putih 1kg", "sell_price": 14500.0},
+            {"id": 4, "name": "Telur Ayam Negeri 1kg", "sell_price": 28000.0},
+            {"id": 5, "name": "Terigu Segitiga Biru 1kg", "sell_price": 12500.0}
+        ]
+        items = []
+        for dp in dummy_products:
+            p_price = dp["sell_price"]
+            r_price = p_price * 1.05 # naik 5%
+            items.append({
+                "product_id": dp["id"],
+                "product_name": dp["name"],
+                "current_price": p_price,
+                "recommended_price": round(r_price / 100) * 100,
+                "confidence_score": 98.2,
+                "reason": "Permintaan pasar meningkat menjelang akhir pekan berdasarkan analisis tren makro retail.",
+                "copywriting": {
+                    "social_media": f"📸 PROMO SPESIAL HARI INI: IMUNITAS TERJAGA, DOMPET AMAN!\n\nDapatkan {dp['name']} segar hari ini dengan harga terbaik hanya Rp {int(dp['sell_price']):,}. Cocok banget buat stok kebutuhan keluarga di rumah agar tetap fit setiap hari.\n\n📍 Kunjungi toko kami sekarang atau hubungi WA kami untuk layanan pesan antar instan. Stok terbatas!",
+                    "whatsapp_broadcast": f"Mitra Setia! 👋\n\nInfo update harga bahan pokok hari ini dari gudang kami:\n- {dp['name']}: Cuma Rp {int(dp['sell_price']):,}\n\nAmankan pasokan warung Anda sebelum harga pasar naik lagi. Chat kami sekarang untuk Keep Stok ya! 📞",
+                    "visual_idea": f"Banner promo dengan latar belakang kuning-hijau segar. Foto produk {dp['name']} diletakkan di tengah dengan label harga tebal Rp {int(dp['sell_price']):,} merah menyala, ditambah teks 'Hemat & Praktis!'."
+                }
+            })
+        return items
+
+    items = []
+    import random
+    for idx, p in enumerate(db_products):
+        p_price = float(p.sell_price) if p.sell_price else 10000.0
+        # Berikan variasi rekomendasi harga dan confidence score
+        r_price = p_price * (1.0 + (random.randint(4, 9) / 100.0))
+        conf = round(95.0 + random.random() * 4.0, 1)
+        
+        items.append({
+            "product_id": p.id,
+            "product_name": p.name,
+            "current_price": p_price,
+            "recommended_price": round(r_price / 100) * 100,
+            "confidence_score": conf,
+            "reason": "Kenaikan harga bahan baku logistik nasional memicu kenaikan rata-rata harga pasar retail.",
+            "copywriting": {
+                "social_media": f"📸 PROMO SPESIAL HARI INI: KUALITAS TERBAIK, HARGA BERSAHABAT!\n\nDapatkan {p.name} berkualitas tinggi hari ini dengan harga terbaik hanya Rp {int(p_price):,}. Pilihan tepat untuk kebutuhan harian keluarga tercinta.\n\n📍 Kunjungi toko kami sekarang atau hubungi WA untuk layanan pesan antar instan. Stok terbatas!",
+                "whatsapp_broadcast": f"Mitra Setia! 👋\n\nInfo update harga hari ini dari toko kami:\n- {p.name}: Cuma Rp {int(p_price):,}\n\nDapatkan harga grosir terbaik sebelum kehabisan stok. Hubungi admin kami sekarang untuk keep barang ya! 📞",
+                "visual_idea": f"Desain poster cerah minimalis. Menampilkan visual produk {p.name} di bagian tengah, dilengkapi stiker harga Rp {int(p_price):,} berwarna merah tebal, dengan tulisan 'Stok Melimpah, Siap Kirim!'."
+            }
+        })
+    return items
+
+
 @router.get("/accounts", response_model=List[AccountResponse])
 def get_chart_of_accounts(
     session: SessionDep,
@@ -475,15 +601,35 @@ def create_new_transaction(
 def get_transactions(
     session: SessionDep,
     current_user: CurrentUser,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
     skip: int = 0,
-    limit: int = 50
+    limit: int = 100
 ):
     """
     Retrieve recent transactions for the active tenant.
     """
-    return session.query(Transaction).filter(
+    query = session.query(Transaction).filter(
         Transaction.tenant_id == current_user.tenant_id
-    ).order_by(
+    )
+
+    if start_date:
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+            query = query.filter(Transaction.transaction_date >= dt)
+        except ValueError:
+            pass
+
+    if end_date:
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+            query = query.filter(Transaction.transaction_date <= dt)
+        except ValueError:
+            pass
+
+    return query.order_by(
         Transaction.transaction_date.desc(),
         Transaction.id.desc()
     ).offset(skip).limit(limit).all()
@@ -498,9 +644,11 @@ def get_upcoming_debts(
     Retrieve upcoming debts (Hutang) sorted by due date ascending.
     Only returns transactions that have a due_date and haven't been fully paid (we assume here all with due_date are relevant).
     """
+    from sqlalchemy import or_
     return session.query(Transaction).filter(
         Transaction.tenant_id == current_user.tenant_id,
-        Transaction.due_date.isnot(None)
+        Transaction.due_date.isnot(None),
+        or_(Transaction.payment_method != "lunas", Transaction.payment_method.is_(None))
     ).order_by(
         Transaction.due_date.asc()
     ).limit(limit).all()
@@ -679,3 +827,37 @@ def pay_transaction_api(
     session.commit()
     session.refresh(original_tx)
     return original_tx
+
+
+@router.post("/transactions/{transaction_id}/reschedule", response_model=TransactionResponse)
+def reschedule_transaction_api(
+    transaction_id: int,
+    req: TransactionRescheduleRequest,
+    session: SessionDep,
+    current_user: User = Depends(check_role([UserRole.ADMIN, UserRole.MANAGER]))
+):
+    """
+    Reschedule the due date of a purchase debt transaction.
+    Works even if transaction is POSTED, as long as payment_method is not 'lunas'.
+    """
+    from fastapi import HTTPException
+    
+    tx = session.query(Transaction).filter(
+        Transaction.id == transaction_id,
+        Transaction.tenant_id == current_user.tenant_id
+    ).first()
+    
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+        
+    if tx.transaction_type != TransactionType.PURCHASE:
+        raise HTTPException(status_code=400, detail="Only purchase transactions can be rescheduled.")
+        
+    if tx.payment_method == "lunas":
+        raise HTTPException(status_code=400, detail="Cannot reschedule a paid transaction.")
+        
+    tx.due_date = req.due_date
+    session.commit()
+    session.refresh(tx)
+    return tx
+

@@ -175,6 +175,8 @@ class Contact(Base):
     phone = Column(String(20), nullable=True)
     address = Column(String(255), nullable=True)
     current_balance = Column(Numeric(15, 2), default=0.00, nullable=False)
+    sales_visit_day = Column(String(50), nullable=True)
+    sales_visit_interval = Column(Integer, default=7, nullable=True)
 
     tenant = relationship("Tenant")
 
@@ -208,15 +210,18 @@ class PurchasePlanItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     purchase_plan_id = Column(Integer, ForeignKey("purchase_plans.id", ondelete="CASCADE"), nullable=False, index=True)
-    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=True, index=True)
+    custom_product_name = Column(String(100), nullable=True)
     supplier_contact_id = Column(Integer, ForeignKey("contacts.id", ondelete="SET NULL"), nullable=True)
     qty = Column(Numeric(15, 2), nullable=False)
     unit_price = Column(Numeric(15, 2), nullable=False)
     subtotal = Column(Numeric(15, 2), nullable=False)
+    is_purchased = Column(Boolean, default=False, nullable=False)
 
     purchase_plan = relationship("PurchasePlan", back_populates="items")
     product = relationship("Product")
     supplier = relationship("Contact")
+
 
 class StockDiscard(Base):
     """

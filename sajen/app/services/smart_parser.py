@@ -529,7 +529,8 @@ def build_minimal_prompt(normalized_text: str, today_date: str, coa_context: str
         "5. 'income' HANYA untuk pendapatan non-operasional (bunga bank, hibah, dividen).\n"
         "6. Angka shorthand (3jt/500rb/Rp) sudah dinormalisasi sebelum dikirim ke sini.\n"
         "7. Jika ada tanggal eksplisit di teks, gunakan itu. Jika tidak → gunakan today_date.\n"
-        "8. Ekstrak satuan barang (seperti kg, pcs, btl, ctn, ltr) ke dalam properti 'unit' jika ada di teks. Jika tidak ada, gunakan default 'pcs'."
+        "8. Ekstrak satuan barang (seperti kg, pcs, btl, ctn, ltr) ke dalam properti 'unit' jika ada di teks. Jika tidak ada, gunakan default 'pcs'.\n"
+        "9. Standardisasi Barang: Jika mendeteksi kata 'telor' (atau variasinya), selalu ubah nama barang tersebut menjadi 'Telur'."
     )
 
     coa_section = f"\n{coa_context.strip()}\n" if coa_context.strip() else ""

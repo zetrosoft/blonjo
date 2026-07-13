@@ -96,6 +96,7 @@ class TransactionResponse(TransactionBase):
     created_at: datetime
     entries: List[JournalEntryResponse]
     inventory_logs: List[InventoryLogResponse] = []
+    contact: Optional[ContactResponseMin] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -187,3 +188,33 @@ class AIModelQuotaResponse(BaseModel):
 class TransactionPayoffRequest(BaseModel):
     payment_account_id: int
     payment_date: date
+
+class TransactionRescheduleRequest(BaseModel):
+    due_date: date
+
+class CompassSummaryResponse(BaseModel):
+    cash_balance: float
+    net_profit: float
+    profit_margin: float
+    total_inventory_value: float
+    low_stock_count: int
+    revenue_trend: float # persentase pertumbuhan dibanding tren sebelumnya
+    market_info_placeholder: str
+    maintenance_stock: bool
+
+class CopywritingTemplates(BaseModel):
+    social_media: str
+    whatsapp_broadcast: str
+    visual_idea: str
+
+class MarketIntelligenceItem(BaseModel):
+    product_id: int
+    product_name: str
+    current_price: float
+    recommended_price: float
+    confidence_score: float
+    reason: str
+    copywriting: CopywritingTemplates
+
+
+

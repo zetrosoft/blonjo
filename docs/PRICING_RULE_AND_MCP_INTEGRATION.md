@@ -114,3 +114,26 @@ $$P_{\text{new}} = C_{\text{new}} \times (1 + M_{\text{prev}})$$
 1.  Setiap kali `InventoryService.update_moving_average()` dipanggil (stok masuk), sistem membandingkan biaya MA baru dengan HPP lama.
 2.  Jika terjadi kenaikan HPP yang menggerus margin di bawah ambang batas, sistem langsung memperbarui `amount` di tabel `TenantProductPrice` untuk produk tersebut.
 3.  **Tanda Fluktuasi (Insight Flag)**: Baris di Price List yang harga jualnya otomatis disesuaikan oleh sistem akan menampilkan indikator visual/lencana (misal: `"⚠️ Auto-Adjusted (HPP Naik)"`) agar pengguna mengetahuinya dan dapat meninjau fluktuasi harga tersebut.
+
+---
+
+## 6. Penanganan Satuan & Kalkulasi Margin (UoM & Margin Normalization)
+
+Untuk menjaga akurasi perhitungan margin laba/rugi di halaman katalog harga (**My Catalog**), sistem menerapkan filter dan konversi satuan yang ketat untuk mencegah *unit mismatch* (ketidakcocokan satuan):
+
+### A. Alur Deteksi & Normalisasi Satuan
+Ketika menghitung margin laba/rugi antara Harga Jual ($S$) dan HPP ($C$) saat ada Pricing Rule aktif:
+1. **Pengecekan Keselarasan Satuan**: Sistem membandingkan satuan pada aturan harga aktif ($U_{\text{rule}}$) dengan satuan dasar produk ($U_{\text{base}}$).
+2. **Kalkulasi Satuan Selaras**: Jika $U_{\text{rule}} == U_{\text{base}}$ (atau satuan aturan kosong), margin dihitung langsung:
+   $$\text{Margin Rp} = S_{\text{rule}} - C_{\text{base}}$$
+3. **Kalkulasi dengan Konversi Satuan**: Jika $U_{\text{rule}} \neq U_{\text{base}}$, sistem mencari faktor konversi $M$ di tabel `product_unit_conversions` di mana $1 U_{\text{rule}} = M \times U_{\text{base}}$:
+   * Jika ditemukan, HPP disesuaikan menjadi: $C_{\text{rule}} = C_{\text{base}} \times M$.
+   * Margin dihitung berbasis satuan aturan: $\text{Margin Rp} = S_{\text{rule}} - C_{\text{rule}}$.
+4. **Fallback Aman (Mencegah Margin Semu)**: Jika $U_{\text{rule}} \neq U_{\text{base}}$ dan **tidak ada konversi unit** yang terdaftar di database:
+   * Perhitungan margin menggunakan harga aturan diabaikan (*ignored*) karena tidak sebanding.
+   * Sistem otomatis beralih (*fallback*) menggunakan harga jual standar produk (yang satuannya sudah pasti selaras dengan HPP dasar).
+   * Lencana peringatan oranye `⚠️ Konversi ?` dimunculkan pada baris produk dengan tooltip penjelasan edukatif agar user mengonfigurasi konversi unit di sistem.
+
+### B. Penanganan Nilai Rp 0
+Jika harga jual produk bernilai `Rp 0` (belum diatur), sistem tidak akan menghitung margin negatif (yang memberikan impresi rugi palsu). Sebagai gantinya, kolom margin akan menampilkan `-` dan `N/A` untuk menjaga kebersihan data.
+

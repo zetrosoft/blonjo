@@ -28,6 +28,10 @@ const PurchasingHistoryPage = lazy(() => import('./pages/material-control/Purcha
 const StockLevelPage = lazy(() => import('./pages/material-control/StockLevel'));
 const RecommendedPurchasePage = lazy(() => import('./pages/material-control/RecommendedPurchase'));
 const MaterialControlHub = lazy(() => import('./pages/material-control/MaterialControlHub'));
+const PurchasePlanForm = lazy(() => import('./pages/material-control/PurchasePlanForm'));
+const BudgetingPage = lazy(() => import('./pages/material-control/BudgetingPage'));
+const WasteTracking = lazy(() => import('./pages/material-control/WasteTracking'));
+const ProjectionAccuracyPage = lazy(() => import('./pages/material-control/ProjectionAccuracyPage'));
 
 // Master data pages
 const ItemPage = lazy(() => import('./pages/master-data/ItemPage'));
@@ -46,6 +50,7 @@ const ProfitLossReport = lazy(() => import('./pages/reports/ProfitLossReport'));
 const BalanceSheetReport = lazy(() => import('./pages/reports/BalanceSheetReport'));
 const EquityChangesReport = lazy(() => import('./pages/reports/EquityChangesReport'));
 const CashFlowReport = lazy(() => import('./pages/reports/CashFlowReport'));
+const VibesChat = lazy(() => import('./pages/insights/VibesChat'));
 
 // Simple loading fallback
 const PageLoader = () => (
@@ -78,6 +83,10 @@ export default function App() {
               <Route path="purchases" element={<PurchasingHistoryPage />} />
               <Route path="stock-level" element={<StockLevelPage />} />
               <Route path="recommended" element={<RecommendedPurchasePage />} />
+              <Route path="purchase-plan" element={<PurchasePlanForm />} />
+              <Route path="budgeting" element={<BudgetingPage />} />
+              <Route path="waste" element={<WasteTracking />} />
+              <Route path="projection-accuracy" element={<ProjectionAccuracyPage />} />
             </Route>
             
             <Route path="/reports" element={<ReportsHub />} />
@@ -98,7 +107,8 @@ export default function App() {
             </Route>
 
             
-            <Route path="/insights" element={<div className="p-4">Insights Page</div>} />
+            <Route path="/insights" element={<Navigate to="/insights/vibes-chat" replace />} />
+            <Route path="/insights/vibes-chat" element={<VibesChat />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/settings/:tab" element={<Settings />} />
             <Route path="/vibe" element={<LiquidDashboard />} />

@@ -21,3 +21,6 @@ Berdasarkan instruksi pengguna, agent harus menyesuaikan persona dan pendekatan 
    - **Konfirmasi**: Rencana tersebut harus dipresentasikan kepada pengguna untuk direview dan disetujui sebelum melakukan perubahan kode (`Act`) atau eksekusi perintah destruktif.
    - **Tujuan**: Menjamin transparansi, keamanan sistem, dan keselarasan arsitektur dengan keinginan pengguna.
    - **Kapan**: Diterapkan setiap kali memulai sesi baru atau menerima instruksi tugas baru di proyek ini.
+
+4. **Protokol Deploy Efisien**:
+   - **Mandat**: Untuk menghemat waktu deployment, hanya deploy service yang mengalami perubahan saja dengan menyertakan argumen nama service (misalnya: `./deploy.sh blonjo-ui` atau `./deploy.sh sajen-api sajen-worker`). Hindari menjalankan `./deploy.sh` kosong tanpa argumen kecuali ada perubahan global.

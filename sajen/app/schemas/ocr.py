@@ -30,7 +30,7 @@ class AILearningTemplateCreate(BaseModel):
     expected_output: str
 
 class AILearningTemplateResponse(AILearningTemplateCreate):
-    id: int
+    id: str
     usage_count: int
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)

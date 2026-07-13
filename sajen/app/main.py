@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1 import auth, accounting, ocr, inventory, admin, roles, settings, users, reports, vibe, material_control
+from app.api.v1 import auth, accounting, ocr, inventory, admin, roles, settings, users, reports, vibe, material_control, insights
 from app.core.config import settings as app_settings
 
 app = FastAPI(
@@ -34,6 +34,7 @@ app.include_router(roles.router, prefix="/api/v1/roles", tags=["RBAC & Roles"])
 app.include_router(settings.router, prefix="/api/v1/settings", tags=["Tenant Settings"])
 app.include_router(users.router, prefix="/api/v1/users", tags=["User Management"])
 app.include_router(vibe.router, prefix="/api/v1/vibe", tags=["Vibe Coding"])
+app.include_router(insights.router, prefix="/api/v1/insights", tags=["Business Insights"])
 
 @app.get("/api/health", tags=["System"])
 async def health_check():

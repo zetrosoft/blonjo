@@ -22,6 +22,10 @@ def check_tax_exempt_via_vector(items: list) -> bool:
     if not item_text.strip():
         return True
 
+    # If any item explicitly mentions tax/PPN, it is taxable
+    if any(k in item_text for k in ["ppn", "pajak", "tax", "vat"]):
+        return False
+
     # 1. Keyword Matching (Highly accurate for known local items)
     exempt_keywords = ["beras", "gula", "minyak", "sembako", "sayur", "telur", "daging", "garam", "buah", "susu"]
     taxable_keywords = ["elektronik", "hp", "handphone", "komputer", "laptop", "jasa", "service", "pakaian", "baju", "sepatu", "mewah", "tv", "kulkas", "motor", "mobil"]
@@ -86,13 +90,35 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
         
     if mapping and mapping.lines:
         entries = []
+        
+        # Precompute tax_val
+        tax_val = Decimal('0.00')
+        if not is_tax_exempt:
+            # Asumsi PPN 11% sudah termasuk dalam harga (include tax)
+            # Pajak = Total * (11/111)
+            tax_val = (amount * Decimal('11') / Decimal('111')).quantize(Decimal('0.00'))
+            
+        # Determine which side has the tax line
+        tax_sides = [line.side for line in mapping.lines if line.value_type == "tax_amount"]
+        tax_side = tax_sides[0] if tax_sides else None
+        
+        # Count total_amount lines on the tax side
+        total_lines_on_tax_side = [line for line in mapping.lines if line.side == tax_side and line.value_type == "total_amount"]
+
         for line in mapping.lines:
             # Fetch full account details for UI enrichment (Bab 10.1 ARCHITECTURE.md)
             account = db.query(Account).filter(Account.id == line.account_id).first()
             
             # Handle different value types from mapping
             if line.value_type == "total_amount":
-                val = amount
+                # Deduct tax_val from the first total_amount line on the tax side to balance the journal
+                if tax_side and line.side == tax_side and line in total_lines_on_tax_side:
+                    if line == total_lines_on_tax_side[0]:
+                        val = amount - tax_val
+                    else:
+                        val = amount
+                else:
+                    val = amount
             elif line.value_type == "cogs_amount":
                 # Get HPP Rate from settings (default 70% if no real cost known)
                 from app.models.setting import AppSetting
@@ -100,12 +126,7 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
                 cogs_rate = Decimal(rate_setting.value) / 100 if rate_setting else Decimal('0.70')
                 val = (amount * cogs_rate).quantize(Decimal('0.00'))
             elif line.value_type == "tax_amount":
-                if is_tax_exempt:
-                    val = Decimal('0.00')
-                else:
-                    # Asumsi PPN 11% sudah termasuk dalam harga (include tax)
-                    # Pajak = Total * (11/111)
-                    val = (amount * Decimal('11') / Decimal('111')).quantize(Decimal('0.00'))
+                val = tax_val
             else:
                 val = Decimal('0.00')
                 
@@ -244,13 +265,25 @@ def _generate_reference_no(db: Session, trans_type: TransactionType, tenant_id: 
     }
     prefix = prefixes.get(trans_type, trans_type.name[:3].upper())
     year = datetime.now().year
+    pattern = f"{prefix}-{year}-%"
     
-    # Sequence generation filtered by tenant_id
-    count = db.query(Transaction).filter(
+    from sqlalchemy import desc
+    latest_tx = db.query(Transaction.reference_no).filter(
         Transaction.tenant_id == tenant_id,
-        Transaction.transaction_type == trans_type
-    ).count()
-    return f"{prefix}-{year}-{(count + 1):04d}"
+        Transaction.reference_no.like(pattern)
+    ).order_by(desc(Transaction.reference_no)).first()
+    
+    next_seq = 1
+    if latest_tx and latest_tx[0]:
+        try:
+            parts = latest_tx[0].split("-")
+            if len(parts) >= 3:
+                last_seq = int(parts[-1])
+                next_seq = last_seq + 1
+        except ValueError:
+            pass
+            
+    return f"{prefix}-{year}-{next_seq:04d}"
 
 def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, user_id: int | None = None, tenant_id: int | None = None) -> Transaction:
     """
@@ -343,7 +376,73 @@ def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, us
         rate_setting = db.query(AppSetting).filter(AppSetting.tenant_id == tenant_id, AppSetting.key == "default_cogs_rate").first()
         cogs_rate = Decimal(rate_setting.value) / 100 if rate_setting else Decimal('0.88')
         
-        for item in trans_in.items:
+        # Precompute adjusted prices for each item (Round Up to Tens)
+        adjusted_prices = []
+        if trans_in.items:
+            ratio = Decimal('1.0')
+            if trans_in.transaction_type.value == "purchase":
+                sum_items_total = sum(Decimal(str(item.qty)) * Decimal(str(item.unit_price)) for item in trans_in.items)
+                if sum_items_total > 0:
+                    pkp_setting = db.query(AppSetting).filter(
+                        AppSetting.tenant_id == tenant_id,
+                        AppSetting.key == "is_pkp"
+                    ).first()
+                    is_pkp = pkp_setting.value == "true" if pkp_setting else False
+                    
+                    is_exempt = True
+                    item_text = " ".join([it.name for it in trans_in.items]).lower()
+                    if any(k in item_text for k in ["ppn", "pajak", "tax", "vat"]):
+                        is_exempt = False
+                    else:
+                        is_exempt = check_tax_exempt_via_vector([{"name": it.name} for it in trans_in.items])
+                        
+                    if any(k in trans_in.description.lower() for k in ["ppn", "pajak", "tax", "vat"]):
+                        is_exempt = False
+                        
+                    if not is_pkp:
+                        is_exempt = True
+                        
+                    tax_val = Decimal('0.00')
+                    if not is_exempt:
+                        tax_val = (trans_in.total_amount * Decimal('11') / Decimal('111')).quantize(Decimal('0.00'))
+                        
+                    target_inv_total = trans_in.total_amount - tax_val
+                    ratio = target_inv_total / sum_items_total
+                    
+                    import math
+                    def round_up_to_tens(val: Decimal) -> Decimal:
+                        val_float = float(val)
+                        return Decimal(str(int(math.ceil(val_float / 10.0) * 10)))
+                        
+                    temp_totals = []
+                    for item in trans_in.items:
+                        raw_adjusted_price = Decimal(str(item.unit_price)) * ratio
+                        rounded_price = round_up_to_tens(raw_adjusted_price)
+                        qty = Decimal(str(item.qty))
+                        tot = rounded_price * qty
+                        temp_totals.append((rounded_price, tot))
+                        
+                    calculated_sum = sum(tot for _, tot in temp_totals)
+                    diff = target_inv_total - calculated_sum
+                    
+                    if diff != 0 and len(trans_in.items) > 0:
+                        last_idx = len(trans_in.items) - 1
+                        last_price, last_tot = temp_totals[last_idx]
+                        adjusted_tot = last_tot + diff
+                        last_qty = Decimal(str(trans_in.items[last_idx].qty))
+                        adjusted_price = Decimal(str(int(round(float(adjusted_tot / last_qty) if last_qty > 0 else 0))))
+                        temp_totals[last_idx] = (adjusted_price, adjusted_tot)
+                        
+                    adjusted_prices = [price for price, _ in temp_totals]
+                else:
+                    adjusted_prices = [Decimal(str(item.unit_price)) for item in trans_in.items]
+            else:
+                adjusted_prices = [Decimal(str(item.unit_price)) for item in trans_in.items]
+        
+        for idx, item in enumerate(trans_in.items):
+            # Calculate adjusted unit price
+            adjusted_unit_price = adjusted_prices[idx]
+            
             # 1. Resolve Contact (Same as before)
             contact_id = None
             if item.contact_name:
@@ -393,23 +492,23 @@ def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, us
                 if log_type == "in":
                     # Update Moving Average on Purchase
                     if trans_in.transaction_type.value == "purchase":
-                        PricingEngine.update_moving_average(db, t_id, product.id, item.qty, item.unit_price)
+                        PricingEngine.update_moving_average(db, tenant_id, product.id, item.qty, adjusted_unit_price)
                     
                     # Update Static Stock if maintenance is ON
-                    InventoryService.update_stock_after_transaction(db, t_id, product.id, item.qty, "in")
+                    InventoryService.update_stock_after_transaction(db, tenant_id, product.id, item.qty, "in")
 
                     # Special Logic: SALES_RETURN also reverses HPP
                     if trans_in.transaction_type.value == "sales_return":
                         # Get actual HPP for reversal
-                        current_hpp = PricingEngine.get_current_hpp(db, t_id, product.id)
+                        current_hpp = PricingEngine.get_current_hpp(db, tenant_id, product.id)
                         total_cost_for_hpp -= (Decimal(str(item.qty)) * current_hpp)
                 else:
                     # Stock OUT logic
-                    InventoryService.update_stock_after_transaction(db, t_id, product.id, item.qty, "out")
+                    InventoryService.update_stock_after_transaction(db, tenant_id, product.id, item.qty, "out")
                     
                     # HPP Calculation for Sales/Income
                     if trans_in.transaction_type.value in ["income", "sales"]:
-                        current_hpp = PricingEngine.get_current_hpp(db, t_id, product.id)
+                        current_hpp = PricingEngine.get_current_hpp(db, tenant_id, product.id)
                         # FALLBACK: If current_hpp is 0, estimate it from item.unit_price * cogs_rate
                         if current_hpp == 0:
                             current_hpp = (Decimal(str(item.unit_price)) * cogs_rate).quantize(Decimal('0.00'))
@@ -421,7 +520,7 @@ def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, us
                     transaction_id=db_transaction.id,
                     contact_id=contact_id,
                     quantity=item.qty,
-                    price_per_unit=item.unit_price,
+                    price_per_unit=adjusted_unit_price,
                     log_type=log_type
                 )
                 db.add(log)
@@ -497,7 +596,30 @@ def update_transaction_draft(db: Session, transaction_id: int, trans_update: any
     if trans_update.status is not None:
         db_transaction.status = trans_update.status
     if trans_update.total_amount is not None:
-        db_transaction.total_amount = trans_update.total_amount
+        new_total = Decimal(str(trans_update.total_amount))
+        old_total = db_transaction.total_amount
+        db_transaction.total_amount = new_total
+        
+        if old_total != new_total:
+            debit_entries = [e for e in db_transaction.entries if e.debit > 0]
+            credit_entries = [e for e in db_transaction.entries if e.credit > 0]
+            
+            sum_debit = sum(e.debit for e in debit_entries)
+            sum_credit = sum(e.credit for e in credit_entries)
+            
+            if sum_debit > 0 and sum_credit > 0:
+                for e in debit_entries:
+                    e.debit = (e.debit * new_total / sum_debit).quantize(Decimal("0.01"))
+                for e in credit_entries:
+                    e.credit = (e.credit * new_total / sum_credit).quantize(Decimal("0.01"))
+                
+                new_sum_debit = sum(e.debit for e in debit_entries)
+                new_sum_credit = sum(e.credit for e in credit_entries)
+                
+                if new_sum_debit != new_total and debit_entries:
+                    debit_entries[0].debit += (new_total - new_sum_debit)
+                if new_sum_credit != new_total and credit_entries:
+                    credit_entries[0].credit += (new_total - new_sum_credit)
 
     # 2. Update Items & Inventory Logs (if provided)
     if trans_update.items is not None:
@@ -730,6 +852,10 @@ def get_dashboard_summary(db: Session, tenant_id: int | None = None) -> dict:
     upcoming_debts = db.query(Transaction).filter(
         Transaction.tenant_id == t_id,
         Transaction.transaction_type == TransactionType.PURCHASE,
+        or_(
+            Transaction.payment_method != "lunas",
+            Transaction.payment_method.is_(None)
+        ),
         or_(
             Transaction.due_date.isnot(None),
             Transaction.payment_method.in_(["tempo", "credit", "invoice", "utang", "hutang"])

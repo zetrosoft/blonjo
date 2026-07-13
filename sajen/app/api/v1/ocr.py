@@ -1,6 +1,7 @@
 import os
 import shutil
 import uuid
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, status, UploadFile, Body
 from typing import List, Annotated, Any
 
@@ -17,7 +18,7 @@ from app.schemas.ocr import (
 )
 from app.workers.ocr_worker import process_receipt_ocr
 from app.services.ai_context import get_rag_context
-from app.services.ai_engine import call_ai_vision, call_ai_text
+from app.services.ai_engine import call_ai_vision, call_ai_text, call_ai_freetext
 import json
 
 router = APIRouter()
@@ -195,7 +196,7 @@ def get_ocr_tasks(
     Get the status and results of uploaded receipts.
     Memetakan secara transparan hasil format baru ke format lama sebelum dikirim ke frontend.
     """
-    tasks = session.query(OCRTask).filter(OCRTask.user_id == current_user.id).order_by(OCRTask.id.desc()).limit(limit).all()
+    tasks = session.query(OCRTask).filter(OCRTask.user_id == current_user.id, OCRTask.tenant_id == current_user.tenant_id).order_by(OCRTask.id.desc()).limit(limit).all()
     for task in tasks:
         if task.extracted_data:
             task.extracted_data = _map_rich_schema_to_frontend(task.extracted_data)
@@ -213,7 +214,7 @@ def get_ocr_task_detail(
     """
     Get the status and results of a specific OCR task.
     """
-    task = session.query(OCRTask).filter(OCRTask.id == task_id, OCRTask.user_id == current_user.id).first()
+    task = session.query(OCRTask).filter(OCRTask.id == task_id, OCRTask.user_id == current_user.id, OCRTask.tenant_id == current_user.tenant_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="OCR Task not found")
     
@@ -232,7 +233,7 @@ def delete_ocr_task(
     """
     Delete an OCR task and its physical file.
     """
-    task = session.query(OCRTask).filter(OCRTask.id == task_id, OCRTask.user_id == current_user.id).first()
+    task = session.query(OCRTask).filter(OCRTask.id == task_id, OCRTask.user_id == current_user.id, OCRTask.tenant_id == current_user.tenant_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="OCR Task not found")
     
@@ -259,7 +260,7 @@ def correct_ocr_task(
     Compares original vision data with user inputs, records feedback to database,
     and updates the task status to CORRECTED.
     """
-    task = session.query(OCRTask).filter(OCRTask.id == task_id, OCRTask.user_id == current_user.id).first()
+    task = session.query(OCRTask).filter(OCRTask.id == task_id, OCRTask.user_id == current_user.id, OCRTask.tenant_id == current_user.tenant_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="OCR Task not found")
         
@@ -359,31 +360,36 @@ from sqlalchemy import text
 
 @router.get("/training-templates", response_model=List[AILearningTemplateResponse])
 def get_training_templates(session: SessionDep, current_user: CurrentUser):
-    # Mengambil data dari knowledge_vectors di database yang sama (shared db)
-    query = text("""
-        SELECT id, content as raw_ocr_text, 
-               (metadata->>'tenant_id')::int as tenant_id,
-               metadata->>'file_name' as file_name,
-               metadata->>'expected_output' as expected_output,
-               COALESCE((metadata->>'usage_count')::int, 0) as usage_count
-        FROM knowledge_vectors
-        WHERE metadata->>'app_context' = 'sajen_ocr'
-          AND ((metadata->>'tenant_id')::int = :tid OR metadata->>'tenant_id' IS NULL)
-        ORDER BY id DESC
-    """)
-    result = session.execute(query, {"tid": current_user.tenant_id}).fetchall()
+    # Mengambil data dari knowledge_vectors di database MCP via HTTP API
+    import requests
+    from app.core.config import settings
+    url = f"{settings.MCP_SERVER_URL.rstrip('/')}/api/v1/rag/templates"
     
-    # Map back to expected schema
-    return [
-        {
-            "id": row.id,
-            "tenant_id": row.tenant_id,
-            "file_name": row.file_name,
-            "raw_ocr_text": row.raw_ocr_text,
-            "expected_output": row.expected_output,
-            "usage_count": row.usage_count
-        } for row in result
-    ]
+    try:
+        resp = requests.get(url, params={"tenant_id": current_user.tenant_id}, timeout=15)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Gagal mengambil dari MCP: {resp.text}")
+        templates = resp.json()
+        
+        # Map back to expected schema
+        results = []
+        for t in templates:
+            # parsing created_at to ISO string compatibility
+            created_at_val = t.get("created_at") or datetime.utcnow().isoformat()
+            results.append({
+                "id": str(t.get("id")),
+                "tenant_id": t.get("tenant_id"),
+                "file_name": t.get("file_name"),
+                "raw_ocr_text": t.get("raw_ocr_text"),
+                "expected_output": t.get("expected_output"),
+                "usage_count": t.get("usage_count", 0),
+                "created_at": created_at_val
+            })
+        return results
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Koneksi ke MCP Hub gagal: {str(e)}")
 
 @router.post("/training-templates", response_model=AILearningTemplateResponse)
 def create_training_template(template_in: AILearningTemplateCreate, session: SessionDep, current_user: CurrentUser):
@@ -397,19 +403,27 @@ def create_training_template(template_in: AILearningTemplateCreate, session: Ses
         "tenant_id": current_user.tenant_id,
         "file_name": template_in.file_name
     }
-    resp = requests.post(url, json=payload, timeout=15)
-    
-    if resp.status_code != 200:
-        raise HTTPException(status_code=500, detail=f"Gagal menyimpan ke MCP: {resp.text}")
+    try:
+        resp = requests.post(url, json=payload, timeout=15)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Gagal menyimpan ke MCP: {resp.text}")
         
-    return {
-        "id": 0, # Placeholder, since MCP uses UUID for id, but UI expects integer. We'll return 0 for now.
-        "tenant_id": current_user.tenant_id,
-        "file_name": template_in.file_name,
-        "raw_ocr_text": template_in.raw_ocr_text,
-        "expected_output": template_in.expected_output,
-        "usage_count": 0
-    }
+        resp_data = resp.json()
+        created_id = resp_data.get("result", {}).get("id") or "0"
+        
+        return {
+            "id": str(created_id),
+            "tenant_id": current_user.tenant_id,
+            "file_name": template_in.file_name,
+            "raw_ocr_text": template_in.raw_ocr_text,
+            "expected_output": template_in.expected_output,
+            "usage_count": 0,
+            "created_at": datetime.utcnow()
+        }
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Koneksi ke MCP Hub gagal: {str(e)}")
 
 @router.put("/training-templates/{template_id}", response_model=AILearningTemplateResponse)
 def update_training_template(
@@ -418,61 +432,49 @@ def update_training_template(
     session: SessionDep, 
     current_user: CurrentUser
 ):
-    # For update, since MCP ingest appends, we update raw SQL directly for simplicity
-    from app.services.ai_engine import get_embedding
-    import json
-    
-    vec = get_embedding(template_in.raw_ocr_text)
-    vec_str = f"[{','.join(map(str, vec))}]" if vec else None
-    
-    meta_update = json.dumps({
-        "app_context": "sajen_ocr",
-        "tenant_id": current_user.tenant_id,
-        "file_name": template_in.file_name,
-        "expected_output": template_in.expected_output,
-        "usage_count": 0
-    })
-    
-    query = text("""
-        UPDATE knowledge_vectors 
-        SET content = :content, metadata = :meta::jsonb, embedding = :vec::halfvec
-        WHERE id::text = :id AND (metadata->>'tenant_id')::int = :tid
-        RETURNING id
-    """)
-    result = session.execute(query, {
-        "content": template_in.raw_ocr_text,
-        "meta": meta_update,
-        "vec": vec_str,
-        "id": template_id,
-        "tid": current_user.tenant_id
-    }).first()
-    
-    if not result:
-        raise HTTPException(status_code=404, detail="Template not found or access denied")
-        
-    session.commit()
-    
-    return {
-        "id": 0,
-        "tenant_id": current_user.tenant_id,
-        "file_name": template_in.file_name,
+    # Hit MCP Server PUT API to handle update uniformly
+    import requests
+    from app.core.config import settings
+    url = f"{settings.MCP_SERVER_URL.rstrip('/')}/api/v1/rag/templates/{template_id}"
+    payload = {
         "raw_ocr_text": template_in.raw_ocr_text,
         "expected_output": template_in.expected_output,
-        "usage_count": 0
+        "tenant_id": current_user.tenant_id,
+        "file_name": template_in.file_name
     }
+    try:
+        resp = requests.put(url, json=payload, timeout=15)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Gagal memperbarui di MCP: {resp.text}")
+        
+        return {
+            "id": template_id,
+            "tenant_id": current_user.tenant_id,
+            "file_name": template_in.file_name,
+            "raw_ocr_text": template_in.raw_ocr_text,
+            "expected_output": template_in.expected_output,
+            "usage_count": 0,
+            "created_at": datetime.utcnow()
+        }
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Koneksi ke MCP Hub gagal: {str(e)}")
 
 @router.delete("/training-templates/{template_id}")
 def delete_training_template(template_id: str, session: SessionDep, current_user: CurrentUser):
-    query = text("""
-        DELETE FROM knowledge_vectors 
-        WHERE id::text = :id AND (metadata->>'tenant_id')::int = :tid
-        RETURNING id
-    """)
-    result = session.execute(query, {"id": template_id, "tid": current_user.tenant_id}).first()
-    if not result:
-        raise HTTPException(status_code=404, detail="Template not found")
-    session.commit()
-    return {"message": "Deleted successfully"}
+    import requests
+    from app.core.config import settings
+    url = f"{settings.MCP_SERVER_URL.rstrip('/')}/api/v1/rag/templates/{template_id}"
+    try:
+        resp = requests.delete(url, timeout=15)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=500, detail=f"Gagal menghapus di MCP: {resp.text}")
+        return {"message": "Deleted successfully"}
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(status_code=500, detail=f"Koneksi ke MCP Hub gagal: {str(e)}")
 
 @router.post("/training-templates/extract-raw")
 async def extract_raw_text(file: UploadFile, session: SessionDep, current_user: CurrentUser):
@@ -513,30 +515,37 @@ async def process_training_data(
 ):
     """
     Memproses gabungan teks mentah (hasil Vision) dan instruksi user 
-    untuk menghasilkan draf Golden Template (Markdown).
+    untuk menghasilkan draf Golden Template (Markdown) yang siap dipakai RAG POS.
     """
-    rag_context = get_rag_context(session, current_user.tenant_id)
+    # TIDAK menggunakan get_rag_context() di sini karena akan mencemari output
+    # dengan data pricing rules atau history transaksi yang tidak relevan.
 
     system_instruction = (
-        "Anda adalah AI Trainer Expert. Tugas Anda adalah membantu user membuat DATASET PEMBELAJARAN (Golden Template).\n"
-        "Gunakan data mentah dari OCR dan perbaiki sesuai dengan INSTRUKSI CARA BACA yang diberikan user.\n"
-        "Output harus berupa teks Markdown yang sangat rapi dan detail."
+        "Anda adalah AI Trainer Expert untuk sistem manajemen toko berbasis AI.\n"
+        "Tugas Anda adalah mengubah teks mentah hasil OCR menjadi DATASET PEMBELAJARAN (Golden Template) yang sangat rapi dan terstruktur.\n"
+        "Golden Template ini akan digunakan oleh mesin AI untuk mengenali dan memparsing dokumen serupa di masa depan, "
+        "termasuk namun tidak terbatas pada: nota pembelian, faktur supplier, struk kasir, input transaksi, atau dokumen bisnis lainnya.\n\n"
+        "ATURAN WAJIB:\n"
+        "1. Ikuti INSTRUKSI CARA BACA dari user dengan tepat — user adalah penentu apa yang relevan.\n"
+        "2. Koreksi nama barang/item yang terpotong atau rusak akibat OCR menjadi nama yang lebih standar dan mudah dibaca.\n"
+        "3. Hanya tampilkan kolom dan field yang diminta user di output.\n"
+        "4. JANGAN menambahkan data apapun yang tidak ada di teks mentah (jangan tambahkan pricing rules, history, asumsi, atau data luar).\n"
+        "5. Format output: Markdown terstruktur dengan section Metadata Dokumen dan Tabel Detail (jika ada).\n"
+        "6. Jika instruksi menyebut PPN/pajak sudah termasuk harga, catat di metadata dan JANGAN hitung ulang harga.\n"
     )
 
-    prompt = f"""
-INSTRUKSI CARA BACA DARI USER:
+    prompt = f"""INSTRUKSI CARA BACA DARI USER:
 {payload.instructions}
 
 TEKS MENTAH DARI OCR:
 {payload.raw_text}
 
-{rag_context}
-
-Tugas: Susun ulang data di atas menjadi laporan Markdown yang rapi. 
+TUGAS:
+Susun ulang data di atas menjadi Golden Template Markdown yang rapi sesuai instruksi.
 Pastikan seluruh rincian item masuk ke dalam tabel Markdown.
-"""
+JANGAN menambahkan data apapun yang tidak ada di teks mentah di atas."""
 
-    res = call_ai_text(session, prompt, system_instruction=system_instruction)
+    res = call_ai_freetext(session, prompt, system_instruction=system_instruction, temperature=0.3)
 
     # Save Activity Log for Terminal Visibility
     new_log = AIParsingLog(

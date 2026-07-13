@@ -423,7 +423,15 @@ export function extractDate(text: string): string {
     return d.toISOString().split('T')[0];
   }
 
-  const dmyMatch = text.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})/);
+  // 1. Try ISO date format first (YYYY-MM-DD)
+  const isoMatch = text.match(/\b(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})\b/);
+  if (isoMatch) {
+    const [, y, m, d] = isoMatch;
+    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+  }
+
+  // 2. Try DMY format (DD/MM/YYYY or DD-MM-YY) with word boundaries
+  const dmyMatch = text.match(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})\b/);
   if (dmyMatch) {
     const [, d, m, y] = dmyMatch;
     const year = y.length === 2 ? `20${y}` : y;

@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Input } from '../../components/ui/input';
 import { 
   Plus, Settings2, Package, TrendingUp, RefreshCw, 
-  Store, Calculator, ExternalLink, Loader2, Save, Search
+  Store, Calculator, ExternalLink, Loader2, Save, Search, AlertTriangle
 } from 'lucide-react';
 import { cn, formatRp } from '../../lib/utils';
 import { toast } from 'sonner';
@@ -26,6 +26,7 @@ interface MyCatalogItem {
   hpp?: number;
   sell_price?: number;
   auto_adjusted?: boolean;
+  unit_conversions?: Array<{ id: number; unit_name: string; multiplier: number }>;
 }
 
 export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boolean }) {
@@ -278,15 +279,16 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
                   <TableHead className="text-right">{t('mc_col_stock')}</TableHead>
                   <TableHead className="text-right">{t('mc_col_hpp')}</TableHead>
                   <TableHead className="text-right">{t('mc_col_price')}</TableHead>
+                  <TableHead className="text-right">{t('mc_col_margin')}</TableHead>
                   <TableHead className="text-center">{t('mc_col_action')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
-                  <TableRow><TableCell colSpan={5} className="text-center py-10">{t('mc_loading')}</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={6} className="text-center py-10">{t('mc_loading')}</TableCell></TableRow>
                 ) : items.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center py-10">
+                    <TableCell colSpan={6} className="text-center py-10">
                       <p className="text-muted-foreground">{t('mc_empty')}</p>
                     </TableCell>
                   </TableRow>
@@ -326,6 +328,101 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
                             </span>
                           ))}
                         </div>
+                      </TableCell>
+                      <TableCell className="text-right font-mono">
+                        {(() => {
+                          const hpp = item.hpp || 0;
+                          const matchedRule = matchedRules[0];
+                          
+                          // Resolve sell price based on rule or standard selling price
+                          let sellPrice = item.sell_price || 0;
+                          let costPrice = hpp;
+                          let calculatedFromRule = false;
+                          let unitMismatch = false;
+                          let ruleUnitStr = '';
+                          
+                          if (matchedRule && matchedRule.rule_payload) {
+                            const payload = matchedRule.rule_payload;
+                            let rulePrice = 0;
+                            let ruleUnit = '';
+                            let hasPrice = false;
+                            
+                            if (matchedRule.rule_type === 'tiered' && payload.tiers && payload.tiers.length > 0) {
+                              const sortedTiers = [...payload.tiers].sort((a: any, b: any) => a.qty_threshold - b.qty_threshold);
+                              rulePrice = sortedTiers[0].unit_price;
+                              ruleUnit = sortedTiers[0].unit;
+                              hasPrice = true;
+                            } else if (matchedRule.rule_type === 'bundle_multiple' && payload.bundle_rules) {
+                              rulePrice = payload.bundle_rules.base_price;
+                              ruleUnit = item.base_unit;
+                              hasPrice = true;
+                            } else if (matchedRule.rule_type === 'formula' && payload.multiplier) {
+                              rulePrice = hpp * payload.multiplier;
+                              ruleUnit = item.base_unit;
+                              hasPrice = true;
+                            }
+                            
+                            if (hasPrice) {
+                              const ruleUnitLower = (ruleUnit || '').toLowerCase().trim();
+                              const baseUnitLower = (item.base_unit || '').toLowerCase().trim();
+                              ruleUnitStr = ruleUnit;
+                              
+                              if (ruleUnitLower === baseUnitLower || !ruleUnitLower) {
+                                sellPrice = rulePrice;
+                                calculatedFromRule = true;
+                              } else {
+                                // Look for unit conversion
+                                const conversion = item.unit_conversions?.find(
+                                  (c: any) => c.unit_name.toLowerCase().trim() === ruleUnitLower
+                                );
+                                if (conversion) {
+                                  costPrice = hpp * Number(conversion.multiplier);
+                                  sellPrice = rulePrice;
+                                  calculatedFromRule = true;
+                                } else {
+                                  // Unit mismatch and no conversion in DB
+                                  unitMismatch = true;
+                                  // Fallback to standard price and standard hpp
+                                  sellPrice = item.sell_price || 0;
+                                  costPrice = hpp;
+                                }
+                              }
+                            }
+                          }
+                          
+                          // Calculate margin
+                          // If sellPrice is 0 (selling price not set), margin should be 0 (no loss/profit displayed)
+                          const marginRp = sellPrice > 0 ? (sellPrice - costPrice) : 0;
+                          const marginPct = sellPrice > 0 ? (marginRp / sellPrice) * 100 : 0;
+                          const isNegative = marginRp < 0;
+                          
+                          return (
+                            <div className="flex flex-col items-end">
+                              <span className={cn(
+                                "font-semibold text-xs flex items-center gap-1",
+                                isNegative ? "text-red-500" : "text-emerald-600 dark:text-emerald-400"
+                              )}>
+                                {sellPrice > 0 ? formatRp(marginRp) : '-'}
+                              </span>
+                              <span className="text-[10px] text-muted-foreground flex items-center gap-1 flex-wrap justify-end">
+                                {calculatedFromRule && (
+                                  <span className="text-[8px] bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 px-1 rounded-sm scale-90 font-medium">
+                                    Aturan
+                                  </span>
+                                )}
+                                {unitMismatch && (
+                                  <span 
+                                    className="text-[8px] bg-amber-500/10 text-amber-600 dark:text-amber-400 px-1 rounded-sm scale-90 font-medium flex items-center gap-0.5"
+                                    title={`Satuan aturan (${ruleUnitStr}) tidak cocok dengan satuan dasar (${item.base_unit}) dan belum ada konversi unit di database. Menampilkan margin harga standar.`}
+                                  >
+                                    <AlertTriangle className="w-2.5 h-2.5" /> Konversi ?
+                                  </span>
+                                )}
+                                {sellPrice > 0 ? `${marginPct.toFixed(1)}%` : 'N/A'}
+                              </span>
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell className="text-center">
                         <Button 

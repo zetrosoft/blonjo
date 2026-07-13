@@ -314,7 +314,16 @@ F4-1 → F4-2 → F4-3    (Infra cleanup, urgent untuk disk, bisa dilakukan kapa
 
 ---
 
+## 🗒️ Catatan Perbaikan Tambahan (Juli 2026)
+
+- [x] **Pemberian Pilihan Satuan (UoM) di Form Aturan Harga Bertingkat**: Menambahkan dropdown pilihan satuan pada tiered rules (Add & Edit forms) yang terintegrasi dengan data UoMs global.
+- [x] **Kalkulasi Margin Dinamis dengan Unit Conversion**: Memperbaiki unit mismatch antara satuan dasar dan satuan aturan harga di halaman katalog harga, lengkap dengan fallback ke margin standar dan indikator warning unit mismatch.
+- [x] **Pembaruan Konfigurasi Ollama Host & Fallback**: Menghubungkan Ollama lokal dan remote Ngrok secara tandem menggunakan fallback config.
+
+---
+
 *Dokumen ini dibuat berdasarkan:*
 - *`docs/mcp_optimization_architecture.md` (Rev 3.0 — Production Verified)*
 - *`docs/PRICING_RULE_AND_MCP_INTEGRATION.md`*
 - *Audit langsung codebase `/jualan` pada 2026-07-02*
+
