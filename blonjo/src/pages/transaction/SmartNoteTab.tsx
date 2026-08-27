@@ -14,6 +14,61 @@ import { SmartNoteProps } from './types';
 import { CameraModal } from '../../components/CameraModal';
 import { toast } from 'sonner';
 
+function DynamicOcrStatus() {
+  const [phase, setPhase] = React.useState(0);
+  const phases = React.useMemo(() => [
+    { text: "Mengunggah gambar terenkripsi...", icon: "📤" },
+    { text: "AI Vision memindai pola nota...", icon: "👁️" },
+    { text: "Mengekstrak teks mentah (OCR)...", icon: "🔍" },
+    { text: "Mencocokkan Golden Templates...", icon: "🧠" },
+    { text: "Penyelesaian akhir (Formatting JSON)...", icon: "⚡" },
+  ], []);
+
+  React.useEffect(() => {
+    const interval = setInterval(() => {
+      setPhase((p) => Math.min(p + 1, phases.length - 1));
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [phases.length]);
+
+  return (
+    <div className="flex flex-col items-center justify-center space-y-4 z-20 w-full h-full p-4 pointer-events-none">
+      <Loader2 className="w-10 h-10 text-primary animate-spin" />
+      <div className="flex items-center gap-3 text-sm font-medium text-foreground bg-background/90 px-5 py-2.5 rounded-full shadow-2xl border border-primary/30 ring-1 ring-primary/20">
+        <span className="text-xl">{phases[phase].icon}</span>
+        <span className="animate-pulse whitespace-nowrap">{phases[phase].text}</span>
+      </div>
+    </div>
+  );
+}
+
+function DynamicParseStatus() {
+  const [phase, setPhase] = React.useState(0);
+  const phases = React.useMemo(() => [
+    { text: "Menganalisa konteks transaksi...", icon: "🧠" },
+    { text: "Mengekstrak entitas dan harga...", icon: "🔍" },
+    { text: "Memvalidasi perhitungan...", icon: "🧮" },
+    { text: "Menyusun jurnal otomatis...", icon: "⚡" },
+  ], []);
+
+  React.useEffect(() => {
+    const interval = setInterval(() => {
+      setPhase((p) => Math.min(p + 1, phases.length - 1));
+    }, 1200);
+    return () => clearInterval(interval);
+  }, [phases.length]);
+
+  return (
+    <div className="flex flex-col items-center justify-center space-y-4 z-20 w-full h-full p-4 pointer-events-none">
+      <Wand2 className="w-10 h-10 text-primary animate-bounce" />
+      <div className="flex items-center gap-3 text-sm font-medium text-foreground bg-background/90 px-5 py-2.5 rounded-full shadow-2xl border border-primary/30 ring-1 ring-primary/20">
+        <span className="text-xl">{phases[phase].icon}</span>
+        <span className="animate-pulse whitespace-nowrap">{phases[phase].text}</span>
+      </div>
+    </div>
+  );
+}
+
 export function SmartNoteTab({
   noteText,
   setNoteText,
@@ -29,7 +84,8 @@ export function SmartNoteTab({
   fileInputRef,
   onOpenConfirm,
   saving,
-  updateParsed
+  updateParsed,
+  ocrSource
 }: SmartNoteProps) {
   const { t } = useTranslation();
   const [isCameraOpen, setIsCameraOpen] = React.useState(false);
@@ -50,15 +106,29 @@ export function SmartNoteTab({
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="relative">
-              <SmartTextarea
-                value={noteText}
-                onChange={(val) => {
-                  setNoteText(val);
-                  // Parent will handle resetting parsedResult if needed
-                }}
-                placeholder={t('tx_note_placeholder')}
-                className="min-h-[140px] pb-14"
-              />
+              {/* ── Wrapper textarea + overlay animasi (terpisah dari tombol) ── */}
+              <div className="relative">
+                <SmartTextarea
+                  value={noteText}
+                  onChange={(val) => {
+                    setNoteText(val);
+                    // Parent will handle resetting parsedResult if needed
+                  }}
+                  placeholder={t('tx_note_placeholder')}
+                  className="min-h-[140px] pb-14"
+                />
+
+                {(isUploading || isParsing) && (
+                  <div className="absolute inset-0 z-10 bg-background/60 backdrop-blur-sm rounded-md overflow-hidden border border-primary/20 cursor-wait flex items-center justify-center pointer-events-auto">
+                    {/* Laser scan animation overlay */}
+                    <div className="absolute left-0 w-full h-[2px] bg-primary shadow-[0_0_15px_rgba(34,197,94,1)] animate-scan pointer-events-none" />
+                    {/* Dynamic Status Component */}
+                    {isUploading ? <DynamicOcrStatus /> : <DynamicParseStatus />}
+                  </div>
+                )}
+              </div>
+
+              {/* Tombol-tombol (terpisah dari overlay, selalu di atas) */}
               <div className="absolute right-3 bottom-3 z-20 flex flex-col gap-2.5">
                 <TooltipProvider>
                   {/* Tombol Kamera */}
@@ -87,6 +157,7 @@ export function SmartNoteTab({
                     <TooltipTrigger asChild>
                       <div className="relative group">
                         <input
+                          id="receipt-upload-input"
                           type="file"
                           ref={fileInputRef}
                           className="hidden"
@@ -96,18 +167,11 @@ export function SmartNoteTab({
                         <Button
                           size="icon"
                           variant="outline"
-                          className={cn(
-                            "h-11 w-11 rounded-full border-2 border-primary/40 bg-background/95 backdrop-blur-sm transition-all duration-300 shadow-lg hover:border-primary hover:scale-110 active:scale-95 group-hover:shadow-primary/20",
-                            isUploading && "border-primary border-t-transparent animate-spin"
-                          )}
+                          className="h-11 w-11 rounded-full border-2 border-primary/40 bg-background/95 backdrop-blur-sm transition-all duration-300 shadow-lg hover:border-primary hover:scale-110 active:scale-95 group-hover:shadow-primary/20"
                           onClick={() => fileInputRef.current?.click()}
                           disabled={isUploading}
                         >
-                          {isUploading ? (
-                            <Loader2 className="h-5 w-5 text-primary" />
-                          ) : (
-                            <Plus className="h-6 w-6 text-primary group-hover:rotate-90 transition-transform duration-300" />
-                          )}
+                          <Plus className="h-6 w-6 text-primary group-hover:rotate-90 transition-transform duration-300" />
                         </Button>
                       </div>
                     </TooltipTrigger>
@@ -242,7 +306,7 @@ export function SmartNoteTab({
               </div>
             ) : (
               <div className="space-y-4">
-                <ParsePreview parsed={parsedResult} onUpdate={updateParsed} />
+                <ParsePreview parsed={parsedResult} onUpdate={updateParsed} ocrSource={ocrSource} />
 
                 <Button
                   onClick={onOpenConfirm}

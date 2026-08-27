@@ -39,6 +39,7 @@ const MyCatalogPage = lazy(() => import('./pages/master-data/MyCatalogPage'));
 const SupplierPage = lazy(() => import('./pages/master-data/SupplierPage'));
 const CustomerPage = lazy(() => import('./pages/master-data/CustomerPage'));
 const UomPage = lazy(() => import('./pages/master-data/UomPage'));
+const CategoryPage = lazy(() => import('./pages/master-data/CategoryPage'));
 const JournalMappingPage = lazy(() => import('./pages/master-data/JournalMappingPage'));
 const MasterDataHub = lazy(() => import('./pages/master-data/MasterDataHub'));
 const PricingRulePage = lazy(() => import('./pages/master-data/PricingRulePage'));
@@ -50,7 +51,11 @@ const ProfitLossReport = lazy(() => import('./pages/reports/ProfitLossReport'));
 const BalanceSheetReport = lazy(() => import('./pages/reports/BalanceSheetReport'));
 const EquityChangesReport = lazy(() => import('./pages/reports/EquityChangesReport'));
 const CashFlowReport = lazy(() => import('./pages/reports/CashFlowReport'));
+const GeneralLedgerReport = lazy(() => import('./pages/reports/GeneralLedgerReport'));
+const JournalReport = lazy(() => import('./pages/reports/JournalReport'));
+const TrialBalanceReport = lazy(() => import('./pages/reports/TrialBalanceReport'));
 const VibesChat = lazy(() => import('./pages/insights/VibesChat'));
+const VisualAnalyticsPage = lazy(() => import('./pages/insights/VisualAnalyticsPage'));
 
 // Simple loading fallback
 const PageLoader = () => (
@@ -62,7 +67,7 @@ const PageLoader = () => (
 export default function App() {
   return (
     <>
-      <Toaster position="top-right" richColors />
+      <Toaster position="top-right" richColors closeButton />
       <Suspense fallback={<PageLoader />}>
         <Routes>
           <Route path="/login" element={<Login />} />
@@ -81,7 +86,7 @@ export default function App() {
               <Route index element={<MaterialControlHub />} />
               <Route path="inventory" element={<InventoryControlPage />} />
               <Route path="purchases" element={<PurchasingHistoryPage />} />
-              <Route path="stock-level" element={<StockLevelPage />} />
+              <Route path="stock-level" element={<Navigate to="/material-control/inventory" replace />} />
               <Route path="recommended" element={<RecommendedPurchasePage />} />
               <Route path="purchase-plan" element={<PurchasePlanForm />} />
               <Route path="budgeting" element={<BudgetingPage />} />
@@ -90,11 +95,13 @@ export default function App() {
             </Route>
             
             <Route path="/reports" element={<ReportsHub />} />
-            <Route path="/reports/journals" element={<Reports />} />
+            <Route path="/reports/journals" element={<JournalReport />} />
+            <Route path="/reports/general-ledger" element={<GeneralLedgerReport />} />
             <Route path="/reports/profit-loss" element={<ProfitLossReport />} />
             <Route path="/reports/balance-sheet" element={<BalanceSheetReport />} />
             <Route path="/reports/equity-changes" element={<EquityChangesReport />} />
             <Route path="/reports/cash-flow" element={<CashFlowReport />} />
+            <Route path="/reports/trial-balance" element={<TrialBalanceReport />} />
             
             {/* Master Data nested routes */}
             <Route path="/master-data" element={<MasterDataLayout />}>
@@ -103,12 +110,14 @@ export default function App() {
               <Route path="supplier" element={<SupplierPage />} />
               <Route path="customer" element={<CustomerPage />} />
               <Route path="uom" element={<UomPage />} />
+              <Route path="category" element={<CategoryPage />} />
               <Route path="journal-mapping" element={<JournalMappingPage />} />
             </Route>
 
             
             <Route path="/insights" element={<Navigate to="/insights/vibes-chat" replace />} />
             <Route path="/insights/vibes-chat" element={<VibesChat />} />
+            <Route path="/insights/analytics" element={<VisualAnalyticsPage />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/settings/:tab" element={<Settings />} />
             <Route path="/vibe" element={<LiquidDashboard />} />

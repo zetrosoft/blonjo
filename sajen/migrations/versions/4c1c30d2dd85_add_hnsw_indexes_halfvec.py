@@ -18,14 +18,26 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+from sqlalchemy.engine.reflection import Inspector
+
 def upgrade() -> None:
-    # 1. Convert columns to halfvec(3072) - Supported in pgvector 0.7.0+
-    op.execute("ALTER TABLE products ALTER COLUMN embedding TYPE halfvec(3072);")
-    op.execute("ALTER TABLE ai_learning_templates ALTER COLUMN embedding TYPE halfvec(3072);")
+    conn = op.get_bind()
+    inspector = Inspector.from_engine(conn)
+    tables = inspector.get_table_names()
     
-    # 2. Add HNSW Indexes using halfvec_cosine_ops
-    op.execute("CREATE INDEX IF NOT EXISTS ix_products_embedding_hnsw ON products USING hnsw (embedding halfvec_cosine_ops) WITH (m = 16, ef_construction = 64);")
-    op.execute("CREATE INDEX IF NOT EXISTS ix_ai_templates_embedding_hnsw ON ai_learning_templates USING hnsw (embedding halfvec_cosine_ops) WITH (m = 16, ef_construction = 64);")
+    # 1. Convert columns to halfvec(3072) - Supported in pgvector 0.7.0+
+    if 'products' in tables:
+        columns = [c['name'] for c in inspector.get_columns('products')]
+        if 'embedding' in columns:
+            op.execute("ALTER TABLE products ALTER COLUMN embedding TYPE halfvec(3072);")
+            # 2. Add HNSW Indexes using halfvec_cosine_ops
+            op.execute("CREATE INDEX IF NOT EXISTS ix_products_embedding_hnsw ON products USING hnsw (embedding halfvec_cosine_ops) WITH (m = 16, ef_construction = 64);")
+
+    if 'ai_learning_templates' in tables:
+        columns = [c['name'] for c in inspector.get_columns('ai_learning_templates')]
+        if 'embedding' in columns:
+            op.execute("ALTER TABLE ai_learning_templates ALTER COLUMN embedding TYPE halfvec(3072);")
+            op.execute("CREATE INDEX IF NOT EXISTS ix_ai_templates_embedding_hnsw ON ai_learning_templates USING hnsw (embedding halfvec_cosine_ops) WITH (m = 16, ef_construction = 64);")
 
 
 def downgrade() -> None:

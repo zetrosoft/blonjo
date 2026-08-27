@@ -1,9 +1,13 @@
 import os
 import shutil
 import uuid
+import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, status, UploadFile, Body
+from fastapi.responses import FileResponse
 from typing import List, Annotated, Any
+
+logger = logging.getLogger(__name__)
 
 from app.api.deps import SessionDep, CurrentUser
 from app.models.ocr import OCRTask, OCRFeedback, OCRStatus
@@ -23,7 +27,7 @@ import json
 
 router = APIRouter()
 
-UPLOAD_DIR = "/app/uploads"
+UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/tmp/sajen_uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
@@ -35,7 +39,7 @@ def _map_rich_schema_to_frontend(extracted_data: dict) -> dict:
     """
     if not extracted_data:
         return {}
-    
+        
     # 1. Jika data sudah menggunakan format lama, kembalikan langsung
     if "total_amount" in extracted_data and "items" in extracted_data:
         # Periksa apakah item di dalam array juga sudah format lama
@@ -51,12 +55,21 @@ def _map_rich_schema_to_frontend(extracted_data: dict) -> dict:
                 if len(items) > 3:
                     item_str += f" dan {len(items)-3} item lainnya"
                 
-                if extracted_data.get("transaction_type") == "purchase":
-                    extracted_data["description"] = f"Pembelian di {supplier} pada {tgl}"
-                    if item_str:
-                        extracted_data["description"] += f" ({item_str})"
+                t_type = extracted_data.get("transaction_type") or "purchase"
+                if t_type == "purchase":
+                    extracted_data["description"] = f"Transaksi Pembelian di {supplier}"
+                    if tgl:
+                        extracted_data["description"] += f" pada tanggal {tgl}"
+                elif t_type == "sales":
+                    extracted_data["description"] = f"Transaksi Penjualan di {supplier}"
+                    if tgl:
+                        extracted_data["description"] += f" pada tanggal {tgl}"
                 else:
-                    extracted_data["description"] = f"Transaksi di {supplier} pada {tgl}"
+                    extracted_data["description"] = f"Transaksi di {supplier}"
+                    if tgl:
+                        extracted_data["description"] += f" pada tanggal {tgl}"
+                if item_str:
+                    extracted_data["description"] += f" ({item_str})"
 
             return extracted_data
             
@@ -90,36 +103,73 @@ def _map_rich_schema_to_frontend(extracted_data: dict) -> dict:
         except Exception as e:
             print(f"Date correction in ocr error: {e}")
 
-    supplier_nota = merchant_sec.get("brand_name") or extracted_data.get("toko") or "Supplier"
+    # Cari supplier secara dinamis dari berbagai kemungkinan struktur JSON
+    supplier_nota = (
+        merchant_sec.get("brand_name") 
+        or merchant_sec.get("name") 
+        or extracted_data.get("company_name") 
+        or extracted_data.get("supplier_name") 
+        or extracted_data.get("vendor_name") 
+        or extracted_data.get("toko") 
+        or (extracted_data.get("company_info") or {}).get("name")
+        or (extracted_data.get("vendor") or {}).get("name")
+        or (extracted_data.get("header") or {}).get("company_name")
+        or "Supplier"
+    )
+    
+    # Cari alamat secara dinamis
+    alamat_nota = (
+        merchant_sec.get("address") 
+        or merchant_sec.get("alamat")
+        or extracted_data.get("company_address") 
+        or extracted_data.get("supplier_address") 
+        or (extracted_data.get("company_info") or {}).get("address")
+        or (extracted_data.get("vendor") or {}).get("address")
+        or (extracted_data.get("header") or {}).get("company_address")
+        or ""
+    )
+    
     invoice_no = transaction_sec.get("invoice_number") or transaction_sec.get("no_nota") or ""
-    alamat_nota = merchant_sec.get("address") or extracted_data.get("alamat") or ""
     
     # Ambil list item untuk deskripsi
     items_list = extracted_data.get("items") or extracted_data.get("item_belanja") or []
-    item_names = [i.get("product_name") or i.get("nama_barang") or i.get("name") or "Item" for i in items_list[:3]]
+    item_names = [i.get("product_name") or i.get("nama_barang") or i.get("item_name") or i.get("name") or "Item" for i in items_list[:3]]
     item_str = ", ".join(item_names)
     if len(items_list) > 3:
         item_str += f" dan {len(items_list)-3} item lainnya"
 
-    # Template Deskripsi sesuai permintaan user
+    # Template Deskripsi sesuai permintaan user (Format: Transaksi Pembelian/Penjualan di {Supplier} pada tanggal {Tanggal})
     if tx_type == "purchase":
-        desc = f"Pembelian di {supplier_nota}"
+        desc = f"Transaksi Pembelian di {supplier_nota}"
         if tgl_nota:
-            desc += f" pada {tgl_nota}"
-        if item_str:
-            desc += f" ({item_str})"
+            desc += f" pada tanggal {tgl_nota}"
+    elif tx_type == "sales":
+        desc = f"Transaksi Penjualan di {supplier_nota}"
+        if tgl_nota:
+            desc += f" pada tanggal {tgl_nota}"
     else:
         desc = f"Transaksi di {supplier_nota}"
         if tgl_nota:
-             desc += f" pada {tgl_nota}"
+            desc += f" pada tanggal {tgl_nota}"
+    if item_str:
+        desc += f" ({item_str})"
+
+    # Gunakan deskripsi cerdas dari AI jika ada, jika tidak fallback ke template auto-generate
+    final_desc = extracted_data.get("description") or desc
 
     mapped_data = {
         "transaction_date": tgl_nota,
+        "due_date": transaction_sec.get("due_date"),
+        "payment_method": transaction_sec.get("payment_method"),
         "reference_no": invoice_no,
-        "description": desc,
+        "description": final_desc,
         "contact_name": supplier_nota,
         "contact_address": alamat_nota,
         "total_amount": summary_sec.get("grand_total") or summary_sec.get("total") or extracted_data.get("total_amount") or 0.0,
+        "global_discount_amount": summary_sec.get("global_discount_amount") or 0.0,
+        "tax_treatment": summary_sec.get("tax_treatment") or "none",
+        "tax_percentage": summary_sec.get("tax_percentage") or 0.0,
+        "tax_amount": summary_sec.get("tax_amount") or 0.0,
         "transaction_type": tx_type,
         "items": []
     }
@@ -129,16 +179,42 @@ def _map_rich_schema_to_frontend(extracted_data: dict) -> dict:
     for item in new_items:
         if not isinstance(item, dict):
             continue
-        # Jika item sudah dalam format lama, pertahankan
-        if "name" in item and "product_name" not in item and "nama_barang" not in item:
-            mapped_data["items"].append(item)
+        
+        # Cari diskon secara dinamis menggunakan regex/fuzzy key match
+        discount_val = 0.0
+        for k, v in item.items():
+            if any(x in k.lower() for x in ["discount", "diskon", "potongan"]):
+                try:
+                    discount_val = float(v)
+                    break
+                except:
+                    pass
+
+        # Jika item sudah dalam format lama dan punya diskon, pertahankan format
+        if "name" in item and "product_name" not in item and "nama_barang" not in item and "item_name" not in item:
+            item_mapped = {**item}
+            item_mapped["discount"] = discount_val
+            item_mapped["ocr_name"] = item.get("name", "")
+            mapped_data["items"].append(item_mapped)
             continue
             
+        raw_product_name = item.get("product_name") or item.get("nama_barang") or item.get("item_name") or item.get("name") or ""
+        item_qty = item.get("quantity") or item.get("kuantitas") or item.get("qty") or 1
+        item_subtotal = item.get("subtotal") or item.get("jumlah") or item.get("total") or item.get("Jumlah") or 0.0
+        item_price = item.get("unit_price") or item.get("harga_satuan") or item.get("price") or item.get("Harga @") or 0.0
+        
+        # Jika item_price 0 / kosong tapi subtotal ada, hitung item_price = subtotal / qty
+        if (not item_price or item_price == 0.0) and item_subtotal > 0 and item_qty > 0:
+            item_price = item_subtotal / item_qty
+
         mapped_data["items"].append({
-            "name": item.get("product_name") or item.get("nama_barang") or item.get("name") or "",
-            "qty": item.get("quantity") or item.get("kuantitas") or item.get("qty") or 1,
-            "price": item.get("unit_price") or item.get("harga_satuan") or item.get("price") or 0.0,
-            "total": item.get("subtotal") or item.get("jumlah") or item.get("total") or 0.0,
+            "name": raw_product_name,
+            "ocr_name": raw_product_name,
+            "qty": item_qty,
+            "price": item_price,
+            "total": item_subtotal,
+            "unit": item.get("uom") or item.get("unit") or item.get("satuan") or "pcs",
+            "discount": discount_val,
             "contact_name": supplier_nota,
             "contact_address": alamat_nota
         })
@@ -147,6 +223,7 @@ def _map_rich_schema_to_frontend(extracted_data: dict) -> dict:
 
 
 @router.post("/upload", response_model=OCRTaskResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/upload/", response_model=OCRTaskResponse, status_code=status.HTTP_201_CREATED, include_in_schema=False)
 async def upload_receipt(
     file: UploadFile,
     session: SessionDep,
@@ -164,18 +241,91 @@ async def upload_receipt(
     ext = os.path.splitext(file.filename)[1].lower()
     if ext not in [".jpg", ".jpeg", ".png", ".pdf"]:
         raise HTTPException(status_code=400, detail="Invalid file extension.")
+
+    file_bytes = await file.read()
+    from app.services.vision_matcher import compute_image_signature, hamming_distance
+    img_phash = compute_image_signature(file_bytes)
+
+    # Check if duplicate file task exists for this tenant (by Visual pHash or filename/file size match)
+    existing_tasks = session.query(OCRTask).filter(
+        OCRTask.tenant_id == current_user.tenant_id,
+        OCRTask.status.in_([OCRStatus.COMPLETED, OCRStatus.CORRECTED])
+    ).order_by(OCRTask.id.desc()).limit(50).all()
+
+    existing_task = None
+    if img_phash:
+        for t in existing_tasks:
+            if t.image_hash:
+                dist = hamming_distance(t.image_hash, img_phash)
+                if dist <= 10:  # <= 10 bits difference out of 64 bits (>= 85% visual similarity)
+                    existing_task = t
+                    print(f"[OCR Upload] Visual pHash match found! Task ID {t.id} (Hamming Distance: {dist})")
+                    break
+
+    if not existing_task:
+        file_size = len(file_bytes)
+        for t in existing_tasks:
+            if t.file_name == file.filename:
+                existing_task = t
+                break
+            if t.file_path and os.path.exists(t.file_path):
+                try:
+                    if os.path.getsize(t.file_path) == file_size:
+                        existing_task = t
+                        break
+                except Exception:
+                    pass
+
+    if existing_task and existing_task.extracted_data:
+        from app.models.accounting import Transaction
+        d = existing_task.corrected_data or existing_task.extracted_data
+        tx_total = d.get("total_amount") or d.get("total") or d.get("grand_total")
         
+        has_active_tx = False
+        if tx_total:
+            try:
+                tot_val = float(tx_total)
+                active_tx = session.query(Transaction).filter(
+                    Transaction.tenant_id == current_user.tenant_id,
+                    Transaction.total_amount == tot_val
+                ).first()
+                if active_tx:
+                    has_active_tx = True
+            except Exception as e:
+                print(f"[OCR Upload] Transaction check exception: {e}")
+        
+        if has_active_tx:
+            # Transaksi aktif masih ada di buku besar -> tandai sebagai duplikat
+            setattr(existing_task, "is_duplicate", True)
+            return existing_task
+        elif existing_task.corrected_data:
+            # Transaksi dihapus di buku besar, TETAPI user pernah mengoreksi/mengedit nota ini.
+            # REUSE data koreksi tersimpan agar hasil editan user tidak hilang!
+            print(f"[OCR Upload] Task ID {existing_task.id} memiliki data koreksi tersimpan. Memuat ulang corrected_data untuk user!")
+            setattr(existing_task, "is_duplicate", False)
+            setattr(existing_task, "is_reused_correction", True)
+            return existing_task
+        else:
+            print(f"[OCR Upload] Task ID {existing_task.id} matched pHash/filename, BUT its transaction was DELETED and no corrections exist. Running fresh scan!")
+            existing_task = None
+
+    if existing_task and existing_task.extracted_data:
+        # Mark as duplicate and return existing completed OCR task directly
+        setattr(existing_task, "is_duplicate", True)
+        return existing_task
+
     safe_filename = f"{current_user.id}_{uuid.uuid4()}{ext}"
     file_path = os.path.join(UPLOAD_DIR, safe_filename)
     with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+        buffer.write(file_bytes)
 
     # Create DB Record
     new_task = OCRTask(
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,
         file_name=file.filename,
-        file_path=file_path
+        file_path=file_path,
+        image_hash=img_phash
     )
     session.add(new_task)
     session.commit()
@@ -196,9 +346,11 @@ def get_ocr_tasks(
     Get the status and results of uploaded receipts.
     Memetakan secara transparan hasil format baru ke format lama sebelum dikirim ke frontend.
     """
+    from app.services.ocr_normalizer import apply_ocr_entity_aliases
     tasks = session.query(OCRTask).filter(OCRTask.user_id == current_user.id, OCRTask.tenant_id == current_user.tenant_id).order_by(OCRTask.id.desc()).limit(limit).all()
     for task in tasks:
         if task.extracted_data:
+            task.extracted_data = apply_ocr_entity_aliases(session, task.tenant_id, task.extracted_data)
             task.extracted_data = _map_rich_schema_to_frontend(task.extracted_data)
         if task.corrected_data:
             task.corrected_data = _map_rich_schema_to_frontend(task.corrected_data)
@@ -219,10 +371,56 @@ def get_ocr_task_detail(
         raise HTTPException(status_code=404, detail="OCR Task not found")
     
     if task.extracted_data:
+        from app.services.ocr_normalizer import apply_ocr_entity_aliases
+        task.extracted_data = apply_ocr_entity_aliases(session, task.tenant_id, task.extracted_data)
         task.extracted_data = _map_rich_schema_to_frontend(task.extracted_data)
+        if isinstance(task.extracted_data, dict) and task.extracted_data.get("is_duplicate"):
+            setattr(task, "is_duplicate", True)
+            
+    if task.image_hash and not getattr(task, "is_duplicate", False):
+        from app.services.vision_matcher import hamming_distance
+        from app.models.accounting import Transaction
+        
+        older_dup = session.query(OCRTask).filter(
+            OCRTask.tenant_id == current_user.tenant_id,
+            OCRTask.id < task.id,
+            OCRTask.image_hash.isnot(None),
+            OCRTask.status.in_([OCRStatus.COMPLETED, OCRStatus.CORRECTED])
+        ).order_by(OCRTask.id.desc()).first()
+        
+        if older_dup and older_dup.image_hash:
+            if hamming_distance(task.image_hash, older_dup.image_hash) <= 10:
+                d = older_dup.corrected_data or older_dup.extracted_data or {}
+                tot_val = float(d.get("total_amount") or d.get("total") or 0)
+                
+                active_tx = None
+                if tot_val > 0:
+                    active_tx = session.query(Transaction).filter(
+                        Transaction.tenant_id == current_user.tenant_id,
+                        Transaction.total_amount == tot_val
+                    ).first()
+                
+                if active_tx:
+                    setattr(task, "is_duplicate", True)
+
     if task.corrected_data:
         task.corrected_data = _map_rich_schema_to_frontend(task.corrected_data)
     return task
+
+@router.get("/tasks/{task_id}/image")
+@router.get("/tasks/{task_id}/image/", include_in_schema=False)
+def get_ocr_task_image(
+    task_id: int,
+    session: SessionDep,
+):
+    """
+    Serve physical receipt image file for an OCR task.
+    """
+    task = session.query(OCRTask).filter(OCRTask.id == task_id).first()
+    if not task or not task.file_path or not os.path.exists(task.file_path):
+        raise HTTPException(status_code=404, detail="Image file not found")
+    
+    return FileResponse(task.file_path)
 
 @router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_ocr_task(
@@ -343,10 +541,44 @@ def correct_ocr_task(
     # 3. Update task
     task.corrected_data = corrected
     task.status = OCRStatus.CORRECTED
+
+    # 3.5 Record Entity-Level Alias Mappings (Fast-Path Normalizer Learning)
+    from app.services.ocr_normalizer import record_ocr_entity_aliases
+    record_ocr_entity_aliases(session, task.tenant_id, original, corrected)
     
     session.commit()
     session.refresh(task)
     
+    # 4. Auto-ingest ke RAG MCP (background thread — tidak blokir response)
+    #    Setiap koreksi dari pengguna = pembelajaran baru untuk nota serupa di masa depan
+    import threading, requests as _req, json as _json
+    from app.core.config import settings as _settings
+
+    def _ingest_to_rag():
+        try:
+            raw_text = task.raw_ocr_text or ""
+            if not raw_text or not task.corrected_data:
+                return
+            # Gunakan corrected_data (bukan extracted_data) sebagai expected_output
+            # agar model belajar dari versi yang sudah divalidasi pengguna
+            payload = {
+                "raw_ocr_text": raw_text,
+                "expected_output": _json.dumps(task.corrected_data, ensure_ascii=False),
+                "tenant_id": task.tenant_id,
+                "file_name": task.file_name or "unknown"
+            }
+            url = f"{_settings.MCP_SERVER_URL.rstrip('/')}/api/v1/rag/ingest"
+            resp = _req.post(url, json=payload, timeout=20)
+            if resp.status_code == 200:
+                print(f"[RAG Auto-Ingest] ✅ Task {task.id} ({task.file_name}) berhasil dipelajari oleh MCP RAG.")
+            else:
+                print(f"[RAG Auto-Ingest] ⚠️ Task {task.id} gagal ingest: HTTP {resp.status_code} — {resp.text[:200]}")
+        except Exception as _e:
+            # Jangan gagalkan koreksi hanya karena RAG ingest error
+            print(f"[RAG Auto-Ingest] ❌ Error background ingest task {task.id}: {_e}")
+
+    threading.Thread(target=_ingest_to_rag, daemon=True).start()
+
     # Map back for response format compatibility
     if task.extracted_data:
         task.extracted_data = _map_rich_schema_to_frontend(task.extracted_data)
@@ -479,8 +711,6 @@ def delete_training_template(template_id: str, session: SessionDep, current_user
 @router.post("/training-templates/extract-raw")
 async def extract_raw_text(file: UploadFile, session: SessionDep, current_user: CurrentUser):
     """Hanya mengekstrak teks mentah dari gambar untuk keperluan Form Training AI"""
-    import pytesseract
-    from PIL import Image
     import io
 
     contents = await file.read()
@@ -499,13 +729,8 @@ async def extract_raw_text(file: UploadFile, session: SessionDep, current_user: 
         except Exception as e:
             print(f"Gemini Vision failed in training, falling back to Tesseract: {e}")
 
-    # 2. Fallback ke Tesseract (kurang akurat untuk tulisan tangan)
-    try:
-        img = Image.open(io.BytesIO(contents))
-        raw_text = pytesseract.image_to_string(img, lang="ind+eng")
-        return {"file_name": file.filename, "raw_text": raw_text}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Gagal memproses gambar: {str(e)}")
+    # 2. Fallback jika Gemini Vision tidak tersedia atau error
+    raise HTTPException(status_code=400, detail="Gagal memproses gambar: Gemini Vision tidak tersedia atau mengalami gangguan.")
 
 @router.post("/training-templates/process", response_model=AITrainingProcessResponse)
 async def process_training_data(

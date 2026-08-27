@@ -10,15 +10,18 @@
 import React from 'react';
 import { parseNoteText, ParsedTransaction } from '../lib/smartParser';
 import { formatRp, formatNumber } from '../lib/utils';
+import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
-import { CheckCircle2, AlertCircle, Pencil } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Pencil, Cpu, Bot, Plus, RefreshCw, Image as ImageIcon } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { fetchClient } from '../api/client';
 
 interface ParsePreviewProps {
   parsed: ParsedTransaction;
   onUpdate: (updated: Partial<ParsedTransaction>) => void;
   accounts?: any[];
+  ocrSource?: 'local' | 'llm' | null;
 }
 
 // ─── Confidence badge ───────────────────────
@@ -28,17 +31,59 @@ export const CONFIDENCE_MAP = {
   low:    { label: 'Akurasi Rendah',  icon: AlertCircle,  cls: 'text-rose-400 bg-rose-500/10 border-rose-500/30' },
 };
 
-export function ParsePreview({ parsed, onUpdate, accounts = [] }: ParsePreviewProps) {
-  // Auto-fill unit_price if missing but total and qty are available
+export function ParsePreview({ parsed, onUpdate, accounts = [], ocrSource }: ParsePreviewProps) {
+  const [products, setProducts] = React.useState<any[]>([]);
+  const [uoms, setUoms] = React.useState<any[]>([]);
+
+  // Load products & UOMs for autocomplete
   React.useEffect(() => {
+    const loadAutocompleteData = async () => {
+      try {
+        const prodData = await fetchClient('/inventory/products');
+        if (Array.isArray(prodData)) {
+          setProducts(prodData);
+        }
+        const uomData = await fetchClient('/inventory/uoms');
+        if (Array.isArray(uomData)) {
+          setUoms(uomData);
+        }
+      } catch (err) {
+        console.error('Failed to load autocomplete data in ParsePreview:', err);
+      }
+    };
+    loadAutocompleteData();
+  }, []);
+
+  // Normalize, auto-fill unit_price, and auto-fill unit ON INITIAL LOAD
+  const initialNormalizedRef = React.useRef<string | null>(null);
+
+  React.useEffect(() => {
+    const rawKey = `${parsed.raw_text}_${parsed.items.length}_${parsed.total_amount}`;
+    if (initialNormalizedRef.current === rawKey) return;
+
     let changed = false;
+    let itemsTotalSum = 0;
     const newItems = parsed.items.map(item => {
       let updatedItem = { ...item };
       
-      // Auto-fill unit_price if missing but total and qty are available
-      if (item.total > 0 && item.qty > 0 && (!item.unit_price || item.unit_price === 0)) {
+      // Normalize price field to unit_price if missing
+      const rawPrice = item.unit_price ?? (item as any).price ?? (item as any).harga_satuan ?? (item as any).rate ?? 0;
+      
+      if (!updatedItem.unit_price || updatedItem.unit_price === 0) {
+        if (rawPrice > 0) {
+          changed = true;
+          updatedItem.unit_price = rawPrice;
+        } else if (item.total > 0 && item.qty > 0) {
+          changed = true;
+          updatedItem.unit_price = item.total / item.qty;
+        }
+      }
+      
+      // Re-sync total jika item.total bernilai 0 / salah kalkulasi
+      const expectedTotal = updatedItem.qty * updatedItem.unit_price;
+      if (expectedTotal > 0 && (!updatedItem.total || updatedItem.total === 0 || Math.abs(updatedItem.total - expectedTotal) > 0.01)) {
         changed = true;
-        updatedItem.unit_price = item.total / item.qty;
+        updatedItem.total = expectedTotal;
       }
       
       // Auto-fill unit if missing
@@ -46,14 +91,23 @@ export function ParsePreview({ parsed, onUpdate, accounts = [] }: ParsePreviewPr
         changed = true;
         updatedItem.unit = 'pcs';
       }
+
+      itemsTotalSum += (updatedItem.total || 0);
       
       return updatedItem;
     });
 
-    if (changed) {
-      onUpdate({ items: newItems });
+    const hasItems = newItems.length > 0;
+    const isTotalMismatched = hasItems && itemsTotalSum > 0 && Math.abs((parsed.total_amount || 0) - itemsTotalSum) > 0.01;
+
+    if (changed || isTotalMismatched) {
+      initialNormalizedRef.current = rawKey;
+      onUpdate({
+        items: newItems,
+        ...(isTotalMismatched ? { total_amount: itemsTotalSum } : {})
+      });
     }
-  }, [parsed.items, onUpdate]);
+  }, [parsed.raw_text, parsed.items, parsed.total_amount, onUpdate]);
 
   const updateItem = (idx: number, updatedFields: Partial<typeof parsed.items[0]>) => {
     const newItems = [...parsed.items];
@@ -61,17 +115,36 @@ export function ParsePreview({ parsed, onUpdate, accounts = [] }: ParsePreviewPr
     
     // Recalculate item total if qty or price changes
     if ('qty' in updatedFields || 'unit_price' in updatedFields) {
-      item.total = item.qty * item.unit_price;
+      item.total = (item.qty || 0) * (item.unit_price || 0);
     }
     
     newItems[idx] = item;
     
     // Recalculate transaction grand total
-    const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
+    const newTotal = newItems.reduce((sum, i) => sum + (i.total || 0), 0);
     
     onUpdate({ 
       items: newItems,
       total_amount: newTotal 
+    });
+  };
+
+  const handleAddItem = () => {
+    const newItem = {
+      name: '',
+      qty: 1,
+      unit: 'pcs',
+      unit_price: 0,
+      total: 0,
+      is_manual_correction: true
+    };
+    
+    const newItems = [...parsed.items, newItem];
+    const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
+    
+    onUpdate({
+      items: newItems,
+      total_amount: newTotal
     });
   };
 
@@ -100,12 +173,39 @@ export function ParsePreview({ parsed, onUpdate, accounts = [] }: ParsePreviewPr
         <div className="space-y-1">
           <Label className="text-xs text-muted-foreground">Type</Label>
           <div className={cn(
-            'flex items-center px-3 h-9 rounded-md border text-xs font-semibold',
+            'flex items-center justify-between px-3 h-9 rounded-md border text-xs font-semibold',
             parsed.type_color
           )}>
-            {parsed.type_label}
+            <span>{parsed.type_label}</span>
+            {ocrSource && (
+              <span className={cn(
+                'flex items-center gap-1 text-[10px] font-normal px-1.5 py-0.5 rounded-full border ml-2',
+                ocrSource === 'local'
+                  ? 'bg-sky-500/10 text-sky-400 border-sky-500/30'
+                  : 'bg-violet-500/10 text-violet-400 border-violet-500/30'
+              )}>
+                {ocrSource === 'local' ? <Cpu className="w-2.5 h-2.5" /> : <Bot className="w-2.5 h-2.5" />}
+                {ocrSource === 'local' ? 'Lokal' : 'AI'}
+              </span>
+            )}
           </div>
         </div>
+
+        {/* ── Banner Peringatan Duplikasi AI ─── */}
+        {((parsed as any).is_duplicate || (parsed as any).duplicate_warning) && (
+          <div className="p-3 rounded-xl border border-rose-500/40 bg-rose-500/10 flex items-start gap-2.5 animate-in fade-in duration-300">
+            <AlertCircle className="w-5 h-5 text-rose-500 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <h4 className="text-xs font-bold text-rose-500 uppercase tracking-wider flex items-center gap-1">
+                ⚠️ Peringatan Duplikasi AI
+              </h4>
+              <p className="text-xs text-rose-400 dark:text-rose-300 leading-relaxed font-medium">
+                {(parsed as any).duplicate_warning || 'Struk fisik ini terdeteksi visual/semantik sudah pernah di-scan atau dicatat di database sebelumnya.'}
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="space-y-1">
           <Label className="text-xs text-muted-foreground">Supplier Name</Label>
           <Input
@@ -143,6 +243,28 @@ export function ParsePreview({ parsed, onUpdate, accounts = [] }: ParsePreviewPr
               className="h-9 text-sm pl-7 font-semibold tabular-nums"
             />
           </div>
+        </div>
+      </div>
+
+      {/* ── Metode Pembayaran & Jatuh Tempo ─── */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground">Metode Pembayaran</Label>
+          <Input
+            value={parsed.payment_method || ''}
+            onChange={e => onUpdate({ payment_method: e.target.value })}
+            className="h-9 text-sm"
+            placeholder="Misal: cash, transfer, tempo..."
+          />
+        </div>
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground">Jatuh Tempo (Jika Tempo)</Label>
+          <Input
+            type="date"
+            value={parsed.due_date || ''}
+            onChange={e => onUpdate({ due_date: e.target.value })}
+            className="h-9 text-sm"
+          />
         </div>
       </div>
 
@@ -208,6 +330,7 @@ export function ParsePreview({ parsed, onUpdate, accounts = [] }: ParsePreviewPr
                     <td className="px-2 py-1">
                       <Input
                         value={item.name}
+                        list="products-datalist"
                         onChange={e => updateItem(idx, { name: e.target.value })}
                         className="h-7 text-xs border-transparent bg-transparent hover:bg-background focus:bg-background focus:border-primary/50 transition-all p-1"
                       />
@@ -227,6 +350,7 @@ export function ParsePreview({ parsed, onUpdate, accounts = [] }: ParsePreviewPr
                     <td className="px-1 py-1">
                       <Input
                         value={item.unit || ''}
+                        list="uoms-datalist"
                         onChange={e => updateItem(idx, { unit: e.target.value })}
                         placeholder="—"
                         className="h-7 text-xs text-center border-transparent bg-transparent hover:bg-background focus:bg-background focus:border-primary/50 transition-all p-1"
@@ -236,7 +360,7 @@ export function ParsePreview({ parsed, onUpdate, accounts = [] }: ParsePreviewPr
                       <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[9px] text-muted-foreground font-mono pointer-events-none">Rp</span>
                       <Input
                         type="text"
-                        value={item.unit_price ? formatRp(item.unit_price) : ''}
+                        value={item.unit_price !== undefined && item.unit_price !== null ? formatNumber(item.unit_price) : ''}
                         onChange={e => {
                           const raw = e.target.value.replace(/[^0-9]/g, '');
                           const num = parseInt(raw, 10);
@@ -264,8 +388,32 @@ export function ParsePreview({ parsed, onUpdate, accounts = [] }: ParsePreviewPr
               </tfoot>
             </table>
           </div>
+          <div className="flex justify-end mt-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleAddItem}
+              className="h-8 text-xs gap-1.5"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Tambah Item Manual
+            </Button>
+          </div>
         </div>
       )}
+
+      {/* Datalists for autocomplete */}
+      <datalist id="products-datalist">
+        {products.map((p, pIdx) => (
+          <option key={pIdx} value={p.name} />
+        ))}
+      </datalist>
+      <datalist id="uoms-datalist">
+        {uoms.map((u, uIdx) => (
+          <option key={uIdx} value={u.code.toLowerCase()} label={u.name} />
+        ))}
+      </datalist>
 
       {/* ── Low confidence warning ──────────── */}
       {parsed.confidence === 'low' && (

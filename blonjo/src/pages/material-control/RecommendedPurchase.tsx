@@ -12,7 +12,7 @@ import {
 import {
   Sparkles, RefreshCw, ChevronDown, ChevronUp,
   ClipboardList, Plus, Trash2, Check, X, Calendar, PackageCheck, Pencil,
-  CheckCircle, ArrowRight
+  CheckCircle, ArrowRight, Save
 } from 'lucide-react';
 import { fetchClient } from '../../api/client';
 import { formatRp } from '../../lib/utils';
@@ -267,6 +267,8 @@ function ListRencanaBelanja() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [plans, setPlans] = useState<PurchasePlan[]>([]);
+  const [products, setProducts] = useState<any[]>([]);
+  useEffect(() => { fetchClient('/inventory/products').then((data: any) => { const prod = Array.isArray(data) ? data : (data.items || []); setProducts(prod); }).catch(() => {}); }, []);
   const [loading, setLoading] = useState(true);
   const [expandedPlans, setExpandedPlans] = useState<Record<number, boolean>>({});
   const [deletingId, setDeletingId] = useState<number | null>(null);
@@ -276,14 +278,17 @@ function ListRencanaBelanja() {
 
   const [checkedItems, setCheckedItems] = useState<Record<number, Set<number>>>({});
   const [editingQty, setEditingQty] = useState<Record<number, string>>({});
+  const [editingPrice, setEditingPrice] = useState<Record<number, string>>({});
 
   const loadPlans = async () => {
     setLoading(true);
     try {
       const data = await fetchClient('/material-control/purchase-plans');
-      const sorted = (data || []).sort((a: PurchasePlan, b: PurchasePlan) =>
-        new Date(a.planned_date).getTime() - new Date(b.planned_date).getTime()
-      );
+      const sorted = (data || []).sort((a: PurchasePlan, b: PurchasePlan) => {
+        const timeA = a.planned_date ? new Date(a.planned_date).getTime() : 0;
+        const timeB = b.planned_date ? new Date(b.planned_date).getTime() : 0;
+        return timeB - timeA;
+      });
       setPlans(sorted);
       const initChecked: Record<number, Set<number>> = {};
       sorted.forEach((p: PurchasePlan) => { initChecked[p.id] = new Set(); });
@@ -376,12 +381,13 @@ function ListRencanaBelanja() {
 
   const handleComplete = async (plan: PurchasePlan, e: React.MouseEvent) => {
     e.stopPropagation();
+    const checked = checkedItems[plan.id] || new Set<number>();
     setExecutingId(plan.id);
     try {
       await fetchClient(`/material-control/purchase-plans/${plan.id}/execute`, {
         method: 'POST',
         body: JSON.stringify({
-          purchased_item_ids: plan.items.map(it => it.id),
+          purchased_item_ids: Array.from(checked),
           complete_plan: true
         })
       });
@@ -394,6 +400,94 @@ function ListRencanaBelanja() {
       setExecutingId(null);
     }
   };
+
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const [addingToPlan, setAddingToPlan] = useState<number | null>(null);
+  const [newItem, setNewItem] = useState({ name: '', qty: 1, unit_price: 0, unit: 'pcs', product_id: null as number | null });
+
+  const handleSavePlanChanges = async (plan: PurchasePlan, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSavingId(plan.id);
+    try {
+      const payload = {
+        planned_date: plan.planned_date,
+        items: plan.items.map(it => ({
+          product_id: it.product_id,
+          custom_product_name: (!it.product_id) ? (it.custom_product_name || it.product_name) : null,
+          supplier_contact_id: it.supplier_contact_id,
+          qty: it.qty,
+          unit_price: it.unit_price,
+          is_purchased: it.is_purchased
+        }))
+      };
+      await fetchClient(`/material-control/purchase-plans/${plan.id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+      });
+      toast.success("Perubahan berhasil disimpan");
+      loadPlans();
+    } catch (err) {
+      toast.error("Gagal menyimpan perubahan");
+    } finally {
+      setSavingId(null);
+    }
+  };
+  
+  const handleDeleteItem = (planId: number, itemId: number) => {
+    setPlans(prev => prev.map(p => {
+      if (p.id !== planId) return p;
+      const newItems = p.items.filter(it => it.id !== itemId);
+      return {
+        ...p,
+        items: newItems,
+        total_amount: newItems.reduce((s, it) => s + (Number(it.qty) * Number(it.unit_price)), 0)
+      };
+    }));
+  };
+  
+  const handleAddNewItem = (plan: PurchasePlan) => {
+    if (!newItem.name) return;
+    setPlans(prev => prev.map(p => {
+      if (p.id !== plan.id) return p;
+      const fakeId = -Math.floor(Math.random() * 1000000);
+      let p_id = newItem.product_id;
+      let p_name = newItem.name;
+      let p_sku = 'N/A';
+      
+      let found = p_id ? products.find(prod => prod.id === p_id) : products.find(prod => prod.name.toLowerCase() === newItem.name.toLowerCase());
+      
+      if (found) {
+        p_id = found.id;
+        p_name = found.name;
+        p_sku = found.sku || 'N/A';
+      } else {
+        // If custom, append unit
+        p_name = `${newItem.name} (${newItem.unit})`;
+      }
+      
+      const newItems = [...p.items, {
+        id: fakeId,
+        product_id: p_id,
+        custom_product_name: p_id ? null : p_name,
+        product_name: p_name,
+        sku: p_sku,
+        supplier_contact_id: null,
+        supplier_name: null,
+        qty: newItem.qty,
+        unit_price: newItem.unit_price,
+        subtotal: newItem.qty * newItem.unit_price,
+        is_purchased: false
+      }];
+      return {
+        ...p,
+        items: newItems,
+        total_amount: newItems.reduce((s, it) => s + (Number(it.qty) * Number(it.unit_price)), 0)
+      };
+    }));
+    setAddingToPlan(null);
+    setNewItem({ name: '', qty: 1, unit_price: 0, unit: 'pcs', product_id: null });
+  };
+
 
   return (
     <div className="space-y-4">
@@ -473,10 +567,26 @@ function ListRencanaBelanja() {
                         )}
                       </div>
                       <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+                        
                         <span className="flex items-center gap-1">
                           <Calendar className="h-3 w-3" />
-                          {t('mc_rp_date')}: <strong className="text-zinc-700 dark:text-zinc-300 ml-1">{formatDate(plan.planned_date)}</strong>
+                          {t('mc_rp_date')}:
+                          {isActive ? (
+                            <input 
+                              type="date" 
+                              className="ml-1 text-xs border border-zinc-200 dark:border-zinc-700 rounded px-1 py-0.5 bg-transparent dark:text-zinc-300" 
+                              value={plan.planned_date.split('T')[0]} 
+                              onChange={e => {
+                                const newDate = e.target.value;
+                                setPlans(prev => prev.map(p => p.id === plan.id ? { ...p, planned_date: newDate } : p));
+                              }}
+                              onClick={e => e.stopPropagation()}
+                            />
+                          ) : (
+                            <strong className="text-zinc-700 dark:text-zinc-300 ml-1">{formatDate(plan.planned_date)}</strong>
+                          )}
                         </span>
+
                         <span>•</span>
                         <span>{plan.items?.length || 0} {t('mc_rp_items')}</span>
                       </div>
@@ -545,6 +655,8 @@ function ListRencanaBelanja() {
                                 const isChecked = planChecked.has(item.id);
                                 const isEditingThisQty = editingQty[item.id] !== undefined;
                                 const displayQty = isEditingThisQty ? (parseFloat(editingQty[item.id]) || 0) : item.qty;
+                                const isEditingThisPrice = editingPrice[item.id] !== undefined;
+                                const displayPrice = isEditingThisPrice ? (parseFloat(editingPrice[item.id]) || 0) : Number(item.unit_price);
 
                                 return (
                                   <TableRow
@@ -564,7 +676,7 @@ function ListRencanaBelanja() {
                                     </TableCell>
 
                                     <TableCell className="py-3">
-                                      <div className="font-medium text-sm text-zinc-900 dark:text-zinc-100">{item.product_name}</div>
+                                      <div className="font-medium text-sm text-zinc-900 dark:text-zinc-100">{item.custom_product_name || item.product_name}</div>
                                       <div className="text-[10px] text-muted-foreground font-mono">{item.sku || '-'}</div>
                                     </TableCell>
 
@@ -621,26 +733,131 @@ function ListRencanaBelanja() {
                                       )}
                                     </TableCell>
 
-                                    <TableCell className="py-3 text-right text-xs font-mono">{formatRp(Number(item.unit_price))}</TableCell>
-                                    <TableCell className="py-3 pr-5 text-right text-sm font-semibold">{formatRp(displayQty * Number(item.unit_price))}</TableCell>
+                                    {/* Harga — editable inline */}
+                                    <TableCell className="py-3 text-right">
+                                      {isEditingThisPrice ? (
+                                        <div className="flex items-center justify-end gap-1">
+                                          <Input
+                                            type="number" min="0" step="1"
+                                            value={editingPrice[item.id]}
+                                            onChange={e => setEditingPrice(prev => ({ ...prev, [item.id]: e.target.value }))}
+                                            className="h-7 w-28 text-xs text-right"
+                                            autoFocus
+                                          />
+                                          <button
+                                            className="text-emerald-600 hover:text-emerald-700"
+                                            onClick={() => {
+                                              const newPrice = parseFloat(editingPrice[item.id]);
+                                              if (isNaN(newPrice) || newPrice < 0) { toast.warning('Harga tidak valid'); return; }
+                                              setPlans(prev => prev.map(p => {
+                                                if (p.id !== plan.id) return p;
+                                                return {
+                                                  ...p,
+                                                  items: p.items.map(it => it.id === item.id ? { ...it, unit_price: newPrice, subtotal: Number(it.qty) * newPrice } : it),
+                                                  total_amount: p.items.reduce((s, it) => s + (it.id === item.id ? Number(it.qty) * newPrice : Number(it.subtotal)), 0)
+                                                };
+                                              }));
+                                              setEditingPrice(prev => { const n = { ...prev }; delete n[item.id]; return n; });
+                                            }}
+                                          >
+                                            <Check className="h-3.5 w-3.5" />
+                                          </button>
+                                          <button
+                                            className="text-zinc-400 hover:text-zinc-600"
+                                            onClick={() => setEditingPrice(prev => { const n = { ...prev }; delete n[item.id]; return n; })}
+                                          >
+                                            <X className="h-3.5 w-3.5" />
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <div className="flex items-center justify-end gap-1.5 group">
+                                          <span className="text-xs font-mono">{formatRp(Number(item.unit_price))}</span>
+                                          {isActive && !item.is_purchased && (
+                                            <button
+                                              className="opacity-0 group-hover:opacity-100 transition-opacity text-zinc-400 hover:text-zinc-600"
+                                              onClick={() => setEditingPrice(prev => ({ ...prev, [item.id]: String(Number(item.unit_price)) }))}
+                                            >
+                                              <Pencil className="h-3 w-3" />
+                                            </button>
+                                          )}
+                                        </div>
+                                      )}
+                                    </TableCell>
+                                    <TableCell className="py-3 pr-5 text-right text-sm font-semibold">{formatRp(displayQty * displayPrice)}</TableCell>
 
                                     <TableCell className="py-3 text-center">
-                                      {item.is_purchased ? (
-                                        <Badge className="text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-                                          <Check className="h-2.5 w-2.5 mr-1" />Dibeli
-                                        </Badge>
-                                      ) : (
-                                        <Badge className="text-[10px] bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
-                                          {t('mc_rp_status_pending')}
-                                        </Badge>
-                                      )}
+                                      <div className="flex items-center justify-center gap-2">
+                                        {item.is_purchased ? (
+                                          <Badge className="text-[10px] bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                                            <Check className="h-2.5 w-2.5 mr-1" />Dibeli
+                                          </Badge>
+                                        ) : (
+                                          <Badge variant="outline" className="text-[10px] text-zinc-500">{t('mc_rp_status_pending')}</Badge>
+                                        )}
+                                        {isActive && !item.is_purchased && (
+                                          <button onClick={(e) => { e.stopPropagation(); handleDeleteItem(plan.id, item.id); }} className="text-zinc-400 hover:text-red-500">
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        )}
+                                      </div>
                                     </TableCell>
                                   </TableRow>
                                 );
                               })}
+                            
                             </TableBody>
                           </Table>
                         </div>
+                        {isActive && (
+                          <div className="p-3 border-t border-zinc-100 dark:border-zinc-800 bg-zinc-50/20 dark:bg-zinc-900/10">
+                            {addingToPlan === plan.id ? (
+                              <div className="flex items-center gap-2">
+                                <div className="flex-1 relative">
+                                  <Input 
+                                    list="product-suggestions" 
+                                    placeholder="Nama barang..." 
+                                    className="h-8 text-xs w-full" 
+                                    value={newItem.name} 
+                                    onChange={e => {
+                                      const val = e.target.value;
+                                      const found = products.find(p => p.name === val);
+                                      if (found) {
+                                        setNewItem({...newItem, name: val, product_id: found.id, unit_price: found.purchase_price || 0, unit: found.base_unit || 'pcs'});
+                                      } else {
+                                        setNewItem({...newItem, name: val, product_id: null});
+                                      }
+                                    }} 
+                                  />
+                                  <datalist id="product-suggestions">
+                                    {products.map(p => <option key={p.id} value={p.name} />)}
+                                  </datalist>
+                                </div>
+                                <select 
+                                  className="h-8 text-xs border border-zinc-200 dark:border-zinc-700 bg-transparent rounded px-2"
+                                  value={newItem.unit}
+                                  onChange={e => setNewItem({...newItem, unit: e.target.value})}
+                                  disabled={!!newItem.product_id}
+                                >
+                                  <option value="pcs">pcs</option>
+                                  <option value="kg">kg</option>
+                                  <option value="liter">liter</option>
+                                  <option value="box">box</option>
+                                  <option value="pack">pack</option>
+                                  <option value="lusin">lusin</option>
+                                </select>
+                                <Input type="number" placeholder="Qty" className="h-8 w-20 text-xs" value={newItem.qty} onChange={e => setNewItem({...newItem, qty: Number(e.target.value)})} />
+                                <Input type="number" placeholder="Harga" className="h-8 w-28 text-xs" value={newItem.unit_price} onChange={e => setNewItem({...newItem, unit_price: Number(e.target.value)})} />
+                                <Button size="sm" className="h-8 bg-indigo-600 hover:bg-indigo-700" onClick={() => handleAddNewItem(plan)}>Tambah</Button>
+                                <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => setAddingToPlan(null)}><X className="w-4 h-4" /></Button>
+                              </div>
+                            ) : (
+                              <Button size="sm" variant="outline" className="h-8 text-xs border-dashed" onClick={() => setAddingToPlan(plan.id)}>
+                                <Plus className="w-3.5 h-3.5 mr-1" /> Tambah Item Baru
+                              </Button>
+                            )}
+                          </div>
+                        )}
+  
 
                         {/* Footer action — hanya jika plan masih aktif */}
                         {isActive && (
@@ -651,6 +868,15 @@ function ListRencanaBelanja() {
                                 : t('mc_rp_check_hint')}
                             </p>
                             <div className="flex items-center gap-2">
+                              <Button
+                                size="sm" variant="outline"
+                                className="gap-1.5 h-8 text-xs"
+                                onClick={(e) => handleSavePlanChanges(plan, e)}
+                                disabled={savingId === plan.id}
+                              >
+                                {savingId === plan.id ? <RefreshCw className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                                Simpan Perubahan
+                              </Button>
                               <Button
                                 size="sm" variant="outline"
                                 className="gap-1.5 h-8 text-xs border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400 disabled:opacity-50"

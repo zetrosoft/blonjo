@@ -75,6 +75,7 @@ export interface SmartNoteProps {
   onOpenConfirm: () => void;
   saving: boolean;
   updateParsed: (updates: Partial<ParsedTransaction>) => void;
+  ocrSource?: 'local' | 'llm' | null;
 }
 
 export interface ManualEntryProps {

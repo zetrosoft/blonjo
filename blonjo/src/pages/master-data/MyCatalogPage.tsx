@@ -87,6 +87,10 @@ export default function MyCatalogPage({ hideHeader = false }: { hideHeader?: boo
     loadCatalog();
   }, []);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
+
   const toggleStockMaintenance = async (checked: boolean) => {
     try {
       await fetchClient('/settings', {

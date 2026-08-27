@@ -39,6 +39,13 @@ export default function MasterDataHub() {
       path: '/master-data/uom'
     },
     {
+      title: t('md_hub_category_title'),
+      desc: t('md_hub_category_desc'),
+      btnText: t('md_hub_category_btn'),
+      icon: Tag,
+      path: '/master-data/category'
+    },
+    {
       title: t('md_hub_journal_mapping_title'),
       desc: t('md_hub_journal_mapping_desc'),
       btnText: t('md_hub_journal_mapping_btn'),

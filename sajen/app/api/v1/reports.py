@@ -4,7 +4,7 @@ from app.api.deps import SessionDep, CurrentUser
 from app.schemas.reports import ProfitLossReport, BalanceSheetReport, EquityChangesReport, CashFlowReport
 from app.services.reports import (
     get_profit_loss, get_balance_sheet, get_equity_changes, get_cash_flow,
-    generate_report_pdf
+    get_trial_balance, get_journals, generate_report_pdf
 )
 
 router = APIRouter()
@@ -108,6 +108,91 @@ def get_cash_flow_pdf(
     data = get_cash_flow(session, current_user.tenant_id, start_date, end_date)
     pdf_content = generate_report_pdf(
         "Laporan Arus Kas", data, "cash_flow", 
+        store_name=store_info.get("store_name", "Blonjo Store"),
+        store_address=store_info.get("store_address", ""),
+        store_phone=store_info.get("store_phone", ""),
+        lang=lang
+    )
+    return Response(content=pdf_content, media_type="application/pdf")
+
+@router.get("/trial-balance")
+def get_trial_balance_report(
+    session: SessionDep,
+    current_user: CurrentUser,
+    start_date: date,
+    end_date: date
+):
+    return get_trial_balance(session, current_user.tenant_id, start_date, end_date)
+
+@router.get("/trial-balance/pdf")
+def get_trial_balance_pdf(
+    session: SessionDep,
+    current_user: CurrentUser,
+    start_date: date,
+    end_date: date,
+    lang: str = "id"
+):
+    from app.models.setting import AppSetting
+    settings = session.query(AppSetting).filter(AppSetting.tenant_id == current_user.tenant_id).all()
+    store_info = {s.key: s.value for s in settings}
+    
+    data = get_trial_balance(session, current_user.tenant_id, start_date, end_date)
+    pdf_content = generate_report_pdf(
+        "Laporan Neraca Percobaan", data, "trial_balance", 
+        store_name=store_info.get("store_name", "Blonjo Store"),
+        store_address=store_info.get("store_address", ""),
+        store_phone=store_info.get("store_phone", ""),
+        lang=lang
+    )
+    return Response(content=pdf_content, media_type="application/pdf")
+
+@router.get("/general-ledger/pdf")
+def get_general_ledger_pdf(
+    session: SessionDep,
+    current_user: CurrentUser,
+    account_id: int,
+    start_date: date,
+    end_date: date,
+    lang: str = "id"
+):
+    from app.models.setting import AppSetting
+    from app.api.v1.accounting import get_general_ledger
+    
+    settings = session.query(AppSetting).filter(AppSetting.tenant_id == current_user.tenant_id).all()
+    store_info = {s.key: s.value for s in settings}
+    
+    data = get_general_ledger(
+        session=session,
+        current_user=current_user,
+        account_id=account_id,
+        start_date=str(start_date),
+        end_date=str(end_date)
+    )
+    
+    pdf_content = generate_report_pdf(
+        "Buku Besar", data, "general_ledger", 
+        store_name=store_info.get("store_name", "Blonjo Store"),
+        store_address=store_info.get("store_address", ""),
+        store_phone=store_info.get("store_phone", ""),
+        lang=lang
+    )
+    return Response(content=pdf_content, media_type="application/pdf")
+@router.get("/journals/pdf")
+def get_journals_pdf(
+    session: SessionDep,
+    current_user: CurrentUser,
+    start_date: date,
+    end_date: date,
+    lang: str = "id"
+):
+    from app.models.setting import AppSetting
+    settings = session.query(AppSetting).filter(AppSetting.tenant_id == current_user.tenant_id).all()
+    store_info = {s.key: s.value for s in settings}
+    
+    data = get_journals(session, current_user.tenant_id, start_date, end_date)
+    
+    pdf_content = generate_report_pdf(
+        "Jurnal Umum", data, "journal_list", 
         store_name=store_info.get("store_name", "Blonjo Store"),
         store_address=store_info.get("store_address", ""),
         store_phone=store_info.get("store_phone", ""),

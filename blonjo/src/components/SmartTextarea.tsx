@@ -27,8 +27,50 @@ interface Suggestion {
   id: number;
   name: string;
   trigger?: string;
+  current_stock?: number;
   matchStart: number;
   matchEnd: number;
+}
+
+function getCaretCoordinates(element: HTMLTextAreaElement, position: number) {
+  const div = document.createElement('div');
+  const style = window.getComputedStyle(element);
+  
+  // Salin gaya tata letak penting
+  const properties = [
+    'direction', 'boxSizing', 'width', 'height', 'overflowX', 'overflowY',
+    'borderWidth', 'borderStyle', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+    'fontFamily', 'fontWeight', 'fontSize', 'textTransform', 'wordBreak',
+    'lineHeight', 'textIndent', 'whiteSpace', 'wordWrap'
+  ];
+  
+  properties.forEach(prop => {
+    // @ts-ignore
+    div.style[prop] = style[prop];
+  });
+  
+  div.style.position = 'absolute';
+  div.style.visibility = 'hidden';
+  div.style.whiteSpace = 'pre-wrap';
+  div.style.wordWrap = 'break-word';
+  
+  // Set isi teks sampai kursor
+  const text = element.value.substring(0, position);
+  div.textContent = text;
+  
+  const span = document.createElement('span');
+  span.textContent = element.value.substring(position) || '.';
+  div.appendChild(span);
+  
+  document.body.appendChild(div);
+  
+  const rect = element.getBoundingClientRect();
+  const top = span.offsetTop - element.scrollTop + 18;
+  const left = Math.min(Math.max(span.offsetLeft, 16), rect.width - 290);
+  
+  document.body.removeChild(div);
+  
+  return { top, left };
 }
 
 const BULLET = '• ';
@@ -43,14 +85,18 @@ export function SmartTextarea({
   processor = null,
 }: SmartTextareaProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const searchTimeoutRef = useRef<any>(null);
   
   // Autocomplete data states
   const [products, setProducts] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [coords, setCoords] = useState({ top: 0, left: 16 });
+  const [maintenanceStock, setMaintenanceStock] = useState(false);
 
-  // Load products and suppliers for autocompletion
+  // Load products, suppliers and maintenance stock setting
   useEffect(() => {
     const loadAutocompleteData = async () => {
       try {
@@ -66,9 +112,31 @@ export function SmartTextarea({
         console.error('Error loading autocomplete data:', err);
       }
     };
+    
+    const loadSettings = async () => {
+      try {
+        const res = await fetchClient('/finance/compass/summary');
+        if (res && typeof res.maintenance_stock === 'boolean') {
+          setMaintenanceStock(res.maintenance_stock);
+        }
+      } catch (err) {
+        console.error('Failed to load compass settings:', err);
+      }
+    };
+
     loadAutocompleteData();
+    loadSettings();
   }, []);
 
+  // Auto-scroll list view to keep selected suggestion visible
+  useEffect(() => {
+    if (listRef.current) {
+      const activeEl = listRef.current.children[activeIndex + 1] as HTMLElement;
+      if (activeEl && typeof activeEl.scrollIntoView === 'function') {
+        activeEl.scrollIntoView({ block: 'nearest' });
+      }
+    }
+  }, [activeIndex, suggestions]);
   const handleSelectProduct = useCallback((productName: string, matchStart: number, matchEnd: number) => {
     const before = value.substring(0, matchStart);
     const after = value.substring(matchEnd);
@@ -89,7 +157,6 @@ export function SmartTextarea({
     const beforeTrigger = value.substring(0, matchStart);
     const after = value.substring(matchEnd);
     let replacement = '';
-    // Prevent duplicate trigger word if selected supplier already starts with it (case-insensitive)
     if (supplierName.toLowerCase().startsWith(triggerWord.toLowerCase())) {
       replacement = supplierName;
     } else {
@@ -123,18 +190,34 @@ export function SmartTextarea({
       const matchStart = cursor - match[0].length;
       const matchEnd = cursor;
       
-      const filtered = products
-        .filter(p => p.name.toLowerCase().includes(query))
-        .slice(0, 5)
-        .map(p => ({
-          type: 'product' as const,
-          id: p.id,
-          name: p.name,
-          matchStart,
-          matchEnd
-        }));
-      setSuggestions(filtered);
-      setActiveIndex(0);
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+      searchTimeoutRef.current = setTimeout(async () => {
+        try {
+          const res = await fetchClient('/inventory/autocomplete-semantic', {
+            method: 'POST',
+            body: JSON.stringify({ query, limit: 50 })
+          });
+          if (Array.isArray(res)) {
+            const mapped = res.map(p => ({
+              type: 'product' as const,
+              id: p.id,
+              name: p.name,
+              current_stock: Number(p.current_stock),
+              matchStart,
+              matchEnd
+            }));
+            setSuggestions(mapped);
+            setActiveIndex(0);
+            if (ref.current) {
+              setCoords(getCaretCoordinates(ref.current, cursor));
+            }
+          }
+        } catch (err) {
+          console.error('Failed to fetch semantic suggestions:', err);
+        }
+      }, 150);
       return;
     }
     
@@ -143,18 +226,34 @@ export function SmartTextarea({
       const matchStart = cursor - match[0].trimStart().length;
       const matchEnd = cursor;
       
-      const filtered = products
-        .filter(p => p.name.toLowerCase().includes(query))
-        .slice(0, 5)
-        .map(p => ({
-          type: 'product' as const,
-          id: p.id,
-          name: p.name,
-          matchStart,
-          matchEnd
-        }));
-      setSuggestions(filtered);
-      setActiveIndex(0);
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+      searchTimeoutRef.current = setTimeout(async () => {
+        try {
+          const res = await fetchClient('/inventory/autocomplete-semantic', {
+            method: 'POST',
+            body: JSON.stringify({ query, limit: 50 })
+          });
+          if (Array.isArray(res)) {
+            const mapped = res.map(p => ({
+              type: 'product' as const,
+              id: p.id,
+              name: p.name,
+              current_stock: Number(p.current_stock),
+              matchStart,
+              matchEnd
+            }));
+            setSuggestions(mapped);
+            setActiveIndex(0);
+            if (ref.current) {
+              setCoords(getCaretCoordinates(ref.current, cursor));
+            }
+          }
+        } catch (err) {
+          console.error('Failed to fetch semantic suggestions:', err);
+        }
+      }, 150);
       return;
     }
     
@@ -166,7 +265,6 @@ export function SmartTextarea({
       
       const filtered = suppliers
         .filter(s => s.name.toLowerCase().includes(query))
-        .slice(0, 5)
         .map(s => ({
           type: 'supplier' as const,
           id: s.id,
@@ -177,11 +275,57 @@ export function SmartTextarea({
         }));
       setSuggestions(filtered);
       setActiveIndex(0);
+      if (ref.current) {
+        setCoords(getCaretCoordinates(ref.current, cursor));
+      }
       return;
+    }
+
+    // Fallback: Trigger hanya jika kata sudah lengkap (diakhiri spasi) dan minimal 2 karakter
+    const lastWordRegex = /(?:^|[\s\n])([^\s\\]+)\s$/;
+    if ((match = lastWordRegex.exec(textBeforeCursor)) !== null) {
+      const query = match[1].toLowerCase();
+      const stopWords = ['toko', 'supplier', 'di', 'item', 'dan', 'yang', 'untuk', 'dengan', 'pada', 'dari', 'ke', 'beli', 'jual', 'bayar', 'kas'];
+      if (query.length >= 2 && !stopWords.includes(query)) {
+        const matchStart = cursor - match[1].length - 1;
+        const matchEnd = cursor;
+        
+        if (searchTimeoutRef.current) {
+          clearTimeout(searchTimeoutRef.current);
+        }
+        searchTimeoutRef.current = setTimeout(async () => {
+          try {
+            const res = await fetchClient('/inventory/autocomplete-semantic', {
+              method: 'POST',
+              body: JSON.stringify({ query, limit: 50 })
+            });
+            if (Array.isArray(res) && res.length > 0) {
+              const mapped = res.map(p => ({
+                type: 'product' as const,
+                id: p.id,
+                name: p.name,
+                current_stock: Number(p.current_stock),
+                matchStart,
+                matchEnd
+              }));
+              setSuggestions(mapped);
+              setActiveIndex(0);
+              if (ref.current) {
+                setCoords(getCaretCoordinates(ref.current, cursor));
+              }
+            } else {
+              setSuggestions([]);
+            }
+          } catch (err) {
+            console.error('Failed to fetch semantic suggestions:', err);
+          }
+        }, 150);
+        return;
+      }
     }
     
     setSuggestions([]);
-  }, [products, suppliers]);
+  }, [suppliers]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const ta = e.currentTarget;
@@ -290,10 +434,13 @@ export function SmartTextarea({
 
   const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const ta = e.currentTarget;
+    if (suggestions.length > 0 && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
+      return;
+    }
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) {
       checkAutocomplete(ta.value, ta.selectionStart);
     }
-  }, [checkAutocomplete]);
+  }, [suggestions, checkAutocomplete]);
 
   // Hitung tinggi dinamis
   const rowCount = Math.max(minRows, (value.split('\n').length) + 1);
@@ -339,8 +486,13 @@ export function SmartTextarea({
       
       {/* Suggestions Overlay */}
       {suggestions.length > 0 && (
-        <div className="absolute left-4 z-50 min-w-[260px] max-w-xs bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xl overflow-hidden p-1 bottom-12 transition-all">
-          <div className="px-2 py-1.5 text-[9px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider border-b border-zinc-100 dark:border-zinc-900 mb-1">
+        <div 
+          id="autocomplete-dropdown"
+          ref={listRef} 
+          style={{ top: `${coords.top}px`, left: `${coords.left}px` }}
+          className="absolute z-50 min-w-[280px] max-w-xs max-h-[220px] overflow-y-auto bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xl p-1 transition-all"
+        >
+          <div className="px-2 py-1.5 text-[9px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider border-b border-zinc-100 dark:border-zinc-900 mb-1 sticky top-0 bg-white dark:bg-zinc-950 z-10">
             Rekomendasi {suggestions[0].type === 'product' ? 'Item' : 'Supplier'}
           </div>
           {suggestions.map((s, idx) => (
@@ -362,9 +514,21 @@ export function SmartTextarea({
               )}
             >
               <span className="truncate mr-2">{s.name}</span>
-              {idx === activeIndex && (
-                <span className="text-[9px] opacity-60 font-semibold px-1 py-0.5 bg-zinc-200/50 dark:bg-zinc-800/80 rounded font-sans shrink-0">Enter</span>
-              )}
+              <div className="flex items-center gap-1.5 shrink-0">
+                {s.type === 'product' && maintenanceStock && (
+                  <span className={cn(
+                    "text-[9px] px-1.5 py-0.5 rounded font-mono font-bold",
+                    (Number(s.current_stock) || 0) > 0
+                      ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                      : "bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                  )}>
+                    Stok: {Number(s.current_stock) || 0}
+                  </span>
+                )}
+                {idx === activeIndex && (
+                  <span className="text-[9px] opacity-60 font-semibold px-1 py-0.5 bg-zinc-200/50 dark:bg-zinc-800/80 rounded font-sans">Enter</span>
+                )}
+              </div>
             </button>
           ))}
         </div>

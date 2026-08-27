@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -11,6 +11,7 @@ import { fetchClient } from '../api/client';
 import { Button } from '../components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { TransactionDetailDialog } from './transaction/components/TransactionDetailDialog';
+import { DepositLiquidityCard } from '../components/DepositLiquidityCard';
 
 // ─── Chart.js Integration ────────────────────────────────────────
 import {
@@ -43,13 +44,20 @@ ChartJS.register(
 
 interface DashboardSummary {
   total_revenue: number;
+  total_revenue_ytd?: number;
+  total_revenue_last_month?: number;
   total_expense: number;
+  total_expense_ytd?: number;
+  total_expense_last_month?: number;
   net_profit: number;
   cash_balance: number;
+  total_cash?: number;
+  total_bank?: number;
   recent_transactions: any[];
   chart_data: any[];
   upcoming_debts: any[];
   total_inventory_value: number;
+  total_inventory_value_ytd?: number;
   low_stock_count: number;
   top_products: { name: string; qty: number }[];
   supplier_purchases: { name: string; amount: number }[];
@@ -59,6 +67,8 @@ export default function Dashboard() {
   const { t } = useTranslation();
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [chartDays, setChartDays] = useState<number>(30);
+  const notifiedDebtsRef = useRef<boolean>(false);
 
   // Payoff and details states
   const [accounts, setAccounts] = useState<any[]>([]);
@@ -73,14 +83,22 @@ export default function Dashboard() {
   const [payoffDate, setPayoffDate] = useState(new Date().toISOString().split('T')[0]);
   const [processingPayoff, setProcessingPayoff] = useState(false);
 
-  const loadDashboardData = async () => {
-    setLoading(true);
+  const [chartLoading, setChartLoading] = useState(false);
+
+  const loadDashboardData = async (days: number = chartDays, isSilent: boolean = false) => {
+    if (!data && !isSilent) {
+      setLoading(true);
+    } else {
+      setChartLoading(true);
+    }
+    
     try {
-      const summary = await fetchClient('/finance/dashboard/summary');
+      const summary = await fetchClient(`/finance/dashboard/summary?days=${days}`);
       setData(summary);
 
-      // Notify H-1 debts
-      if (summary.upcoming_debts) {
+      // Notify H-1 debts ONLY ONCE on initial load/manual reload, not on chart filter click
+      if (summary.upcoming_debts && !isSilent && !notifiedDebtsRef.current) {
+        notifiedDebtsRef.current = true;
         const today = new Date();
         summary.upcoming_debts.forEach((tx: any) => {
           if (!tx.due_date) return;
@@ -108,6 +126,7 @@ export default function Dashboard() {
       toast.error('Gagal mengambil ringkasan dashboard');
     } finally {
       setLoading(false);
+      setChartLoading(false);
     }
   };
 
@@ -183,22 +202,30 @@ export default function Dashboard() {
     {
       title: t('total_revenue'),
       amount: formatRp(data?.total_revenue || 0),
+      ytdAmount: formatRp(data?.total_revenue_ytd || 0),
+      lastMonthAmount: formatRp(data?.total_revenue_last_month || 0),
       icon: DollarSign,
       color: "text-emerald-500",
       bgColor: "bg-emerald-500/10",
-      description: t('db_omzet_desc')
+      description: "Bulan Ini"
     },
     {
       title: t('total_expense'),
       amount: formatRp(data?.total_expense || 0),
+      ytdAmount: formatRp(data?.total_expense_ytd || 0),
+      lastMonthAmount: formatRp(data?.total_expense_last_month || 0),
       icon: ShoppingBag,
       color: "text-rose-500",
       bgColor: "bg-rose-500/10",
-      description: t('db_expense_desc')
+      description: "Bulan Ini"
     },
     {
       title: t('db_cash_bank'),
       amount: formatRp(data?.cash_balance || 0),
+      totalCashAmount: formatRp(data?.total_cash || 0),
+      totalBankAmount: formatRp(data?.total_bank || 0),
+      ytdAmount: null,
+      lastMonthAmount: null,
       icon: TrendingUp,
       color: (data?.cash_balance || 0) >= 0 ? "text-sky-500" : "text-rose-500",
       bgColor: (data?.cash_balance || 0) >= 0 ? "bg-sky-500/10" : "bg-rose-500/10",
@@ -207,16 +234,23 @@ export default function Dashboard() {
     {
       title: t('db_inventory_assets'),
       amount: formatRp(data?.total_inventory_value || 0),
+      ytdAmount: formatRp(data?.total_inventory_value_ytd || 0),
+      lastMonthAmount: null,
       icon: Package,
       color: "text-amber-500",
       bgColor: "bg-amber-500/10",
-      description: t('db_inventory_assets_desc')
+      description: "Bulan Ini"
     }
   ];
 
-  const chartLabels = data?.chart_data.map(d => d.name) || [];
-  const revenueData = data?.chart_data.map(d => d.revenue) || [];
-  const expenseData = data?.chart_data.map(d => d.expense) || [];
+  const handleTimeframeChange = (days: number) => {
+    setChartDays(days);
+    loadDashboardData(days, true);
+  };
+
+  const chartLabels = data?.chart_data?.map(d => d.name) || [];
+  const revenueData = data?.chart_data?.map(d => d.revenue) || [];
+  const expenseData = data?.chart_data?.map(d => d.expense) || [];
 
   const chartOptions = {
     responsive: true,
@@ -263,8 +297,8 @@ export default function Dashboard() {
       }
     },
     elements: {
-      line: { tension: 0.4 },
-      point: { radius: 3, hoverRadius: 5, borderWidth: 1.5 }
+      line: { tension: 0.45, cubicInterpolationMode: 'monotone' as const },
+      point: { radius: 2, hoverRadius: 5, borderWidth: 1.5 }
     }
   };
 
@@ -275,9 +309,10 @@ export default function Dashboard() {
         label: t('type_income'),
         data: revenueData,
         borderColor: '#10b981',
-        backgroundColor: 'rgba(16, 185, 129, 0.05)',
-        fill: true,
-        borderWidth: 2,
+        backgroundColor: 'rgba(16, 185, 129, 0.15)',
+        fill: 'origin',
+        tension: 0.45,
+        borderWidth: 2.5,
         pointBackgroundColor: '#10b981',
         pointBorderColor: '#09090b',
       },
@@ -285,9 +320,10 @@ export default function Dashboard() {
         label: t('type_expense'),
         data: expenseData,
         borderColor: '#f43f5e',
-        backgroundColor: 'rgba(244, 63, 94, 0.05)',
-        fill: true,
-        borderWidth: 2,
+        backgroundColor: 'rgba(244, 63, 94, 0.12)',
+        fill: 'origin',
+        tension: 0.45,
+        borderWidth: 2.5,
         pointBackgroundColor: '#f43f5e',
         pointBorderColor: '#09090b',
       }
@@ -399,7 +435,7 @@ export default function Dashboard() {
           <p className="text-muted-foreground mt-1 text-sm">{t('dashboard_subtitle')}</p>
         </div>
         <div className="flex items-center gap-3">
-          <Button onClick={loadDashboardData} variant="outline" size="sm" className="gap-2">
+          <Button onClick={() => loadDashboardData()} variant="outline" size="sm" className="gap-2">
             <RefreshCw className="h-3.5 w-3.5" /> {t('refresh_data')}
           </Button>
           <div className="px-3 py-1.5 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-[9px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-2 uppercase tracking-wider">
@@ -417,32 +453,86 @@ export default function Dashboard() {
         {stats.map((stat, index) => (
           <Card key={index} className="overflow-hidden relative bg-zinc-50 dark:bg-card/30 border border-zinc-200/80 dark:border-border/60 shadow-md hover:border-zinc-300 dark:hover:border-border/100 transition-all duration-300">
             <div className={cn("absolute top-0 left-0 w-1 h-full", stat.color.replace('text', 'bg'))} />
-            <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
-              <CardTitle className="text-[10px] font-black uppercase tracking-[0.1em] text-zinc-500 dark:text-muted-foreground/80">
-                {stat.title}
-              </CardTitle>
+            <CardHeader className="flex flex-row items-center justify-between pb-1 space-y-0">
+              <div>
+                <CardTitle className="text-[10px] font-black uppercase tracking-[0.1em] text-zinc-500 dark:text-muted-foreground/80">
+                  {stat.title}
+                </CardTitle>
+                {stat.ytdAmount && (
+                  <div className="text-[10px] font-bold text-zinc-400 dark:text-zinc-500 mt-0.5">
+                    YTD: <span className="text-zinc-600 dark:text-zinc-300 font-extrabold">{stat.ytdAmount}</span>
+                  </div>
+                )}
+              </div>
               <div className={cn("p-2 rounded-lg", stat.bgColor, stat.color)}>
                 <stat.icon className="w-4 h-4" />
               </div>
             </CardHeader>
-            <CardContent>
+            <CardContent className="pt-1">
               <div className="text-2xl font-black tracking-tighter tabular-nums text-zinc-900 dark:text-zinc-100">{stat.amount}</div>
-              <p className="text-[9px] font-medium mt-1 text-zinc-500 dark:text-muted-foreground/80 italic">
+              <p className="text-[9px] font-extrabold uppercase tracking-wider mt-0.5 text-emerald-600 dark:text-emerald-400">
                 {stat.description}
               </p>
+              {stat.lastMonthAmount && (
+                <div className="text-[10px] font-medium text-zinc-400 dark:text-zinc-500 mt-1.5 pt-1.5 border-t border-zinc-200/60 dark:border-border/30 flex items-center justify-between">
+                  <span>Bulan Lalu:</span>
+                  <span className="text-zinc-600 dark:text-zinc-300 font-extrabold">{stat.lastMonthAmount}</span>
+                </div>
+              )}
+              {stat.totalCashAmount !== undefined && stat.totalBankAmount !== undefined && (
+                <div className="text-[10px] font-medium text-zinc-500 dark:text-zinc-400 mt-1.5 pt-1.5 border-t border-zinc-200/60 dark:border-border/30 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                      <span>Total Kas:</span>
+                    </div>
+                    <span className="font-extrabold text-zinc-800 dark:text-zinc-200 tabular-nums">{stat.totalCashAmount}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-sky-500 inline-block" />
+                      <span>Total Bank:</span>
+                    </div>
+                    <span className="font-extrabold text-zinc-800 dark:text-zinc-200 tabular-nums">{stat.totalBankAmount}</span>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         ))}
       </div>
 
+      {/* Deposit & Liquidity Monitoring Widget */}
+      <DepositLiquidityCard />
+
       {/* Main Charts */}
       <div className="grid gap-6 lg:grid-cols-12">
         <Card className="col-span-full lg:col-span-8 border border-zinc-200/80 dark:border-border/60 bg-white dark:bg-card/20 shadow-md">
-          <CardHeader className="pb-2">
+          <CardHeader className="pb-2 flex flex-row items-center justify-between">
             <CardTitle className="text-xs font-black flex items-center gap-2 text-zinc-800 dark:text-zinc-300 uppercase tracking-widest">
               <TrendingUp className="w-4 h-4 text-emerald-500" />
               {t('db_financial_trend')}
             </CardTitle>
+            {/* Timeframe Selector Buttons */}
+            <div className="flex items-center gap-2">
+              {chartLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-500" />}
+              <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800/60 p-1 rounded-lg border border-zinc-200/60 dark:border-zinc-700/50">
+                {[7, 30, 60, 90].map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => handleTimeframeChange(d)}
+                    className={cn(
+                      "px-2.5 py-1 rounded-md text-[10px] font-bold transition-all duration-200",
+                      chartDays === d
+                        ? "bg-emerald-500 text-white shadow-sm"
+                        : "text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-200"
+                    )}
+                  >
+                    {d} Hari
+                  </button>
+                ))}
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="p-4">
             <div className="h-[280px] w-full">
@@ -531,7 +621,12 @@ export default function Dashboard() {
                   let badgeText = "Hutang/Tempo";
                   let badgeColor = "bg-amber-500/10 text-amber-600 dark:text-amber-500 border-amber-500/20";
                   
-                  if (dueDate) {
+                  const isDP = tx.payment_method === "customer_deposit" || tx.transaction_type === "sales";
+                  
+                  if (isDP) {
+                    badgeText = "DP CUSTOMER";
+                    badgeColor = "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20";
+                  } else if (dueDate) {
                     const diffTime = dueDate.getTime() - today.getTime();
                     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
                     
@@ -559,11 +654,11 @@ export default function Dashboard() {
                         </div>
                         <div>
                           <p className="text-xs font-black tracking-tight text-zinc-800 dark:text-zinc-200 truncate max-w-[150px]">{tx.description}</p>
-                          <p className="text-[9px] font-medium text-muted-foreground">{t('db_due')}: {tx.due_date || 'N/A'}</p>
+                          <p className="text-[9px] font-medium text-muted-foreground">{isDP ? 'Tgl DP' : t('db_due')}: {tx.transaction_date || tx.due_date || 'N/A'}</p>
                         </div>
                       </div>
                       <div className="text-right">
-                        <p className="text-xs font-black tabular-nums text-rose-600 dark:text-rose-400">
+                        <p className={cn("text-xs font-black tabular-nums", isDP ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400")}>
                           {formatRp(Number(tx.total_amount))}
                         </p>
                         <p className="text-[8px] font-bold text-muted-foreground/70 uppercase">
@@ -635,24 +730,26 @@ export default function Dashboard() {
 
       {/* ─── Modals / Dialogs ─── */}
       
-      {/* Option menu for a debt */}
+      {/* Option menu for a debt / DP */}
       <Dialog open={actionMenuOpen} onOpenChange={setActionMenuOpen}>
         <DialogContent className="sm:max-w-[400px] bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-850">
           <DialogHeader>
-            <DialogTitle className="text-md font-black uppercase tracking-wider text-zinc-800 dark:text-zinc-200">Aksi Tagihan</DialogTitle>
+            <DialogTitle className="text-md font-black uppercase tracking-wider text-zinc-800 dark:text-zinc-200">
+              {selectedTx?.payment_method === "customer_deposit" || selectedTx?.transaction_type === "sales" ? "Aksi Uang Muka (DP)" : "Aksi Tagihan"}
+            </DialogTitle>
             <DialogDescription className="text-xs">
-              Pilih tindakan yang ingin dilakukan untuk tagihan ini:
+              Pilih tindakan yang ingin dilakukan:
               <span className="block mt-2 font-bold text-zinc-950 dark:text-zinc-100">{selectedTx?.description} ({formatRp(selectedTx?.total_amount || 0)})</span>
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3 mt-4">
             <Button variant="outline" onClick={handleOpenDetail} className="h-20 flex flex-col gap-2 justify-center items-center font-bold border-zinc-200 dark:border-zinc-850 text-zinc-800 dark:text-zinc-200">
-              <ReceiptText className="w-5 h-5 text-sky-555 dark:text-sky-400" />
+              <ReceiptText className="w-5 h-5 text-sky-500 dark:text-sky-400" />
               Lihat Detail
             </Button>
             <Button variant="outline" onClick={handleOpenPayoff} className="h-20 flex flex-col gap-2 justify-center items-center font-bold border-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-500/5 hover:bg-emerald-100/50 dark:hover:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
               <TrendingUp className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-              Bayar / Lunasi
+              {selectedTx?.payment_method === "customer_deposit" || selectedTx?.transaction_type === "sales" ? "Serah Terima Barang" : "Bayar / Lunasi"}
             </Button>
           </div>
           <DialogFooter className="mt-4">

@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal as TerminalIcon, X, Maximize2, Minimize2 } from 'lucide-react';
+import { Terminal as TerminalIcon, X, Maximize2, Minimize2, Copy, Check, ChevronDown, ChevronRight, FileCode2 } from 'lucide-react';
 import { Button } from './ui/button';
 import { fetchClient } from '../api/client';
 import { cn } from '../lib/utils';
+import { toast } from 'sonner';
 
 interface AIParsingLogResponse {
   id: number;
@@ -30,6 +31,8 @@ export function TerminalLogs() {
   const [loading, setLoading] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<number | null>(null);
+  const [expandedPromptId, setExpandedPromptId] = useState<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -83,6 +86,32 @@ export function TerminalLogs() {
     return d.toISOString().replace('T', ' ').substring(0, 19);
   };
 
+  const handleCopyLog = (log: AIParsingLogResponse) => {
+    const formattedJson = (() => {
+      try {
+        return JSON.stringify(JSON.parse(log.parsed_result), null, 2);
+      } catch {
+        return log.parsed_result;
+      }
+    })();
+
+    const content = `[${formatDate(log.created_at)}] PROCESSOR: ${log.processor.toUpperCase()} (TOKENS IN: ${log.token_in} | OUT: ${log.token_out})
+INPUT: ${log.original_text}
+PROMPT: ${log.prompt || 'N/A'}
+RESULT:
+${formattedJson}`;
+
+    navigator.clipboard.writeText(content);
+    setCopiedId(log.id);
+    toast.success("Log berhasil disalin ke clipboard!");
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleCopyText = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    toast.success(`${label} berhasil disalin!`);
+  };
+
   if (!isOpen) {
     return (
       <button 
@@ -104,7 +133,7 @@ export function TerminalLogs() {
         "fixed z-[100] font-mono transition-all duration-300 ease-in-out flex flex-col bg-zinc-950/95 backdrop-blur-md border-zinc-800 shadow-2xl overflow-hidden",
         isFullscreen 
           ? "inset-0 rounded-none" 
-          : "bottom-4 right-4 w-full max-w-[600px] h-[400px] rounded-xl border"
+          : "bottom-4 right-4 w-full max-w-[650px] h-[450px] rounded-xl border"
       )}
     >
       {/* Terminal Header */}
@@ -129,7 +158,7 @@ export function TerminalLogs() {
       </div>
 
       {/* Terminal Body */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 text-[11px] sm:text-xs text-left">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 text-[11px] sm:text-xs text-left">
         {error && (
           <div className="p-2 bg-rose-500/10 border border-rose-500/30 rounded text-rose-400 mb-4">
             ERR: {error}
@@ -137,7 +166,7 @@ export function TerminalLogs() {
         )}
         {/* Quota Dashboard Section */}
         {quotas.length > 0 && (
-          <div className="mb-6 p-3 bg-zinc-900/50 rounded-lg border border-zinc-800/80">
+          <div className="mb-4 p-3 bg-zinc-900/50 rounded-lg border border-zinc-800/80">
             <div className="text-[10px] uppercase font-bold text-zinc-500 mb-2 flex justify-between">
               <span>AI Quota Monitoring (ESTIMATED RPD)</span>
               <span className="text-emerald-500 animate-pulse">AUTO-SWITCH ACTIVE</span>
@@ -166,41 +195,112 @@ export function TerminalLogs() {
         )}
 
         {logs.map((log) => (
-          <div key={log.id} className="border-b border-zinc-800/50 pb-3">
-            <div className="flex flex-wrap items-center gap-2 text-zinc-500 mb-1">
-              <span className="text-blue-400">[{formatDate(log.created_at)}]</span>
-              <span className="text-zinc-400">PROCESSOR:</span>
-              <span className={cn(
-                "font-bold",
-                log.processor === 'ollama' ? 'text-blue-500' :
-                log.processor === 'gemini' ? 'text-rose-500' : 'text-yellow-400'
-              )}>
-                {log.processor.toUpperCase()}
-              </span>
-              <span className="text-zinc-400 ml-2">TOKENS (IN:</span>
-              <span className="text-emerald-400">{log.token_in}</span>
-              <span className="text-zinc-400">| OUT:</span>
-              <span className="text-emerald-400">{log.token_out}</span>
-              <span className="text-zinc-400">)</span>
+          <div key={log.id} className="border-b border-zinc-800/60 pb-3 space-y-1.5 group">
+            {/* Header Item Log */}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-zinc-500">
+              <div className="flex items-center gap-2">
+                <span className="text-blue-400">[{formatDate(log.created_at)}]</span>
+                <span className="text-zinc-400">PROCESSOR:</span>
+                <span className={cn(
+                  "font-bold px-1.5 py-0.5 rounded text-[10px]",
+                  log.processor === 'ollama' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
+                  log.processor === 'gemini' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+                )}>
+                  {log.processor.toUpperCase()}
+                </span>
+                <span className="text-zinc-400">TOKENS (IN:</span>
+                <span className="text-emerald-400 font-bold">{log.token_in}</span>
+                <span className="text-zinc-400">| OUT:</span>
+                <span className="text-emerald-400 font-bold">{log.token_out}</span>
+                <span className="text-zinc-400">)</span>
+              </div>
+
+              {/* Tombol Copy per Log */}
+              <button
+                onClick={() => handleCopyLog(log)}
+                className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
+                title="Copy seluruh log item ini"
+              >
+                {copiedId === log.id ? (
+                  <>
+                    <Check className="w-3 h-3 text-emerald-400" />
+                    <span className="text-emerald-400 font-bold">Copied</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3 text-zinc-400" />
+                    <span>Copy Log</span>
+                  </>
+                )}
+              </button>
             </div>
             
             <div className="flex flex-col gap-1.5 ml-2">
-              <div className="flex gap-2">
-                <span className="text-rose-400 select-none">➜</span>
-                <span className="text-zinc-300 break-all">
-                  {log.original_text.startsWith('AI TRAINING') ? 'TRAINING' : 
-                   log.original_text.startsWith('OCR FILE') ? 'OCR' : 'INPUT'}: <span className="text-zinc-100">{log.original_text}</span>
-                </span>
+              {/* Input Text */}
+              <div className="flex items-start gap-2">
+                <span className="text-rose-400 select-none mt-0.5">➜</span>
+                <div className="text-zinc-300 break-all flex-1">
+                  <span className="font-semibold text-zinc-400">
+                    {log.original_text.startsWith('AI TRAINING') ? 'TRAINING' : 
+                     log.original_text.startsWith('OCR FILE') ? 'OCR' : 'INPUT'}:
+                  </span>{' '}
+                  <span className="text-zinc-100 font-medium">{log.original_text}</span>
+                </div>
               </div>
-              <div className="flex gap-2">
-                <span className="text-rose-400 select-none">➜</span>
-                <span className="text-zinc-300 break-all">PROMPT: <span className="text-zinc-400 italic">{log.prompt || 'N/A'}</span></span>
+
+              {/* Dynamic Prompt */}
+              <div className="flex items-start gap-2">
+                <span className="text-amber-400 select-none mt-0.5">⚡</span>
+                <div className="text-zinc-300 flex-1 w-full overflow-hidden">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-amber-400/90">DYNAMIC PROMPT:</span>
+                    {log.prompt ? (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => setExpandedPromptId(expandedPromptId === log.id ? null : log.id)}
+                          className="flex items-center gap-1 text-[10px] text-amber-300/80 hover:text-amber-300 underline"
+                        >
+                          {expandedPromptId === log.id ? (
+                            <>
+                              <ChevronDown className="w-3 h-3" />
+                              <span>Sembunyikan</span>
+                            </>
+                          ) : (
+                            <>
+                              <ChevronRight className="w-3 h-3" />
+                              <span>Tampilkan Full ({log.prompt.length} Karakter)</span>
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          onClick={() => handleCopyText(log.prompt || '', 'Dynamic Prompt')}
+                          className="text-[10px] text-zinc-400 hover:text-amber-400 flex items-center gap-1 ml-1"
+                          title="Copy Dynamic Prompt saja"
+                        >
+                          <FileCode2 className="w-3 h-3" />
+                          <span>Copy Prompt</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-zinc-500 italic">N/A (Standard Static System Prompt)</span>
+                    )}
+                  </div>
+
+                  {log.prompt && expandedPromptId === log.id && (
+                    <pre className="mt-1.5 bg-amber-950/20 border border-amber-500/20 p-2.5 rounded-md text-amber-200/90 whitespace-pre-wrap break-all text-[10px] font-mono shadow-inner max-h-[250px] overflow-y-auto">
+                      {log.prompt}
+                    </pre>
+                  )}
+                </div>
               </div>
-              <div className="flex gap-2">
-                <span className="text-emerald-400 select-none">✔</span>
+
+              {/* Parsed Result */}
+              <div className="flex items-start gap-2">
+                <span className="text-emerald-400 select-none mt-0.5">✔</span>
                 <div className="text-zinc-300 flex-1 w-full overflow-x-hidden">
-                  RESULT: 
-                  <pre className="mt-1 bg-zinc-900/50 p-2 rounded border border-zinc-800/80 text-zinc-300 whitespace-pre-wrap break-all w-full overflow-hidden text-[10px]">
+                  <span className="font-semibold text-emerald-400">RESULT:</span>
+                  <pre className="mt-1 bg-zinc-900/60 p-2.5 rounded-md border border-zinc-800/80 text-zinc-200 whitespace-pre-wrap break-all w-full overflow-hidden text-[10px] font-mono">
                     {log.parsed_result.startsWith('{') || log.parsed_result.startsWith('[') 
                       ? (() => {
                           try {
@@ -225,3 +325,4 @@ export function TerminalLogs() {
     </div>
   );
 }
+

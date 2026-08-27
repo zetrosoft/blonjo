@@ -8,7 +8,7 @@ import { Badge } from '../../components/ui/badge';
 import { 
   TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight, 
   AlertTriangle, CheckCircle, RefreshCw, Landmark, Wallet, Calendar,
-  ArrowRight
+  ArrowRight, Loader2
 } from 'lucide-react';
 import { fetchClient } from '../../api/client';
 import { formatRp, formatNumber } from '../../lib/utils';
@@ -45,6 +45,42 @@ export default function BudgetingPage() {
     details: string;
   } | null>(null);
 
+  const [todayTransactions, setTodayTransactions] = useState<any[]>([]);
+  const [loadingTransactions, setLoadingTransactions] = useState(false);
+
+  const todayStr = (() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  })();
+
+  useEffect(() => {
+    if (selectedOutflow && selectedOutflow.date <= todayStr) {
+      const fetchDateTx = async () => {
+        setLoadingTransactions(true);
+        try {
+          const targetDate = selectedOutflow.date;
+          const res = await fetchClient(`/finance/transactions?start_date=${targetDate}&end_date=${targetDate}`);
+          if (Array.isArray(res)) {
+            // Saring hanya pengeluaran kas aktual (purchase atau expense) yang bukan Tempo (kredit)
+            const outflows = res.filter((t: any) => {
+              const isOutflow = t.transaction_type === 'purchase' || t.transaction_type === 'expense';
+              const isTempo = t.payment_method?.toLowerCase() === 'tempo';
+              return isOutflow && !isTempo;
+            });
+            setTodayTransactions(outflows);
+          }
+        } catch (err) {
+          console.error('Failed to fetch transactions for selected date:', err);
+        } finally {
+          setLoadingTransactions(false);
+        }
+      };
+      fetchDateTx();
+    } else {
+      setTodayTransactions([]);
+    }
+  }, [selectedOutflow, todayStr]);
+
   const loadData = async () => {
     setLoading(true);
     try {
@@ -65,11 +101,6 @@ export default function BudgetingPage() {
     loadData();
   }, []);
 
-  // Filter: Summary cards hanya menghitung hari ini + masa depan (bukan data historis H-4)
-  const todayStr = (() => {
-    const now = new Date();
-    return `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
-  })();
   const futureProjections = projections.filter(p => p.date >= todayStr);
   const warningDays = futureProjections.filter(p => p.status === 'WARNING').length;
   const navigate = useNavigate();
@@ -335,8 +366,8 @@ export default function BudgetingPage() {
 
       {/* Dialog Detail Proyeksi Keluar */}
       <Dialog open={!!selectedOutflow} onOpenChange={(open) => !open && setSelectedOutflow(null)}>
-        <DialogContent className="sm:max-w-[480px] border-zinc-200 dark:border-zinc-800">
-          <DialogHeader className="pb-4 border-b border-zinc-100 dark:border-zinc-800">
+        <DialogContent className="sm:max-w-[500px] max-h-[90vh] flex flex-col border-zinc-200 dark:border-zinc-800">
+          <DialogHeader className="pb-4 border-b border-zinc-100 dark:border-zinc-800 shrink-0">
             <DialogTitle className="text-lg font-bold flex items-center gap-2">
               <TrendingDown className="h-5 w-5 text-rose-500" />
               Rincian Proyeksi Kas Keluar
@@ -347,7 +378,7 @@ export default function BudgetingPage() {
           </DialogHeader>
 
           {selectedOutflow && (
-            <div className="py-6 space-y-6">
+            <div className="flex-1 overflow-y-auto py-4 space-y-5 pr-1">
               {/* Total Card */}
               <div className="p-4 rounded-xl bg-rose-50/50 dark:bg-rose-950/10 border border-rose-100/50 dark:border-rose-950/20 text-center">
                 <span className="text-xs font-bold text-rose-700 dark:text-rose-400 uppercase tracking-wider">
@@ -358,38 +389,37 @@ export default function BudgetingPage() {
                 </div>
               </div>
 
-              {/* List Detail */}
-              <div className="space-y-3">
+              {/* List Detail Proyeksi */}
+              <div className="space-y-2">
                 <h4 className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">
                   Daftar Transaksi / Rencana Belanja
                 </h4>
                 
                 {selectedOutflow.details && selectedOutflow.details !== '-' ? (
-                  <div className="divide-y divide-zinc-100 dark:divide-zinc-800 max-h-[220px] overflow-y-auto pr-1">
+                  <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
                     {selectedOutflow.details.split(',').map((item, idx) => {
                       const cleanItem = item.trim();
                       if (!cleanItem) return null;
                       
-                      // Regex untuk mencari nominal di akhir, e.g., (Rp 1.500.000)
-                      const rpMatch = cleanItem.match(/\((Rp\s*[^)]+)\)$/);
+                      const rpMatch = cleanItem.match(/(\(Rp\s*[^)]+\))$/);
                       let label = cleanItem;
                       let amountStr = '';
                       
                       if (rpMatch) {
-                        amountStr = rpMatch[1];
+                        amountStr = rpMatch[1].replace(/[()]/g, '');
                         label = cleanItem.replace(rpMatch[0], '').trim();
                       }
 
                       return (
-                        <div key={idx} className="py-2.5 flex items-start justify-between gap-4">
+                        <div key={idx} className="py-2 flex items-start justify-between gap-3">
                           <div className="flex items-start gap-2 flex-1 min-w-0">
-                            <ArrowRight className="h-3.5 w-3.5 text-zinc-400 dark:text-zinc-500 shrink-0 mt-1" />
-                            <span className="text-sm text-zinc-700 dark:text-zinc-300 font-medium break-words leading-relaxed">
+                            <ArrowRight className="h-3 w-3 text-zinc-400 shrink-0 mt-1" />
+                            <span className="text-sm text-zinc-700 dark:text-zinc-300 leading-snug break-words">
                               {label}
                             </span>
                           </div>
                           {amountStr && (
-                            <span className="text-sm font-bold font-mono text-rose-600 dark:text-rose-400 whitespace-nowrap shrink-0 mt-0.5">
+                            <span className="text-sm font-bold font-mono text-rose-600 dark:text-rose-400 whitespace-nowrap shrink-0">
                               {amountStr}
                             </span>
                           )}
@@ -398,11 +428,64 @@ export default function BudgetingPage() {
                     })}
                   </div>
                 ) : (
-                  <div className="py-8 text-center text-sm text-muted-foreground border border-dashed rounded-lg">
+                  <div className="py-6 text-center text-sm text-muted-foreground border border-dashed rounded-lg">
                     Tidak ada rincian proyeksi belanja untuk tanggal ini.
                   </div>
                 )}
               </div>
+
+              {/* Rincian Realisasi Belanja (Hari Ini & Tanggal Lampau) */}
+              {selectedOutflow.date <= todayStr && (
+                <div className="space-y-2 pt-3 border-t border-zinc-100 dark:border-zinc-800">
+                  <h4 className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider flex items-center justify-between">
+                    <span>Realisasi Belanja Aktual</span>
+                    <span className="text-[10px] font-mono text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/20 px-1.5 py-0.5 rounded font-bold">
+                      Total: {formatRp(todayTransactions.reduce((sum, tx) => sum + Number(tx.total_amount), 0))}
+                    </span>
+                  </h4>
+                  
+                  {loadingTransactions ? (
+                    <div className="py-6 flex items-center justify-center gap-2 text-zinc-400">
+                      <Loader2 className="h-4 w-4 animate-spin text-rose-500" />
+                      <span className="text-xs">Memuat transaksi aktual...</span>
+                    </div>
+                  ) : todayTransactions.length > 0 ? (
+                    <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                      {todayTransactions.map((tx, idx) => (
+                        <div key={tx.id || idx} className="py-2.5 flex flex-col gap-1">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 block truncate">
+                                {tx.description}
+                              </span>
+                              <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                                {tx.payment_method?.toUpperCase() || 'CASH'} • {tx.contact_name || 'Tanpa Kontak'}
+                              </span>
+                            </div>
+                            <span className="text-sm font-extrabold font-mono text-rose-600 dark:text-rose-400 whitespace-nowrap shrink-0">
+                              -{formatRp(tx.total_amount)}
+                            </span>
+                          </div>
+                          {tx.items && tx.items.length > 0 && (
+                            <div className="pl-3 border-l-2 border-zinc-100 dark:border-zinc-800 space-y-0.5">
+                              {tx.items.map((item: any, itemIdx: number) => (
+                                <div key={itemIdx} className="text-xs text-zinc-500 dark:text-zinc-400 flex justify-between">
+                                  <span>• {item.name} ({item.qty} {item.unit || 'pcs'})</span>
+                                  <span>{formatRp(item.total || (item.qty * item.price))}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="py-5 text-center text-xs text-zinc-400 border border-dashed rounded-lg">
+                      Belum ada transaksi pengeluaran aktual yang tercatat hari ini.
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </DialogContent>

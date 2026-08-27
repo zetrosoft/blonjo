@@ -48,6 +48,10 @@ class TransactionType(str, enum.Enum):
     NON_CASH_OUT = "non_cash_out"
     NON_CASH_IN = "non_cash_in"
     CAPITAL = "capital"
+    CAPITAL_WITHDRAWAL = "capital_withdrawal"
+    CAPITAL_RECLASSIFICATION = "capital_reclassification"
+    CUSTOMER_DEPOSIT = "customer_deposit"
+    CUSTOMER_WITHDRAWAL = "customer_withdrawal"
     CASH_COUNT = "cash_count" # For reconciliation / Cash on hand check
     SALES_RETURN = "sales_return"
     PURCHASE_RETURN = "purchase_return"

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/table';
 import { Button } from '../../components/ui/button';
@@ -27,17 +28,8 @@ interface JournalMapping {
   lines: MappingLine[];
 }
 
-const TX_TYPES = [
-  { value: 'purchase', label: 'Pembelian' },
-  { value: 'sales', label: 'Penjualan' },
-  { value: 'expense', label: 'Beban' },
-  { value: 'income', label: 'Pendapatan' },
-  { value: 'operational', label: 'Operasional' },
-  { value: 'cash_count', label: 'Opname Kas' },
-  { value: 'capital', label: 'Modal' }
-];
-
 export default function JournalMappingPage() {
+  const { t } = useTranslation();
   const [mappings, setMappings] = useState<JournalMapping[]>([]);
   const [loading, setLoading] = useState(true);
   const [accounts, setAccounts] = useState<any[]>([]);
@@ -46,6 +38,20 @@ export default function JournalMappingPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentMapping, setCurrentMapping] = useState<JournalMapping | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+
+  const TX_TYPES = [
+    { value: 'purchase', label: t('tx_type_purchase') || 'Pembelian' },
+    { value: 'sales', label: t('tx_type_sales') || 'Penjualan' },
+    { value: 'expense', label: t('tx_type_expense') || 'Beban' },
+    { value: 'income', label: t('tx_type_income') || 'Pendapatan' },
+    { value: 'operational', label: t('tx_type_operational') || 'Operasional' },
+    { value: 'cash_count', label: t('tx_type_cash_count') || 'Opname Kas' },
+    { value: 'capital', label: t('tx_type_capital') || 'Setoran Modal' },
+    { value: 'capital_withdrawal', label: 'Pengembalian Modal (Prive)' },
+    { value: 'capital_reclassification', label: 'Koreksi Reklasifikasi Modal' },
+    { value: 'customer_deposit', label: 'Penerimaan Uang Muka / Titipan Pelanggan' },
+    { value: 'customer_withdrawal', label: 'Pengembalian Titipan Pelanggan' }
+  ];
 
   const loadData = async () => {
     setLoading(true);
@@ -57,7 +63,7 @@ export default function JournalMappingPage() {
       setAccounts(accData);
       setMappings(mapData);
     } catch (err: any) {
-      toast.error('Gagal memuat data');
+      toast.error(t('jm_load_failed') || 'Gagal memuat data');
     } finally {
       setLoading(false);
     }
@@ -69,7 +75,7 @@ export default function JournalMappingPage() {
 
   const getAccountName = (id: number) => {
     const acc = accounts.find(a => a.id === id);
-    return acc ? `[${acc.code}] ${acc.name}` : `Akun ID: ${id}`;
+    return acc ? `[${acc.code}] ${t(acc.name)}` : `${t('jm_account_id') || 'Akun ID'}: ${id}`;
   };
 
   const handleOpenAdd = () => {
@@ -116,11 +122,11 @@ export default function JournalMappingPage() {
   const handleSave = async () => {
     if (!currentMapping) return;
     if (!currentMapping.description) {
-      toast.error('Deskripsi wajib diisi');
+      toast.error(t('jm_err_desc_required') || 'Deskripsi wajib diisi');
       return;
     }
     if (currentMapping.lines.some(l => l.account_id === 0)) {
-      toast.error('Semua baris akun wajib dipilih');
+      toast.error(t('jm_err_account_required') || 'Semua baris akun wajib dipilih');
       return;
     }
 
@@ -135,24 +141,24 @@ export default function JournalMappingPage() {
         body: JSON.stringify(currentMapping)
       });
 
-      toast.success(isEdit ? 'Mapping diperbarui' : 'Mapping berhasil dibuat');
+      toast.success(isEdit ? (t('jm_save_update_success') || 'Mapping diperbarui') : (t('jm_save_create_success') || 'Mapping berhasil dibuat'));
       setIsModalOpen(false);
       loadData();
     } catch (err: any) {
-      toast.error('Gagal menyimpan', { description: err.message });
+      toast.error(t('jm_save_failed') || 'Gagal menyimpan', { description: err.message });
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Hapus mapping ini?')) return;
+    if (!confirm(t('jm_delete_confirm') || 'Hapus mapping ini?')) return;
     try {
       await fetchClient(`/finance/journal-mappings/${id}`, { method: 'DELETE' });
-      toast.success('Mapping dihapus');
+      toast.success(t('jm_delete_success') || 'Mapping dihapus');
       loadData();
     } catch (err: any) {
-      toast.error('Gagal menghapus');
+      toast.error(t('jm_delete_failed') || 'Gagal menghapus');
     }
   };
 
@@ -164,15 +170,15 @@ export default function JournalMappingPage() {
             <GitBranch className="w-6 h-6" />
           </div>
           <div>
-            <h2 className="text-2xl font-bold tracking-tight">Mapping Jurnal Otomatis</h2>
+            <h2 className="text-2xl font-bold tracking-tight">{t('menu_journal_mapping') || 'Mapping Jurnal Otomatis'}</h2>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Kelola template akun untuk setiap tipe transaksi AI secara dinamis.
+              {t('jm_subtitle') || 'Kelola template akun untuk setiap tipe transaksi AI secara dinamis.'}
             </p>
           </div>
         </div>
         <Button onClick={handleOpenAdd}>
           <Plus className="w-4 h-4 mr-2" />
-          Tambah Mapping
+          {t('jm_add') || 'Tambah Mapping'}
         </Button>
       </div>
 
@@ -185,7 +191,7 @@ export default function JournalMappingPage() {
           <Card className="border-dashed border-2 py-20 text-center">
             <div className="space-y-2">
               <Info className="w-10 h-10 text-muted-foreground mx-auto opacity-20" />
-              <p className="text-muted-foreground">Belum ada mapping jurnal di database.</p>
+              <p className="text-muted-foreground">{t('jm_empty') || 'Belum ada mapping jurnal di database.'}</p>
             </div>
           </Card>
         ) : mappings.map((m) => (
@@ -197,7 +203,7 @@ export default function JournalMappingPage() {
                     {m.transaction_type}
                   </Badge>
                   <CardTitle className="text-base font-bold">{m.description}</CardTitle>
-                  {!m.tenant_id && <Badge className="text-[9px] bg-zinc-500/10 text-zinc-500 border-none">Global Template</Badge>}
+                  {!m.tenant_id && <Badge className="text-[9px] bg-zinc-500/10 text-zinc-500 border-none">{t('jm_global_template') || 'Global Template'}</Badge>}
                 </div>
               </div>
               <div className="flex gap-2">
@@ -215,9 +221,9 @@ export default function JournalMappingPage() {
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent border-none">
-                    <TableHead className="h-8 text-[10px] uppercase font-bold text-muted-foreground">Akun Transaksi</TableHead>
-                    <TableHead className="h-8 text-[10px] uppercase font-bold text-muted-foreground text-center w-[100px]">Posisi</TableHead>
-                    <TableHead className="h-8 text-[10px] uppercase font-bold text-muted-foreground text-right w-[150px]">Tipe Nilai</TableHead>
+                    <TableHead className="h-8 text-[10px] uppercase font-bold text-muted-foreground">{t('jm_col_account') || 'Akun Transaksi'}</TableHead>
+                    <TableHead className="h-8 text-[10px] uppercase font-bold text-muted-foreground text-center w-[100px]">{t('jm_col_side') || 'Posisi'}</TableHead>
+                    <TableHead className="h-8 text-[10px] uppercase font-bold text-muted-foreground text-right w-[150px]">{t('jm_col_value_type') || 'Tipe Nilai'}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -250,21 +256,21 @@ export default function JournalMappingPage() {
       <Dialog open={isModalOpen} onOpenChange={setIsModalOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>{currentMapping?.id ? 'Edit Mapping Jurnal' : 'Tambah Mapping Baru'}</DialogTitle>
-            <DialogDescription>Template ini digunakan AI untuk membentuk jurnal otomatis.</DialogDescription>
+            <DialogTitle>{currentMapping?.id ? (t('jm_edit_title') || 'Edit Mapping Jurnal') : (t('jm_new_title') || 'Tambah Mapping Baru')}</DialogTitle>
+            <DialogDescription>{t('jm_dialog_desc') || 'Template ini digunakan AI untuk membentuk jurnal otomatis.'}</DialogDescription>
           </DialogHeader>
 
           {currentMapping && (
             <div className="space-y-6 py-4">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Tipe Transaksi</Label>
+                  <Label>{t('jm_label_tx_type') || 'Tipe Transaksi'}</Label>
                   <Select 
                     value={currentMapping.transaction_type} 
                     onValueChange={(v) => setCurrentMapping({...currentMapping, transaction_type: v})}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Pilih Tipe" />
+                      <SelectValue placeholder={t('jm_placeholder_type') || 'Pilih Tipe'} />
                     </SelectTrigger>
                     <SelectContent>
                       {TX_TYPES.map(t => (
@@ -274,20 +280,20 @@ export default function JournalMappingPage() {
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Nama Template / Deskripsi</Label>
+                  <Label>{t('jm_label_desc') || 'Nama Template / Deskripsi'}</Label>
                   <Input 
                     value={currentMapping.description}
                     onChange={(e) => setCurrentMapping({...currentMapping, description: e.target.value})}
-                    placeholder="Contoh: Penjualan Kas Utama"
+                    placeholder={t('jm_placeholder_desc') || 'Contoh: Penjualan Kas Utama'}
                   />
                 </div>
               </div>
 
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <Label className="text-xs uppercase font-bold text-muted-foreground tracking-widest">Detail Baris Akun</Label>
+                  <Label className="text-xs uppercase font-bold text-muted-foreground tracking-widest">{t('jm_label_lines') || 'Detail Baris Akun'}</Label>
                   <Button variant="outline" size="sm" onClick={addLine} className="h-7 text-[10px]">
-                    <Plus className="w-3 h-3 mr-1" /> Tambah Baris
+                    <Plus className="w-3 h-3 mr-1" /> {t('jm_add_row') || 'Tambah Baris'}
                   </Button>
                 </div>
                 
@@ -300,12 +306,12 @@ export default function JournalMappingPage() {
                           onValueChange={(v) => updateLine(idx, 'account_id', parseInt(v))}
                         >
                           <SelectTrigger className="h-9 text-xs">
-                            <SelectValue placeholder="Pilih Akun" />
+                            <SelectValue placeholder={t('jm_placeholder_account') || 'Pilih Akun'} />
                           </SelectTrigger>
                           <SelectContent>
                             {accounts.map(acc => (
                               <SelectItem key={acc.id} value={acc.id.toString()}>
-                                <span className="font-mono">[{acc.code}]</span> {acc.name}
+                                <span className="font-mono">[{acc.code}]</span> {t(acc.name)}
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -342,10 +348,10 @@ export default function JournalMappingPage() {
           )}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsModalOpen(false)}>Batal</Button>
+            <Button variant="outline" onClick={() => setIsModalOpen(false)}>{t('common_cancel')}</Button>
             <Button onClick={handleSave} disabled={isSaving} className="gap-2">
               {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              Simpan Mapping
+              {t('common_save') || 'Simpan Mapping'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -354,9 +360,8 @@ export default function JournalMappingPage() {
       <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-4 flex gap-3">
         <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
         <div className="text-xs text-emerald-600/80 leading-relaxed">
-          <p className="font-bold mb-1 uppercase tracking-wider">Otomatisasi Aktif:</p>
-          Perubahan pada mapping ini akan langsung berdampak pada hasil inputan AI dan Voice Recorder. 
-          Sistem akan menggunakan mapping paling spesifik milik toko Anda jika tersedia.
+          <p className="font-bold mb-1 uppercase tracking-wider">{t('jm_info_title') || 'Otomatisasi Aktif:'}</p>
+          {t('jm_info_desc') || 'Perubahan pada mapping ini akan langsung berdampak pada hasil inputan AI dan Voice Recorder. Sistem akan menggunakan mapping paling spesifik milik toko Anda jika tersedia.'}
         </div>
       </div>
     </div>

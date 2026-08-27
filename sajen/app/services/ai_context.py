@@ -1,6 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, func
-from app.models.ocr import OCRTask, OCRStatus
+from sqlalchemy import or_
 from app.models.inventory import Product, Contact, TenantPricingRule
 from app.services.ai_engine import get_embedding
 import json
@@ -78,11 +77,18 @@ def build_minimal_context(
             "coa": _get_cash_accounts(tenant_id, db),
             "pricing_rules": []
         }
+    elif tx_class == TransactionClass.PRODUCT_PURCHASE:
+        # Pembelian dari supplier: tidak butuh pricing rules (itu harga jual, bukan beli)
+        # Cukup akun umum (kas, utang, persediaan)
+        return {
+            "coa": _get_common_accounts(tenant_id, db),
+            "pricing_rules": []
+        }
     elif tx_class == TransactionClass.PRODUCT_SALES:
         keywords = _extract_product_keywords(text)
         return {
             "coa": _get_sales_accounts(tenant_id, db),
-            "pricing_rules": _get_matched_pricing_rules(tenant_id, keywords, db)
+            "pricing_rules": []
         }
     else:
         return {
@@ -94,80 +100,46 @@ def build_minimal_context(
 # COA sekarang dikelola secara terpisah oleh coa_cache.py
 # Gunakan get_coa_string() dan needs_coa_in_prompt() dari sana
 
-def get_rag_context(db: Session, tenant_id: int = None, query_text: str = "") -> str:
+def get_rag_context(db: Session, tenant_id: int = None, query_text: str = "", is_ocr: bool = False) -> str:
     """
-    Consolidate GLOBAL RAG context from multiple sources.
-    Optimized with VECTOR SIMILARITY for primary templates via MCP Server.
+    Bangun RAG context dari sumber yang relevan untuk proses OCR.
+    - PRIMER : MCP vector store (semantic similarity) — sumber utama & terus tumbuh otomatis
+    - MASTER DATA: daftar produk & kontak terdaftar sebagai petunjuk nama item
+    Sumber Sekunder (SQL corrected tasks) dihapus — sudah digantikan oleh auto-ingest ke RAG Primer.
+    Pricing Rules dihapus — ditangani oleh build_minimal_context per tipe transaksi.
     """
     context = ""
 
-    # 1. PRIMARY: Semantic Search for Golden Templates via MCP Server
-    if query_text:
+    # PRIMER: Semantic Search via MCP vector store (Only for OCR)
+    if query_text and is_ocr:
         try:
             import requests
             from app.core.config import settings
             url = f"{settings.MCP_SERVER_URL.rstrip('/')}/api/v1/rag/search"
-            payload = {
-                "text": query_text,
-                "tenant_id": tenant_id
-            }
-            resp = requests.post(url, json=payload, timeout=10)
+            resp = requests.post(url, json={"text": query_text, "tenant_id": tenant_id}, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("action") == "bypass":
-                    # If we got a bypass, we just format it so the downstream caller gets the context
-                    # The downstream OCR caller might handle bypass specifically, but for now we inject it as context
+                    # Zero-token bypass: nota ini pernah dikoreksi, langsung pakai hasilnya
                     context += "\n--- REFERENSI PEMBELAJARAN TERKAIT ---\n"
                     context += f"CONTOH MIRIP (95% MATCH): {data.get('matched_file')}\nHASIL EKSTRAKSI: {data.get('expected_output')}\n\n"
                 elif data.get("rag_context"):
+                    # Nota agak mirip: jadikan contoh pembanding untuk LLM
                     context += "\n--- REFERENSI PEMBELAJARAN TERKAIT ---\n"
                     context += data["rag_context"] + "\n\n"
         except Exception as e:
-            print(f"MCP Vector search failed: {e}")
+            print(f"[RAG] MCP Vector search failed: {e}")
 
-    # 2. SECONDARY: Historically Corrected Tasks (Only for complex/long input)
-    # If the input is short (like "Saldo Kas"), we skip historical RAG to save tokens.
-    is_complex_input = len(query_text) > 60 or any(kw in query_text.lower() for kw in ["nota", "struk", "toko", "belanja"])
-    
-    if is_complex_input:
-        past_corrections = db.query(OCRTask).filter(
-            OCRTask.status == OCRStatus.CORRECTED,
-            OCRTask.corrected_data != None
-        ).order_by(OCRTask.id.desc()).limit(1).all()
-
-        if past_corrections:
-            context += "\n--- PEMBELAJARAN DARI PENGALAMAN ---\n"
-            for pt in past_corrections:
-                context += f"INPUT ASLI: {pt.raw_ocr_text[:200]}\nHASIL KOREKSI: {json.dumps(pt.corrected_data)}\n\n"
-
-    # 3. GLOBAL MASTER DATA: Registered Products & Contacts
-    # Minimalist approach: only send if we suspect normalization is needed
-    if is_complex_input:
+    # MASTER DATA: Produk & kontak terdaftar sebagai referensi nama (Only for OCR)
+    is_complex_input = len(query_text) > 60
+    if is_complex_input and is_ocr:
         products = db.query(Product.name).distinct().limit(5).all()
         contacts = db.query(Contact.name).distinct().limit(3).all()
-
         if products or contacts:
             context += "\n--- MASTER DATA ---\n"
             if products:
                 context += "ITEM: " + ", ".join([p[0] for p in products]) + "\n"
             if contacts:
                 context += "KONTAK: " + ", ".join([c[0] for c in contacts]) + "\n"
-
-    # 4. Inject Dynamic Pricing Rules (RAG Context)
-    if tenant_id:
-        pricing_rules = db.query(TenantPricingRule).filter(
-            TenantPricingRule.tenant_id == tenant_id,
-            TenantPricingRule.is_active == True
-        ).all()
-        if pricing_rules:
-            context += "\n--- ATURAN HARGA JUAL (PRICING RULES) ---\n"
-            for pr in pricing_rules:
-                payload_str = json.dumps(pr.rule_payload)
-                context += f"- {pr.name or 'Aturan Harga'}: {payload_str}\n"
-
-    # CATATAN: COA TIDAK lagi di-inject di sini.
-    # COA dikelola oleh coa_cache.py dengan Redis TTL 10 menit.
-    # Di-inject ke prompt HANYA jika diperlukan (needs_coa_in_prompt()).
-    # Ini mengurangi ukuran prompt ~30% untuk input transaksi simpel.
 
     return context

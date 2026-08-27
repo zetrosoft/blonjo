@@ -16,16 +16,26 @@ export type TransactionType =
   | 'non_cash_out'
   | 'non_cash_in'
   | 'capital'
+  | 'capital_withdrawal'
+  | 'capital_reclassification'
+  | 'customer_deposit'
+  | 'customer_withdrawal'
   | 'manual'
-  | 'cash_count';
+  | 'cash_count'
+  | 'purchase_return'
+  | 'sales_return';
 
 export interface ParsedItem {
   name: string;
+  ocr_name?: string;
   qty: number;
   unit: string;       // satuan: kg, pcs, ltr, dll
   unit_price: number;
   total: number;
   contact_name?: string;
+  discount_value?: number;
+  is_percent?: boolean;
+  is_manual_correction?: boolean;
 }
 
 export interface ParsedTransaction {
@@ -42,7 +52,11 @@ export interface ParsedTransaction {
   items: ParsedItem[];
   raw_text: string;
   confidence: 'high' | 'medium' | 'low';
+  ocr_source?: 'local' | 'llm'; // badge: sumber proses OCR
   suggested_entries?: any[];
+  is_duplicate?: boolean;
+  duplicate_task_id?: number;
+  duplicate_warning?: string;
 }
 
 // ─────────────────────────────────────────────
@@ -60,7 +74,8 @@ export const TYPE_RULES: TypeRule[] = [
     type: 'purchase',
     label: 'Pengeluaran (Belanja)',
     color: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
-    keywords: ['pembelian', 'purchase', 'belanja', 'beli', 'pembayaran piutang', 'bayar piutang', 'lunas piutang'],
+    keywords: ['pembelian', 'purchase', 'belanja', 'beli', 'pembayaran piutang', 'bayar piutang', 'lunas piutang',
+               'faktur', 'invoice', 'nota pembelian', 'nota beli', 'kulakan', 'restock', 'restok'],
   },
   {
     type: 'sales',
@@ -84,7 +99,7 @@ export const TYPE_RULES: TypeRule[] = [
     type: 'non_cash_out',
     label: 'Pengeluaran Non-Tunai',
     color: 'bg-violet-500/15 text-violet-400 border-violet-500/30',
-    keywords: ['transfer keluar', 'kirim uang', 'transfer ke', 'trf keluar', 'bank', 'atm', 'setor', 'bayar via bank'],
+    keywords: ['transfer keluar', 'kirim uang', 'transfer ke', 'trf keluar', 'bank', 'atm', 'setor tunai bank', 'setor bank', 'bayar via bank'],
   },
   {
     type: 'non_cash_in',
@@ -96,7 +111,31 @@ export const TYPE_RULES: TypeRule[] = [
     type: 'capital',
     label: 'Modal / Saldo Awal',
     color: 'bg-sky-500/15 text-sky-400 border-sky-500/30',
-    keywords: ['tambah modal', 'setor modal', 'modal awal', 'tambahan modal', 'investasi', 'inject modal', 'saldo awal', 'saldo akhir', 'saldo bulan'],
+    keywords: ['setoran akumulatif', 'setoran modal', 'setor modal', 'hutang modal', 'utang modal', 'tambah modal', 'modal awal', 'tambahan modal', 'investasi', 'inject modal', 'saldo awal', 'saldo akhir', 'saldo bulan', 'modal', 'penyertaan modal'],
+  },
+  {
+    type: 'capital_withdrawal',
+    label: 'Pengembalian Modal Pemilik',
+    color: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
+    keywords: ['pengembalian modal', 'penarikan modal', 'tarik modal', 'prive', 'withdraw modal', 'ambil modal', 'ditarik investor'],
+  },
+  {
+    type: 'capital_reclassification',
+    label: 'Koreksi Reklasifikasi Modal',
+    color: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
+    keywords: ['koreksi modal', 'pindah modal', 'pemindahan modal', 'reklasifikasi modal'],
+  },
+  {
+    type: 'customer_deposit',
+    label: 'Penerimaan Uang Muka / Titipan Pelanggan',
+    color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
+    keywords: ['tabungan customer', 'tabungan pelanggan', 'setor tabungan', 'simpanan', 'paket lebaran', 'angsuran lebaran', 'cicilan lebaran', 'setor paket', 'titipan pelanggan'],
+  },
+  {
+    type: 'customer_withdrawal',
+    label: 'Pengembalian Titipan Pelanggan',
+    color: 'bg-orange-500/15 text-orange-400 border-orange-500/30',
+    keywords: ['tarik tabungan', 'penarikan tabungan', 'ambil tabungan', 'kembalikan tabungan', 'cairkan tabungan'],
   },
   {
     type: 'manual',
@@ -105,10 +144,22 @@ export const TYPE_RULES: TypeRule[] = [
     keywords: ['jurnal', 'manual', 'memo'],
   },
   {
+    type: 'purchase_return',
+    label: 'Retur Pembelian',
+    color: 'bg-yellow-500/15 text-yellow-500 dark:text-yellow-400 border-yellow-500/30',
+    keywords: ['retur pembelian', 'return pembelian', 'retur supplier', 'return supplier', 'pengembalian ke supplier', 'kembalikan ke supplier'],
+  },
+  {
+    type: 'sales_return',
+    label: 'Retur Penjualan',
+    color: 'bg-amber-500/15 text-amber-500 dark:text-amber-400 border-amber-500/30',
+    keywords: ['retur penjualan', 'return penjualan', 'retur pelanggan', 'return pelanggan', 'pengembalian dari pelanggan', 'kembalikan dari pelanggan'],
+  },
+  {
     type: 'cash_count',
     label: 'Opname Kas (Selisih)',
     color: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30',
-    keywords: ['opname kas', 'tunai hari ini', 'cash on hand', 'uang di tangan', 'uang fisik', 'hitung kas'],
+    keywords: ['opname penyesuaian kas', 'opname kas', 'penyesuaian kas', 'kas fisik', 'tunai aktual', 'tunai hari ini', 'cash on hand', 'uang di tangan', 'uang fisik', 'hitung kas', 'opname'],
   },
 ];
 
@@ -237,10 +288,16 @@ export function extractItems(text: string): ParsedItem[] {
       // Contoh: "Belanja tgl 26/05/2026 di Sales Unilever :" -> "Sales Unilever"
       let supplierCandidate = leftPart;
       
-      // Jika ada kata ' di ', ambil hanya teks setelahnya
-      const diIdx = supplierCandidate.toLowerCase().lastIndexOf(' di ');
-      if (diIdx !== -1) {
-        supplierCandidate = supplierCandidate.substring(diIdx + 4).trim();
+      // Jika ada kata ' di ', ' ke ', atau ' dari ', ambil hanya teks setelahnya
+      const lowerCandidate = supplierCandidate.toLowerCase();
+      const diIdx = lowerCandidate.lastIndexOf(' di ');
+      const keIdx = lowerCandidate.lastIndexOf(' ke ');
+      const dariIdx = lowerCandidate.lastIndexOf(' dari ');
+      const splitIdx = Math.max(diIdx, Math.max(keIdx, dariIdx));
+      
+      if (splitIdx !== -1) {
+        const offset = splitIdx === dariIdx ? 6 : 4;
+        supplierCandidate = supplierCandidate.substring(splitIdx + offset).trim();
       }
 
       // Bersihkan informasi tanggal dari kandidat supplier
@@ -280,12 +337,13 @@ export function extractItems(text: string): ParsedItem[] {
       segment = segment.trim().replace(/^[\s•\-\*]+/, '');
       if (segment.length < 2) continue;
       
-      // Pattern 1: Kecap Bango Manis Botol 12 Btl @ 9.255 dengan diskon 10%
-      // Group 1: Name, 2: Qty, 3: Unit, 4: Unit Price, 5: Discount %
-      const rxWithDiscount = new RegExp(`^(.+?)\\s+(\\d+(?:[.,]\\d+)?)\\s*(${UNITS_RE})\\s*(?:[xX×@]\\s*)(\\d[\\d.,]*)(?:\\s+(?:dengan\\s+)?(?:disko[n\\.]|disc|diskon)\\s*(\\d+(?:[.,]\\d+)?)\\s*[%])?`, 'i');
+      // Pattern 1: Kecap Bango Manis Botol 12 Btl @ 9.255 dengan diskon 10% atau diskon 2000
+      // Group 1: Name, 2: Qty, 3: Unit, 4: Unit Price, 5: Discount Val, 6: %
+      const rxWithDiscount = new RegExp(`^(.+?)\\s+(\\d+(?:[.,]\\d+)?)\\s*(${UNITS_RE})\\s*(?:[xX×@]\\s*)(\\d[\\d.,]*)(?:\\s+(?:dengan\\s+)?(?:disko[n\\.]|disc|diskon)\\s*(\\d+(?:[.,]\\d+)?)\\s*(%)?)?`, 'i');
       
       const rxClassic = new RegExp(`^(.+?)\\s+(\\d+(?:[.,]\\d+)?)\\s*(${UNITS_RE})\\s*(?:per\\s+(?:${UNITS_RE})?\\s*|[xX×@]\\s*)(\\d[\\d.,]*)(?:\\s*[=]\\s*(\\d[\\d.,]*))?$`, 'i');
       const rxEqual = new RegExp(`^(.+?)\\s+(\\d+(?:[.,]\\d+)?)\\s*(${UNITS_RE})\\s*[=]\\s*(\\d[\\d.,]*)$`, 'i');
+      const rxNoAt = new RegExp(`^(.+?)\\s+(\\d+(?:[.,]\\d+)?)\\s*(${UNITS_RE})\\s+(\\d[\\d.,]*)$`, 'i');
       const rxSimple = /^(.+?)\s+(?:total|jumlah|bayar|@)?\s*(?:rp\.?\s*)?([\d.,]+(?:\s*(?:rb|ribu|jt|juta|k))?)$/i;
 
       let m = segment.match(rxWithDiscount);
@@ -294,20 +352,29 @@ export function extractItems(text: string): ParsedItem[] {
         const qty = parseIDNumber(m[2]);
         const unit = m[3].toLowerCase();
         const rawUnitPrice = parseIDNumber(m[4]);
-        const discountPct = m[5] ? parseIDNumber(m[5]) : 0;
+        const discountVal = m[5] ? parseIDNumber(m[5]) : 0;
+        const isPercent = m[6] === '%';
         
         // Hitung harga setelah diskon (neto)
-        const unitPrice = discountPct > 0 
-          ? rawUnitPrice - (rawUnitPrice * (discountPct / 100))
-          : rawUnitPrice;
-          
+        let unitPrice = rawUnitPrice;
+        if (discountVal > 0) {
+          if (isPercent) {
+            unitPrice = rawUnitPrice - (rawUnitPrice * (discountVal / 100));
+          } else {
+            // Diskon nominal. Jika merupakan diskon total baris, kurangi secara proporsional per qty
+            unitPrice = rawUnitPrice - (qty > 0 ? (discountVal / qty) : discountVal);
+          }
+        }
+        
         items.push({ 
           name, 
           qty, 
           unit, 
           unit_price: unitPrice, 
           total: qty * unitPrice, 
-          contact_name: currentContact || globalContact 
+          contact_name: currentContact || globalContact,
+          discount_value: discountVal > 0 ? discountVal : undefined,
+          is_percent: discountVal > 0 ? isPercent : undefined
         });
         continue;
       }
@@ -335,6 +402,21 @@ export function extractItems(text: string): ParsedItem[] {
            unit: m[3].toLowerCase(), 
            unit_price: qty > 0 ? total / qty : 0, 
            total, 
+           contact_name: currentContact || globalContact 
+         });
+         continue;
+      }
+
+      m = segment.match(rxNoAt);
+      if (m) {
+         const qty = parseIDNumber(m[2]);
+         const price = parseIDNumber(m[4]);
+         items.push({ 
+           name: m[1].trim(), 
+           qty, 
+           unit: m[3].toLowerCase(), 
+           unit_price: price, 
+           total: qty * price, 
            contact_name: currentContact || globalContact 
          });
          continue;
@@ -368,7 +450,13 @@ export function extractItems(text: string): ParsedItem[] {
       }
     }
   }
-  return items;
+
+  const summaryKws = ["pendapatan", "penjualan", "omzet", "omset", "rekap", "hasil toko", "penerimaan", "total penjualan", "kasir"];
+  return items.filter(it => {
+    const nameLow = it.name.toLowerCase().trim();
+    const isSummary = nameLow.length > 25 && summaryKws.some(kw => nameLow.includes(kw)) && !/\d+\s*(pcs|kg|gr|ltr|pak|dus|botol|bks|unit|lusin|karton|sak)\b/i.test(nameLow);
+    return !isSummary;
+  });
 }
 
 // ─────────────────────────────────────────────
@@ -478,7 +566,10 @@ function generateDescription(text: string, typeLabel: string, items: ParsedItem[
   if (typeLabel.includes('Belanja')) prefix = 'Pengeluaran Belanja';
   else if (typeLabel.includes('Operasional')) prefix = 'Pengeluaran Operasional';
   else if (typeLabel.includes('Pemasukan')) prefix = 'Penerimaan / Pendapatan';
-  else if (typeLabel.includes('Modal')) prefix = 'Tambah Modal';
+  else if (typeLabel.includes('Modal')) {
+    const isWithdrawal = ['tarik', 'pengembalian', 'penarikan', 'prive', 'withdraw', 'ambil'].some(kw => lower.includes(kw));
+    prefix = isWithdrawal ? 'Pengembalian Modal Pemilik' : 'Tambah Modal';
+  }
   else prefix = typeLabel;
 
   // Cek jika ada nama toko/supplier (prioritaskan dari item pertama jika ada contact_name)
@@ -490,13 +581,15 @@ function generateDescription(text: string, typeLabel: string, items: ParsedItem[
       const colonIdx = line.indexOf(':');
       if (colonIdx > 0 && colonIdx < 50) {
         let leftPart = line.substring(0, colonIdx).trim();
-        // Aturan: Teks setelah 'di' atau 'ke'
-        const diIdx = leftPart.toLowerCase().lastIndexOf(' di ');
-        const keIdx = leftPart.toLowerCase().lastIndexOf(' ke ');
-        const splitIdx = Math.max(diIdx, keIdx);
+        const lowerLeft = leftPart.toLowerCase();
+        const diIdx = lowerLeft.lastIndexOf(' di ');
+        const keIdx = lowerLeft.lastIndexOf(' ke ');
+        const dariIdx = lowerLeft.lastIndexOf(' dari ');
+        const splitIdx = Math.max(diIdx, Math.max(keIdx, dariIdx));
         
         if (splitIdx !== -1) {
-          supplier = leftPart.substring(splitIdx + 4).trim();
+          const offset = splitIdx === dariIdx ? 6 : 4;
+          supplier = leftPart.substring(splitIdx + offset).trim();
         } else {
           // Bersihkan tanggal dari leftPart jika tidak ada 'di'
           supplier = leftPart
@@ -591,6 +684,20 @@ export async function parseNoteText(rawText: string): Promise<ParsedTransaction>
     ? items.reduce((sum, i) => sum + i.total, 0)
     : extractAmount(text);
   contact_name = items.find(i => i.contact_name)?.contact_name;
+
+  // ── Heuristik Nota Pembelian ─────────────────────────────────────────
+  // Jika keyword tidak cukup tapi ditemukan pola item (qty @ harga / qty x harga),
+  // kemungkinan besar ini adalah nota pembelian dari supplier.
+  // Contoh nota: "KS N12 1 pcs @ 11400" → confidence masih low → otomatis jadi purchase
+  if (confidence === 'low' && items.length > 0) {
+    const hasItemPattern = /\d+\s*(pcs|kg|gr|ltr|pak|dus|botol|bks|unit|lusin|karton|sak)\s*[@x×]\s*[\d.,]+/i.test(text)
+      || /[@x×]\s*[\d.,]+/.test(text);
+    if (hasItemPattern) {
+      type = 'purchase';
+      confidence = 'medium';
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────
 
   // Tentukan label dan warna berdasarkan tipe dari JSON atau Lokal
   const rule = TYPE_RULES.find(r => r.type === type);

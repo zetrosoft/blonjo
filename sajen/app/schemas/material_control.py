@@ -41,6 +41,12 @@ class PurchasePlanCreate(BaseModel):
     send_via_email: bool = False
     items: List[PurchasePlanItemCreate]
 
+class PurchasePlanUpdate(BaseModel):
+    planned_date: Optional[date] = None
+    send_via_wa: Optional[bool] = None
+    send_via_email: Optional[bool] = None
+    items: Optional[List[PurchasePlanItemCreate]] = None
+
 class PurchasePlanResponse(BaseModel):
     id: int
     tenant_id: int

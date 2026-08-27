@@ -93,10 +93,28 @@ export default function SupplierPage() {
   };
 
   const handleOpenProfile = async (supplier: Supplier) => {
+    // FIX #3: Set data awal dari state dulu agar dialog langsung terbuka
+    // kemudian fetch ulang data fresh dari API untuk pastikan saldo utang akurat
     setSelectedSupplier(supplier);
     setProfileDialogOpen(true);
     setLoadingHistory(true);
     try {
+      // Fetch fresh supplier data (termasuk saldo utang terbaru dari jurnal)
+      const freshData = await fetchClient(`/inventory/contacts/${supplier.id}`);
+      if (freshData && typeof freshData === 'object') {
+        const refreshed: Supplier = {
+          id: freshData.id,
+          code: `SPL-${freshData.id.toString().padStart(3, '0')}`,
+          name: freshData.name,
+          phone: freshData.phone || '',
+          address: freshData.address || '',
+          outstanding_balance: Number(freshData.current_balance ?? 0),
+          sales_visit_day: freshData.sales_visit_day || '',
+          sales_visit_interval: freshData.sales_visit_interval || 7
+        };
+        setSelectedSupplier(refreshed);
+      }
+
       const txs = await fetchClient('/finance/transactions?limit=250');
       if (Array.isArray(txs)) {
         const filtered = txs.filter((tx: any) => {
@@ -113,6 +131,7 @@ export default function SupplierPage() {
       setLoadingHistory(false);
     }
   };
+
 
   const [formData, setFormData] = useState({
     name: '',
@@ -162,6 +181,10 @@ export default function SupplierPage() {
   useEffect(() => {
     loadSuppliers();
   }, []);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
 
   const handleAdd = () => {
     setEditingSupplier(null);

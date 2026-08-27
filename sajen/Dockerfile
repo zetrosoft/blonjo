@@ -5,7 +5,6 @@ FROM python:3.11-slim AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
-    libcairo2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -24,16 +23,7 @@ RUN uv pip install -r pyproject.toml
 # Stage 2: Runtime
 FROM python:3.11-slim AS runtime
 
-# Install runtime system dependencies (Tesseract, OpenGL/OpenCV dependencies, Cairo, etc.)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libcairo2 \
-    libgl1 \
-    libglib2.0-0 \
-    libgomp1 \
-    tesseract-ocr \
-    tesseract-ocr-ind \
-    tesseract-ocr-eng \
-    && rm -rf /var/lib/apt/lists/*
+# (Pustaka berat seperti Tesseract dan OpenCV sudah dihapus karena beralih ke LLM Vision)
 
 # Copy virtual environment dari stage builder
 COPY --from=builder /opt/venv /opt/venv

@@ -100,7 +100,7 @@ export default function Reports() {
     setLoading(true);
     try {
       const data = await fetchClient(`/finance/transactions?start_date=${startDate}&end_date=${endDate}`);
-      setTransactions(data);
+      setTransactions(Array.isArray(data) ? data : []);
     } catch (err: any) {
       toast.error(t('toast_err_load_transactions', { error: err.message || err }));
     } finally {
@@ -234,7 +234,7 @@ export default function Reports() {
           {/* Dashboard Intro Cards (Keep existing logic) */}
           <div className="space-y-4">
             <h3 className="text-lg font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2"><Layers className="w-5 h-5 text-primary" />{t('explore_reports_title')}</h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               <Card className="border-zinc-200/80 dark:border-zinc-800/80 bg-card hover:shadow-md hover:border-primary/30 dark:hover:border-primary/30 transition-all duration-300 flex flex-col group">
                 <CardHeader className="space-y-2.5 pb-4">
                   <div className="p-3 bg-primary/10 text-primary w-fit rounded-xl"><BookOpen className="w-6 h-6" /></div>
@@ -243,6 +243,16 @@ export default function Reports() {
                 <CardContent className="space-y-4 flex-1 flex flex-col justify-between">
                   <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">{t('reports_hub_journals_desc')}</p>
                   <Button onClick={() => navigate('/reports/journals')} className="w-full flex items-center justify-center gap-2 text-xs font-bold group-hover:bg-primary group-hover:text-primary-foreground transition-all mt-4">{t('journal_list_card_btn')}<ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" /></Button>
+                </CardContent>
+              </Card>
+              <Card className="border-zinc-200/80 dark:border-zinc-800/80 bg-card hover:shadow-md hover:border-primary/30 dark:hover:border-primary/30 transition-all duration-300 flex flex-col group">
+                <CardHeader className="space-y-2.5 pb-4">
+                  <div className="p-3 bg-rose-500/10 text-rose-500 w-fit rounded-xl"><BookOpen className="w-6 h-6" /></div>
+                  <CardTitle className="text-lg font-bold">{t('reports_hub_gl_title') || 'Buku Besar'}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4 flex-1 flex flex-col justify-between">
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed">{t('reports_hub_gl_desc') || 'Buku jurnal detail yang menampilkan histori mutasi dan saldo berjalan untuk setiap pos akun COA.'}</p>
+                  <Button onClick={() => navigate('/reports/general-ledger')} className="w-full flex items-center justify-center gap-2 text-xs font-bold group-hover:bg-rose-500 group-hover:text-white transition-all mt-4">{t('reports_hub_gl_btn') || 'Buka Buku Besar'}<ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-1 transition-transform" /></Button>
                 </CardContent>
               </Card>
               <Card className="border-zinc-200/80 dark:border-zinc-800/80 bg-card flex flex-col group hover:shadow-md transition-all">

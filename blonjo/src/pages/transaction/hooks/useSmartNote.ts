@@ -10,13 +10,8 @@ const SMART_NOTE_EXAMPLES = [
 ];
 
 /**
- * useSmartNote — Semua state dan handler untuk mode Smart Note.
- *
- * Alur:
- *  1. User ketik → noteText
- *  2. Tekan parse → API call → merge server+local → parsedResult
- *  3. Voice interim → tampilkan teks (belum parse)
- *  4. Voice final   → parse otomatis
+ * useSmartNote — State & Handler untuk Mode Smart Note.
+ * Pemrosesan murni menggunakan Server Backend Sajen API (Gemini / MCP).
  */
 export function useSmartNote() {
   const [noteText, setNoteText] = useState('');
@@ -24,49 +19,72 @@ export function useSmartNote() {
   const [parsedResult, setParsedResult] = useState<ParsedTransaction | null>(null);
   const exampleIdx = useRef(0);
 
-  // ── Parse gabungan server + lokal ────────────────────────────────
-  const mergeAndSet = useCallback(async (text: string) => {
+  // ── Parse murni Server Backend Sajen API (Gemini / MCP) ───────────
+  const mergeAndSet = useCallback(async (text: string, extraData?: any) => {
     setIsParsing(true);
-    const local = await parseNoteText(text);
+
     try {
       const res: any = await fetchClient('/finance/transactions/parse', {
         method: 'POST',
         body: JSON.stringify({ text }),
       });
+
+      const parsedData = res.parsed_data || {};
+      const baseParsed = extraData ? { ...parsedData, ...extraData } : parsedData;
+
       setParsedResult({
-        ...local,
-        transaction_type: res.parsed_data.transaction_type || local.transaction_type,
-        total_amount: res.parsed_data.total_amount || local.total_amount,
-        description: res.parsed_data.description || local.description,
-        transaction_date: res.parsed_data.transaction_date || local.transaction_date,
-        contact_name: res.parsed_data.contact_name || local.contact_name,
-        contact_address: res.parsed_data.contact_address || local.contact_address,
-        items: res.parsed_data.items || local.items,
-        payment_method: res.parsed_data.payment_method || local.payment_method,
-        due_date: res.parsed_data.due_date || local.due_date,
-        suggested_entries: res.suggested_entries,
+        transaction_type: baseParsed.transaction_type || 'expense',
+        type_label: baseParsed.type_label || 'Pengeluaran',
+        type_color: baseParsed.type_color || 'rose',
+        description: baseParsed.description || text,
+        total_amount: Number(baseParsed.total_amount) || 0,
+        transaction_date: baseParsed.transaction_date || new Date().toISOString().split('T')[0],
+        contact_name: baseParsed.contact_name || '',
+        contact_address: baseParsed.contact_address || '',
+        items: Array.isArray(baseParsed.items) ? baseParsed.items : [],
+        payment_method: baseParsed.payment_method || 'cash',
+        due_date: baseParsed.due_date || '',
+        raw_text: text,
+        confidence: baseParsed.confidence || 'high',
+        ocr_source: 'llm',
+        suggested_entries: res.suggested_entries || baseParsed.suggested_entries || [],
+        is_duplicate: Boolean(baseParsed.is_duplicate),
+        duplicate_task_id: baseParsed.duplicate_task_id,
+        duplicate_warning: baseParsed.duplicate_warning,
       });
-    } catch {
-      // Server gagal → fallback ke local parser (tidak perlu toast, silent)
-      setParsedResult(local);
+    } catch (err: any) {
+      console.error('[useSmartNote] Server Parsing Error:', err);
+      toast.error('Gagal Menganalisa Transaksi AI', {
+        description: err?.detail || err?.message || 'Server Backend Sajen tidak dapat dihubungi. Silakan periksa koneksi atau coba beberapa saat lagi.',
+        duration: 8000
+      });
+      // Fallback lokal sederhana hanya jika server benar-benar bermasalah
+      const local = await parseNoteText(text);
+      const baseParsed = extraData ? { ...local, ...extraData } : local;
+      setParsedResult(baseParsed);
     } finally {
       setIsParsing(false);
     }
   }, []);
 
-  const handleParse = useCallback(() => {
-    if (!noteText.trim()) return;
-    mergeAndSet(noteText);
+  const handleParse = useCallback((overrideText?: any, extraData?: any) => {
+    const textToParse = typeof overrideText === 'string' ? overrideText : noteText;
+    if (!textToParse.trim()) return;
+    const extra = typeof overrideText === 'object' && overrideText !== null ? overrideText : extraData;
+    mergeAndSet(textToParse, extra);
   }, [noteText, mergeAndSet]);
 
-  const handleVoiceTranscript = useCallback((text: string, isInterim: boolean) => {
-    setNoteText(text);
-    if (isInterim) {
-      setParsedResult(null); // Belum final, bersihkan preview
-    } else {
-      mergeAndSet(text);
-    }
-  }, [mergeAndSet]);
+  const handleVoiceTranscript = useCallback(
+    (text: string, isInterim: boolean) => {
+      setNoteText(text);
+      if (isInterim) {
+        setParsedResult(null);
+      } else {
+        mergeAndSet(text);
+      }
+    },
+    [mergeAndSet]
+  );
 
   const handleReset = useCallback(() => {
     setNoteText('');
@@ -74,14 +92,15 @@ export function useSmartNote() {
   }, []);
 
   const handleLoadExample = useCallback(() => {
-    const example = SMART_NOTE_EXAMPLES[exampleIdx.current % SMART_NOTE_EXAMPLES.length];
+    const example =
+      SMART_NOTE_EXAMPLES[exampleIdx.current % SMART_NOTE_EXAMPLES.length];
     exampleIdx.current += 1;
     setNoteText(example);
     setParsedResult(null);
   }, []);
 
   const updateParsed = useCallback((updates: Partial<ParsedTransaction>) => {
-    setParsedResult(prev => prev ? { ...prev, ...updates } : prev);
+    setParsedResult((prev) => (prev ? { ...prev, ...updates } : prev));
   }, []);
 
   return {
@@ -90,11 +109,11 @@ export function useSmartNote() {
     isParsing,
     parsedResult,
     setParsedResult,
+    mergeAndSet,
     handleParse,
     handleVoiceTranscript,
     handleReset,
     handleLoadExample,
     updateParsed,
-    mergeAndSet,
   };
 }

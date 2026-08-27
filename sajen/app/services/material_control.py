@@ -12,7 +12,7 @@ from app.models.cashflow import CashflowProjectionSnapshot
 from app.schemas.material_control import (
     PurchasePlanCreate, PurchasePlanResponse, 
     StockDiscardCreate, StockDiscardResponse,
-    CashflowProjectionItem
+    CashflowProjectionItem, PurchasePlanUpdate
 )
 from app.schemas.accounting import TransactionCreate, JournalEntryCreate
 from app.services.accounting import create_transaction_with_journal
@@ -266,6 +266,50 @@ def create_purchase_plan(db: Session, tenant_id: int, plan_in: PurchasePlanCreat
     return db_plan
 
 
+def update_purchase_plan(db: Session, tenant_id: int, plan_id: int, plan_in: PurchasePlanUpdate) -> Optional[PurchasePlan]:
+    db_plan = db.query(PurchasePlan).filter(
+        PurchasePlan.tenant_id == tenant_id,
+        PurchasePlan.id == plan_id
+    ).first()
+
+    if not db_plan or db_plan.status not in ["DRAFT", "PENDING_APPROVAL", "APPROVED"]:
+        return None
+
+    if plan_in.planned_date is not None:
+        db_plan.planned_date = plan_in.planned_date
+    if plan_in.send_via_wa is not None:
+        db_plan.send_via_wa = plan_in.send_via_wa
+    if plan_in.send_via_email is not None:
+        db_plan.send_via_email = plan_in.send_via_email
+
+    if plan_in.items is not None:
+        # Delete old items
+        db.query(PurchasePlanItem).filter(PurchasePlanItem.purchase_plan_id == plan_id).delete()
+        
+        # Add new items
+        total_amount = Decimal("0.00")
+        for item in plan_in.items:
+            subtotal = item.qty * item.unit_price
+            total_amount += subtotal
+            pid = item.product_id if (item.product_id and item.product_id > 0) else None
+            db_item = PurchasePlanItem(
+                purchase_plan_id=db_plan.id,
+                product_id=pid,
+                custom_product_name=item.custom_product_name if pid is None else None,
+                supplier_contact_id=item.supplier_contact_id,
+                qty=item.qty,
+                unit_price=item.unit_price,
+                subtotal=subtotal
+            )
+            db.add(db_item)
+            
+        db_plan.total_amount = total_amount
+
+    db.commit()
+    db.refresh(db_plan)
+    return db_plan
+
+
 def approve_purchase_plan(db: Session, tenant_id: int, plan_id: int) -> Optional[PurchasePlan]:
     db_plan = db.query(PurchasePlan).filter(
         PurchasePlan.tenant_id == tenant_id,
@@ -304,6 +348,8 @@ def execute_purchase_plan_items(
     for item in db_plan.items:
         if item.id in purchased_item_ids:
             item.is_purchased = True
+        elif complete_plan:
+            item.is_purchased = False
 
     all_purchased = all(item.is_purchased for item in db_plan.items)
     if complete_plan or all_purchased:
@@ -438,9 +484,9 @@ def generate_cashflow_projection(db: Session, tenant_id: int) -> List[CashflowPr
         ).scalar()
         if balance_query:
             current_cash += Decimal(str(balance_query))
-    if current_cash <= 0:
-        current_cash = Decimal("15000000.00")
+    # Jika kas negatif, biarkan tetap negatif agar proyeksi mencerminkan kondisi riil buku besar
     current_cash = Decimal(str(round(float(current_cash) / 100) * 100))
+
 
     # ── 2. Prediksi inflow: AI temporal weighting + day-of-week multiplier ──
     daily_sales = db.query(
@@ -946,12 +992,21 @@ def generate_cashflow_projection(db: Session, tenant_id: int) -> List[CashflowPr
             if current_hour >= 18:
                 # Jika belum ada inputan income hari ini (actual_inflow_today == 0) maka di-0-kan, jika sudah ada tampilkan actual
                 inflow_val = actual_inflow_today
+                
+                # Setelah jam 18:00 WIB, outflow hanya menampilkan pengeluaran aktual yang terjurnal
+                outflow_val = actual_outflow_today
+                if actual_outflow_today > 0:
+                    formatted_amt = f"Rp {int(actual_outflow_today):,}".replace(",", ".")
+                    outflow_desc = f"Aktual Belanja Hari Ini ({formatted_amt})"
+                else:
+                    outflow_desc = "-"
             else:
                 # Sebelum jam 18:00 WIB, jika sudah ada inputan tampilkan, jika belum gunakan proyeksi
                 inflow_val = actual_inflow_today if actual_inflow_today > 0 else inflow_proj_r
-
-            outflow_desc = ", ".join(day_details_today) if day_details_today else "-"
-            outflow_val = day_outflow_r_today
+                
+                # Sebelum jam 18:00 WIB, gunakan gabungan rencana belanja & tagihan jatuh tempo & aktual belanja hari ini
+                outflow_val = day_outflow_r_today
+                outflow_desc = ", ".join(day_details_today) if day_details_today else "-"
         else:
             # Masa Depan: Proyeksi murni
             day_outflow = Decimal("0")

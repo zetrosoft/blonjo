@@ -128,6 +128,9 @@ async def process_vibe_intent(
                 trans_in = TransactionCreate(**payload)
                 create_transaction_with_journal(db, trans_in, current_user.id, current_user.tenant_id)
                 
+                from app.core.redis import invalidate_tenant_cache
+                invalidate_tenant_cache(current_user.tenant_id, ["products", "dashboard", "insights", "material_control"])
+
                 ui_items.insert(0, {
                     "type": "message", 
                     "title": "✅ Berhasil Disimpan", 

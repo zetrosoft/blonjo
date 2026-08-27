@@ -133,7 +133,7 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
     try {
       const data = await fetchClient('/inventory/pricing-rules');
       if (Array.isArray(data)) {
-        setRulesList(data);
+        setRulesList([...data].sort((a, b) => b.id - a.id));
       } else {
         setRulesList([]);
       }
@@ -173,6 +173,7 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
     loadProducts();
     loadUoms();
   }, []);
+
 
   useEffect(() => {
     if (selectedProductId) {
@@ -409,7 +410,19 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
   };
 
   const renderPayloadSummary = (rule: PricingRule) => {
-    const payload = rule.rule_payload;
+    let payload = rule.rule_payload;
+    // rule_payload bisa berupa string JSON dari database, parse terlebih dahulu
+    if (typeof payload === 'string') {
+      try {
+        payload = JSON.parse(payload);
+      } catch (e) {
+        console.error('Failed to parse rule_payload', e);
+        return <span className="text-xs text-muted-foreground">Data tidak valid</span>;
+      }
+    }
+    if (!payload) {
+      return <span className="text-xs text-muted-foreground">{t('pr_custom_logic')}</span>;
+    }
     const displayName = payload.product_name || (payload.apply_to_keyword ? `Semua Varian: ${payload.apply_to_keyword}` : '');
     
     if (rule.rule_type === 'tiered' && payload.tiers) {
@@ -454,6 +467,10 @@ export default function PricingRulePage({ hideHeader = false }: { hideHeader?: b
   };
 
   const [searchQuery, setSearchQuery] = useState('');
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
 
   const addTier = () => {
     const prod = products.find(p => p.id === Number(selectedProductId));

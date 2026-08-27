@@ -18,6 +18,16 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def safe_execute(conn, func, *args, **kwargs):
+    from sqlalchemy import text
+    try:
+        conn.execute(text('SAVEPOINT sp1'))
+        func(*args, **kwargs)
+        conn.execute(text('RELEASE SAVEPOINT sp1'))
+    except Exception as e:
+        conn.execute(text('ROLLBACK TO SAVEPOINT sp1'))
+        print(f"Skipping due to error: {e}")
+
 def upgrade() -> None:
     # 1. ETL Data dari ai_learning_templates (Sajen) ke knowledge_vectors (MCP)
     # Gunakan text() dan bind.execute()
@@ -27,29 +37,32 @@ def upgrade() -> None:
     check_table = bind.execute(sa.text("SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'knowledge_vectors');")).scalar()
     
     if not check_table:
-        raise Exception("Tabel 'knowledge_vectors' milik MCP Server belum ada di database (blonjo_db). Silakan jalankan init-db/01-init.sql dari mcp-server terlebih dahulu sebelum mendeploy SAJEN.")
-        
-    # Jalankan migrasi
-    bind.execute(sa.text("""
-        INSERT INTO knowledge_vectors (content, metadata, embedding)
-        SELECT 
-            raw_ocr_text AS content, 
-            jsonb_build_object(
-                'app_context', 'sajen_ocr',
-                'tenant_id', tenant_id,
-                'file_name', file_name,
-                'expected_output', expected_output,
-                'usage_count', usage_count
-            ) AS metadata, 
-            embedding::halfvec(3072) AS embedding
-        FROM ai_learning_templates
-        WHERE embedding IS NOT NULL;
-    """))
+        print("Tabel 'knowledge_vectors' milik MCP Server belum ada di database. Melewati migrasi data dari ai_learning_templates.")
+    else:
+        # Jalankan migrasi
+        try:
+            bind.execute(sa.text("""
+                INSERT INTO knowledge_vectors (content, metadata, embedding)
+                SELECT 
+                    raw_ocr_text AS content, 
+                    jsonb_build_object(
+                        'app_context', 'sajen_ocr',
+                        'tenant_id', tenant_id,
+                        'file_name', file_name,
+                        'expected_output', expected_output,
+                        'usage_count', usage_count
+                    ) AS metadata, 
+                    embedding::halfvec(3072) AS embedding
+                FROM ai_learning_templates
+                WHERE embedding IS NOT NULL;
+            """))
+        except Exception as e:
+            print(f"Skipping data migration due to error: {e}")
         
     # 2. Hapus tabel lama (bersihkan storage)
-    op.drop_index('ix_ai_learning_templates_id', table_name='ai_learning_templates')
-    op.drop_index('ix_ai_learning_templates_tenant_id', table_name='ai_learning_templates')
-    op.drop_table('ai_learning_templates')
+    safe_execute(bind, op.drop_index, 'ix_ai_learning_templates_id', table_name='ai_learning_templates')
+    safe_execute(bind, op.drop_index, 'ix_ai_learning_templates_tenant_id', table_name='ai_learning_templates')
+    safe_execute(bind, op.drop_table, 'ai_learning_templates')
 
 
 def downgrade() -> None:

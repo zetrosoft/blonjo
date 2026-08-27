@@ -51,6 +51,8 @@ class Settings(BaseSettings):
 
     # Google Gemini Config (Fallback)
     GOOGLE_API_KEY: str | None = None
+    GOOGLE_API_KEY_FALLBACK: str | None = None
+    GOOGLE_API_KEY_FALLBACK_2: str | None = None
     GEMINI_PRIMARY_MODEL: str = "gemini-1.5-flash"
     GEMINI_SECONDARY_MODEL: str = "gemini-2.0-flash-exp" # Latest experimental/flash
 

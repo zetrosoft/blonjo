@@ -20,13 +20,13 @@ dependencies = [
     "email-validator>=2.1.0",
     "python-multipart>=0.0.9",
     "ollama>=0.1.7",
-    "pytesseract>=0.3.10",
-    "opencv-python-headless>=4.9.0.80",
-    "shapely>=2.0.3",
     "pgvector>=0.2.4",
     "google-genai",
-    "xhtml2pdf>=0.2.16",
     "fpdf2>=2.7.8",
+    "onnxruntime>=1.17.0",
+    "tokenizers>=0.19.0",
+    "numpy>=1.24.0",
+    "opencv-python-headless>=4.8.0",
 ]
 
 [tool.uv]

@@ -124,8 +124,11 @@ export function TransactionDetailDialog({
     }
   }, [txId, onOpenChange, onSuccess]);
 
+  const [editDescription, setEditDescription] = useState('');
+
   const startEditing = useCallback(() => {
     if (!selectedTx) return;
+    setEditDescription(selectedTx.description || '');
     setEditItems(
       selectedTx.inventory_logs?.map((log: any) => ({
         name: log.product?.name || '',
@@ -154,13 +157,17 @@ export function TransactionDetailDialog({
     if (!selectedTx) return;
     setLoadingDetail(true);
     try {
-      const newTotal = editItems.reduce((acc, item) => acc + Number(item.total), 0);
+      const hasLogs = editItems && editItems.length > 0;
+      const newTotal = hasLogs
+        ? editItems.reduce((acc, item) => acc + Number(item.total), 0)
+        : Number(selectedTx.total_amount);
+
       await fetchClient(`/finance/transactions/${selectedTx.id}`, {
         method: 'PUT',
         body: JSON.stringify({
-          description: selectedTx.description,
+          description: editDescription,
           total_amount: newTotal,
-          items: editItems,
+          ...(hasLogs ? { items: editItems } : {}),
         }),
       });
       toast.success(t('toast_success_save_store'));
@@ -172,7 +179,7 @@ export function TransactionDetailDialog({
     } finally {
       setLoadingDetail(false);
     }
-  }, [selectedTx, editItems, t, onSuccess, loadDetail]);
+  }, [selectedTx, editDescription, editItems, t, onSuccess, loadDetail]);
 
   const getTxTypeBadge = (type: string) => {
     const styles: Record<string, string> = {
@@ -445,12 +452,57 @@ export function TransactionDetailDialog({
                 );
               })()}
               <div className="col-span-1 md:col-span-2 pt-2 border-t border-zinc-200/50 dark:border-zinc-800/50">
-                <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">
-                  {t('label_description')}:
-                </p>
-                <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200 mt-1 bg-background p-2.5 rounded border border-zinc-100 dark:border-zinc-850">
-                  {selectedTx.description}
-                </p>
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">
+                      {t('label_description')}:
+                    </p>
+                    {selectedTx.status === 'draft' && !isEditing && (
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={startEditing}
+                        title="Edit Deskripsi & Items"
+                        className="h-5 w-5 text-zinc-400 hover:text-primary"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                      </Button>
+                    )}
+                  </div>
+                  {isEditing && (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setIsEditing(false)}
+                        className="h-7 px-2 text-xs"
+                      >
+                        Batal
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={saveEditItems}
+                        disabled={loadingDetail}
+                        className="h-7 px-3 text-xs gap-1.5 bg-emerald-600 hover:bg-emerald-700"
+                      >
+                        <Save className="w-3.5 h-3.5" />
+                        {t('btn_save_changes')}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                {isEditing ? (
+                  <Input
+                    value={editDescription}
+                    onChange={(e) => setEditDescription(e.target.value)}
+                    className="mt-1 text-sm font-medium bg-background border-zinc-300 dark:border-zinc-700 focus:ring-1 focus:ring-primary"
+                    placeholder="Masukkan deskripsi transaksi..."
+                  />
+                ) : (
+                  <p className="text-sm font-medium text-zinc-800 dark:text-zinc-200 mt-1 bg-background p-2.5 rounded border border-zinc-100 dark:border-zinc-850">
+                    {selectedTx.description}
+                  </p>
+                )}
               </div>
             </div>
 

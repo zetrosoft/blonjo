@@ -41,6 +41,7 @@ def seed_standard_coa():
         {"code": "2-1101", "name": "acc_accounts_payable", "account_type": AccountType.LIABILITY, "parent_code": "2-1000"},
         {"code": "2-1201", "name": "acc_salaries_payable", "account_type": AccountType.LIABILITY, "parent_code": "2-1000"},
         {"code": "2-1301", "name": "acc_taxes_payable", "account_type": AccountType.LIABILITY, "parent_code": "2-1000"},
+        {"code": "2-1402", "name": "acc_customer_deposit", "account_type": AccountType.LIABILITY, "parent_code": "2-1000"},
         {"code": "2-2101", "name": "acc_bank_loan_long", "account_type": AccountType.LIABILITY, "parent_code": "2-2000"},
         
         # Equity

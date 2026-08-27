@@ -49,7 +49,6 @@ export default function DaftarInputPage() {
   const [typeFilter, setTypeFilter]     = useState('all');
   const [fromDate, setFromDate]         = useState(formatDateForInput(getFirstDayOfMonth()));
   const [toDate, setToDate]             = useState(formatDateForInput(new Date()));
-  const [pageSize, setPageSize]         = useState(50);
 
   // Detail dialog state
   const [detailTxId, setDetailTxId] = useState<number | null>(null);
@@ -58,18 +57,22 @@ export default function DaftarInputPage() {
   const loadTransactions = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchClient(`/finance/transactions?start_date=${fromDate}&end_date=${toDate}&limit=${pageSize}`);
-      setTransactions(data);
+      const data = await fetchClient(`/finance/transactions?start_date=${fromDate}&end_date=${toDate}&limit=250`);
+      setTransactions(Array.isArray(data) ? data : []);
     } catch (err: any) {
       toast.error(t('toast_err_load_transactions', { error: err.message || err }));
     } finally {
       setLoading(false);
     }
-  }, [t, fromDate, toDate, pageSize]);
+  }, [t, fromDate, toDate]);
 
   useEffect(() => {
     loadTransactions();
   }, [loadTransactions]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
 
   const handleViewDetail = useCallback((txId: number) => {
     setDetailTxId(txId);
@@ -162,9 +165,8 @@ export default function DaftarInputPage() {
         const matchType = typeFilter === 'all' || tx.transaction_type === typeFilter;
         const matchDate = tx.transaction_date >= fromDate && tx.transaction_date <= toDate;
         return matchSearch && matchType && matchDate;
-      })
-      .slice(0, pageSize),
-    [transactions, searchQuery, typeFilter, fromDate, toDate, pageSize],
+      }),
+    [transactions, searchQuery, typeFilter, fromDate, toDate],
   );
   const paginatedItems = filteredTransactions.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
@@ -399,28 +401,7 @@ export default function DaftarInputPage() {
                   ))}
                 </TableBody>
               </Table>
-              <div className="px-6 py-4 border-t border-zinc-100 dark:border-zinc-800 flex flex-col sm:flex-row justify-between items-center gap-4">
-                <div className="flex items-center gap-3">
-                  {!loading && filteredTransactions.length > 0 && (
-                    <>
-                      <span className="text-xs text-zinc-500 dark:text-zinc-400 font-medium">
-                        {t('show_rows')}
-                      </span>
-                      <select
-                        value={pageSize}
-                        onChange={(e) => setPageSize(Number(e.target.value))}
-                        className="bg-background border border-zinc-200 dark:border-zinc-800 rounded-md text-xs px-2 py-1 text-zinc-700 dark:text-zinc-300 focus:outline-none focus:ring-1 focus:ring-primary h-8"
-                      >
-                        <option value={20}>{t('rows_count', { count: 20 })}</option>
-                        <option value={50}>{t('rows_count', { count: 50 })}</option>
-                        <option value={100}>{t('rows_count', { count: 100 })}</option>
-                        <option value={250}>{t('rows_count', { count: 250 })}</option>
-                      </select>
-                    </>
-                  )}
-                </div>
                 <PaginationControls totalItems={filteredTransactions.length} currentPage={currentPage} rowsPerPage={rowsPerPage} onPageChange={setCurrentPage} onRowsPerPageChange={setRowsPerPage} />
-              </div>
             </div>
           )}
         </CardContent>

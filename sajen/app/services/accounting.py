@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from fastapi import HTTPException, status
-from app.models.accounting import Account, Transaction, JournalEntry, TransactionType, TransactionStatus
+from app.models.accounting import Account, Transaction, JournalEntry, TransactionType, TransactionStatus, AccountType
 from app.schemas.accounting import TransactionCreate
 from datetime import datetime, date
 from decimal import Decimal
@@ -64,7 +64,7 @@ def check_tax_exempt_via_vector(items: list) -> bool:
         print(f"Error checking tax exemption: {e}")
         return True # Safe fallback
 
-def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: TransactionType, amount: Decimal, is_tax_exempt: bool = True, payment_method: str | None = None) -> list[dict]:
+def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: TransactionType, amount: Decimal, is_tax_exempt: bool = True, payment_method: str | None = None, description: str | None = None) -> list[dict]:
     """
     Generate dynamic journal entries based on JournalMapping master data.
     Supports multi-pair (compound) entries and specialized logic for CASH_COUNT.
@@ -73,6 +73,114 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
 
     # 1. Standard Handling: Try to get from Master Data first (Multi-pair)
     t_id = tenant_id or context.get_tenant_context()
+
+    # 0. SPECIAL HANDLING: Customer Deposit (DP Penjualan)
+    is_dp_customer = (
+        (payment_method and payment_method.lower() in ["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
+        or any(kw in (description or "").lower() for kw in ["dp ", "uang muka", "down payment", "panjar"])
+    )
+    if is_dp_customer and trans_type == TransactionType.SALES:
+        # 1. Cari atau buat akun 2-1402 (Uang Muka Penjualan)
+        dp_acc = db.query(Account).filter(
+            Account.code == "2-1402",
+            or_(Account.tenant_id == t_id, Account.tenant_id == None)
+        ).first()
+        if not dp_acc:
+            dp_acc = Account(
+                tenant_id=t_id,
+                code="2-1402",
+                name="Uang Muka Penjualan",
+                account_type=AccountType.LIABILITY
+            )
+            db.add(dp_acc)
+            db.flush()
+
+        # 2. Cari akun Kas (1-1101) atau Bank (1-1102)
+        desc_lower = (description or payment_method or "").lower()
+        is_non_cash = (
+            (payment_method and payment_method.lower() in ["non_cash", "non tunai", "transfer", "bank", "qris", "gopay", "ovo", "dana"])
+            or any(kw in desc_lower for kw in ["qris", "qr", "transfer", "tf bank", "via bank", "non tunai"])
+        )
+        debit_code = "1-1102" if is_non_cash else "1-1101"
+        cash_acc = db.query(Account).filter(
+            Account.code == debit_code,
+            or_(Account.tenant_id == t_id, Account.tenant_id == None)
+        ).first()
+        if not cash_acc:
+            cash_acc = db.query(Account).filter(
+                Account.code == "1-1101",
+                or_(Account.tenant_id == t_id, Account.tenant_id == None)
+            ).first()
+
+        if dp_acc and cash_acc:
+            return [
+                {
+                    "account_id": cash_acc.id,
+                    "account": {"id": cash_acc.id, "code": cash_acc.code, "name": cash_acc.name},
+                    "debit": amount,
+                    "credit": Decimal('0.00')
+                },
+                {
+                    "account_id": dp_acc.id,
+                    "account": {"id": dp_acc.id, "code": dp_acc.code, "name": dp_acc.name},
+                    "debit": Decimal('0.00'),
+                    "credit": amount
+                }
+            ]
+
+    # 0a. SPECIAL HANDLING: CASH_COUNT (Rekonsiliasi Kas Dinamis)
+    if trans_type == TransactionType.CASH_COUNT:
+        system_cash = db.query(func.sum(JournalEntry.debit - JournalEntry.credit)).join(
+            Account, Account.id == JournalEntry.account_id
+        ).join(
+            Transaction, Transaction.id == JournalEntry.transaction_id
+        ).filter(
+            Transaction.tenant_id == t_id,
+            Transaction.status == TransactionStatus.POSTED,
+            or_(Account.code.startswith("1-10"), Account.code.startswith("1-11"))
+        ).scalar() or Decimal('0.00')
+        
+        diff = amount - system_cash
+        if diff == 0: return []
+        
+        is_surplus = diff > 0
+        abs_diff = abs(diff)
+        
+        cash_acc = db.query(Account).filter(
+            Account.code.in_(["1-1000", "1-1100", "1-1101"]),
+            or_(Account.tenant_id == t_id, Account.tenant_id == None)
+        ).order_by(Account.tenant_id.desc(), Account.code).first()
+        
+        if is_surplus:
+            adj_acc = db.query(Account).filter(
+                Account.code.in_(["4-9000", "4-2101", "4-2000"]),
+                or_(Account.tenant_id == t_id, Account.tenant_id == None)
+            ).order_by(Account.tenant_id.desc()).first()
+        else:
+            adj_acc = db.query(Account).filter(
+                Account.code.in_(["3-1401", "3-1201", "6-1901", "6-9000"]),
+                or_(Account.tenant_id == t_id, Account.tenant_id == None)
+            ).order_by(Account.tenant_id.desc()).first()
+            
+        if cash_acc and adj_acc:
+            return [
+                {
+                    "account_id": cash_acc.id,
+                    "account": {"id": cash_acc.id, "code": cash_acc.code, "name": cash_acc.name},
+                    "debit": abs_diff if is_surplus else Decimal('0.00'),
+                    "credit": Decimal('0.00') if is_surplus else abs_diff
+                },
+                {
+                    "account_id": adj_acc.id,
+                    "account": {"id": adj_acc.id, "code": adj_acc.code, "name": adj_acc.name},
+                    "debit": Decimal('0.00') if is_surplus else abs_diff,
+                    "credit": abs_diff if is_surplus else Decimal('0.00')
+                }
+            ]
+
+
+
+
 
     mapping = db.query(JournalMapping).filter(
         JournalMapping.tenant_id == t_id,
@@ -120,20 +228,21 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
                 else:
                     val = amount
             elif line.value_type == "cogs_amount":
-                # Get HPP Rate from settings (default 70% if no real cost known)
+                # Get HPP Rate from settings (default 85% if no real cost known)
                 from app.models.setting import AppSetting
                 rate_setting = db.query(AppSetting).filter(AppSetting.tenant_id == t_id, AppSetting.key == "default_cogs_rate").first()
-                cogs_rate = Decimal(rate_setting.value) / 100 if rate_setting else Decimal('0.70')
+                cogs_rate = Decimal(rate_setting.value) / 100 if rate_setting else Decimal('0.85')
                 val = (amount * cogs_rate).quantize(Decimal('0.00'))
             elif line.value_type == "tax_amount":
                 val = tax_val
             else:
                 val = Decimal('0.00')
                 
-            # Intercept Cash/Bank if payment_method is hutang/tempo
+            # Intercept Cash/Bank jika dideteksi tempo/non-tunai
             target_account_id = line.account_id
             target_account = account
             
+            # 1. Redirect Tempo / Kredit / Hutang
             if payment_method and payment_method.lower() in ["hutang", "tempo", "kredit"]:
                 if account and (account.code.startswith("1-11") or account.code.startswith("1-10")):
                     if trans_type == TransactionType.PURCHASE and line.side == "credit":
@@ -155,6 +264,66 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
                             target_account_id = piutang_acc.id
                             target_account = piutang_acc
             
+            # 1b. Redirect Customer Deposit (Uang Muka Penjualan) -> Akun 2-1402 / 2-1101
+            is_dp_customer = (
+                (payment_method and payment_method.lower() in ["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
+                or any(kw in (description or "").lower() for kw in ["dp ", "uang muka", "down payment", "panjar"])
+            )
+            if is_dp_customer and trans_type == TransactionType.SALES and line.side == "credit":
+                dp_acc = db.query(Account).filter(
+                    Account.code == "2-1402",
+                    or_(Account.tenant_id == t_id, Account.tenant_id == None)
+                ).first()
+                if not dp_acc:
+                    # Fallback auto-create akun 2-1402 jika belum ada di tenant
+                    dp_acc = Account(
+                        tenant_id=t_id,
+                        code="2-1402",
+                        name="Uang Muka Penjualan",
+                        account_type=AccountType.LIABILITY
+                    )
+                    db.add(dp_acc)
+                    db.flush()
+                target_account_id = dp_acc.id
+                target_account = dp_acc
+
+            # 2. Redirect Kas -> Bank (1-1102) jika non-tunai (QRIS / Transfer)
+            desc_lower = (description or payment_method or "").lower()
+            is_non_cash = (
+                (payment_method and payment_method.lower() in ["non_cash", "non tunai", "transfer", "bank", "qris", "gopay", "ovo", "dana"])
+                or any(kw in desc_lower for kw in ["qris", "qr", "transfer", "tf bank", "via bank", "non tunai"])
+            )
+            if is_non_cash and account and (account.code.startswith("1-10") or (account.code.startswith("1-11") and account.code != "1-1102")):
+                bank_acc = db.query(Account).filter(
+                    Account.code == "1-1102",
+                    or_(Account.tenant_id == t_id, Account.tenant_id == None)
+                ).first()
+                if bank_acc:
+                    target_account_id = bank_acc.id
+                    target_account = bank_acc
+
+            # 3. Redirect Beban Operasional Spesifik (6-1301 Utilitas / 6-1302 BBM)
+            is_bbm_expense = any(kw in desc_lower for kw in ["bbm", "bensin", "pertalite", "pertamax", "solar", "spbu", "parkir", "tol"])
+            is_utility_expense = any(kw in desc_lower for kw in ["listrik", "pln", "air", "pdam", "internet", "wifi", "telkom"])
+            
+            if trans_type in [TransactionType.OPERATIONAL, TransactionType.EXPENSE] and account and account.code.startswith("6-"):
+                if is_bbm_expense:
+                    bbm_acc = db.query(Account).filter(
+                        Account.code == "6-1302",
+                        or_(Account.tenant_id == t_id, Account.tenant_id == None)
+                    ).first()
+                    if bbm_acc:
+                        target_account_id = bbm_acc.id
+                        target_account = bbm_acc
+                elif is_utility_expense:
+                    util_acc = db.query(Account).filter(
+                        Account.code == "6-1301",
+                        or_(Account.tenant_id == t_id, Account.tenant_id == None)
+                    ).first()
+                    if util_acc:
+                        target_account_id = util_acc.id
+                        target_account = util_acc
+            
             entries.append({
                 "account_id": target_account_id,
                 "account": {
@@ -165,6 +334,39 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
                 "debit": val if line.side == "debit" else 0,
                 "credit": val if line.side == "credit" else 0
             })
+
+        # 4. Pastikan transaksi SALES selalu memiliki pasangan Jurnal Perpetual (HPP & Persediaan) jika bukan DP Customer
+        is_dp_transaction = (
+            (payment_method and payment_method.lower() in ["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
+            or any(kw in (description or "").lower() for kw in ["dp ", "uang muka", "down payment", "panjar"])
+        )
+        if trans_type == TransactionType.SALES and not is_dp_transaction and not any(e.get("account") and e["account"]["code"].startswith("5-") for e in entries):
+            from app.models.setting import AppSetting
+            rate_setting = db.query(AppSetting).filter(AppSetting.tenant_id == t_id, AppSetting.key == "default_cogs_rate").first()
+            cogs_rate = Decimal(rate_setting.value) / 100 if rate_setting else Decimal('0.85')
+            cogs_val = (amount * cogs_rate).quantize(Decimal('0.00'))
+            
+            hpp_acc = db.query(Account).filter(Account.code == "5-1101", or_(Account.tenant_id == t_id, Account.tenant_id == None)).first()
+            persediaan_acc = db.query(Account).filter(Account.code == "1-1301", or_(Account.tenant_id == t_id, Account.tenant_id == None)).first()
+            
+            if hpp_acc and persediaan_acc:
+                entries.append({
+                    "account_id": hpp_acc.id,
+                    "account": {"id": hpp_acc.id, "code": hpp_acc.code, "name": hpp_acc.name},
+                    "debit": cogs_val,
+                    "credit": Decimal('0.00')
+                })
+                entries.append({
+                    "account_id": persediaan_acc.id,
+                    "account": {"id": persediaan_acc.id, "code": persediaan_acc.code, "name": persediaan_acc.name},
+                    "debit": Decimal('0.00'),
+                    "credit": cogs_val
+                })
+
+        if is_dp_transaction:
+            # Saring hanya entri Kas/Bank dan Uang Muka Penjualan (Hapus baris HPP 5-* dan Persediaan 1-13*)
+            entries = [e for e in entries if not (e.get("account") and (e["account"]["code"].startswith("5-") or e["account"]["code"].startswith("1-13")))]
+
         return entries
 
     # 2. SPECIAL HANDLING: CASH_COUNT (Reconciliation) 
@@ -239,6 +441,51 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
                     "credit": abs_diff if is_surplus else 0
                 }
             ]
+    
+    # 2. FALLBACK HANDLING: Hanya untuk Retur Pembelian/Penjualan jika mapping spesifik belum diatur
+    if not mapping and trans_type in [TransactionType.PURCHASE_RETURN, TransactionType.SALES_RETURN]:
+        inv_acc = db.query(Account).filter(Account.code == "1-1301", or_(Account.tenant_id == t_id, Account.tenant_id == None)).first()
+        rev_acc = db.query(Account).filter(Account.code == "4-1101", or_(Account.tenant_id == t_id, Account.tenant_id == None)).first()
+        kas_acc = db.query(Account).filter(Account.code == "1-1101", or_(Account.tenant_id == t_id, Account.tenant_id == None)).first()
+        
+        if payment_method and payment_method.lower() in ["hutang", "tempo", "kredit"]:
+            piutang_acc = db.query(Account).filter(Account.code == "1-1201", or_(Account.tenant_id == t_id, Account.tenant_id == None)).first()
+            hutang_acc = db.query(Account).filter(Account.code == "2-1101", or_(Account.tenant_id == t_id, Account.tenant_id == None)).first()
+        else:
+            piutang_acc = None
+            hutang_acc = None
+
+        if trans_type == TransactionType.PURCHASE_RETURN and inv_acc:
+            debit_acc = hutang_acc if (payment_method and payment_method.lower() in ["hutang", "tempo", "kredit"] and hutang_acc) else kas_acc
+            if debit_acc:
+                return [
+                    {
+                        "account_id": debit_acc.id,
+                        "account": {"id": debit_acc.id, "code": debit_acc.code, "name": debit_acc.name},
+                        "debit": amount, "credit": Decimal('0.00')
+                    },
+                    {
+                        "account_id": inv_acc.id,
+                        "account": {"id": inv_acc.id, "code": inv_acc.code, "name": inv_acc.name},
+                        "debit": Decimal('0.00'), "credit": amount
+                    }
+                ]
+
+        elif trans_type == TransactionType.SALES_RETURN and rev_acc:
+            credit_acc = piutang_acc if (payment_method and payment_method.lower() in ["hutang", "tempo", "kredit"] and piutang_acc) else kas_acc
+            if credit_acc:
+                return [
+                    {
+                        "account_id": rev_acc.id,
+                        "account": {"id": rev_acc.id, "code": rev_acc.code, "name": rev_acc.name},
+                        "debit": amount, "credit": Decimal('0.00')
+                    },
+                    {
+                        "account_id": credit_acc.id,
+                        "account": {"id": credit_acc.id, "code": credit_acc.code, "name": credit_acc.name},
+                        "debit": Decimal('0.00'), "credit": amount
+                    }
+                ]
 
     return []
 
@@ -285,6 +532,56 @@ def _generate_reference_no(db: Session, trans_type: TransactionType, tenant_id: 
             
     return f"{prefix}-{year}-{next_seq:04d}"
 
+def _normalize_and_validate_transaction_date(tx_date):
+    """
+    Validate transaction date:
+    - If in the future, fallback to today.
+    - If in a different month, raise error.
+    Returns the corrected/validated date.
+    """
+    from datetime import datetime, date
+    from fastapi import HTTPException, status
+    
+    if isinstance(tx_date, datetime):
+        tx_date = tx_date.date()
+        
+    today = datetime.now().date()
+    
+    # 1. Fallback future date to today
+    if tx_date > today:
+        return today
+        
+    # 2. Check if tx_date is in the active/current month
+    if tx_date.year == today.year and tx_date.month == today.month:
+        return tx_date
+
+    # 3. Grace period: Allow backdating if today is <= 5th of the month
+    if today.day <= 5:
+        from datetime import timedelta
+        
+        # Calculate 5 workdays backward from the 1st of the current month
+        first_of_month = today.replace(day=1)
+        current = first_of_month
+        workdays_subtracted = 0
+        
+        while workdays_subtracted < 5:
+            current -= timedelta(days=1)
+            # weekday() < 5 means Monday to Friday (0 = Mon, 4 = Fri)
+            if current.weekday() < 5:
+                workdays_subtracted += 1
+                
+        # If tx_date is >= the calculated limit, it's valid (it falls in the allowed previous month period)
+        if tx_date >= current:
+            return tx_date
+
+    # If all checks fail, raise HTTP 400
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Tanggal transaksi ({tx_date}) harus berada pada bulan aktif ({today.strftime('%B %Y')}) atau maksimal mundur 5 hari kerja dari awal bulan jika masih di bawah tanggal 5."
+    )
+    
+    return tx_date
+
 def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, user_id: int | None = None, tenant_id: int | None = None) -> Transaction:
     """
     Core business logic: Creates a transaction header and its double-entry journal lines.
@@ -296,6 +593,9 @@ def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, us
     
     if not t_id:
         raise HTTPException(status_code=400, detail="Tenant context missing")
+        
+    # Validate and normalize transaction_date
+    trans_in.transaction_date = _normalize_and_validate_transaction_date(trans_in.transaction_date)
     
     # 1. Calculate and validate Debits vs Credits from input
     total_debit = sum(entry.debit for entry in trans_in.entries)
@@ -311,6 +611,22 @@ def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, us
     # In Multi-Pair journals (like Sales Perpetual), total_debit (Sales + COGS) 
     # will naturally be larger than the transaction's base total_amount.
     # As long as Debit == Credit, the accounting equation holds.
+
+    # 1.5 Duplicate Transaction Check Guard
+    if not getattr(trans_in, "allow_duplicate", False):
+        existing_tx = db.query(Transaction).filter(
+            Transaction.tenant_id == t_id,
+            Transaction.transaction_date == trans_in.transaction_date,
+            Transaction.transaction_type == trans_in.transaction_type,
+            Transaction.total_amount == trans_in.total_amount,
+            Transaction.description == trans_in.description,
+            Transaction.status == TransactionStatus.POSTED
+        ).first()
+        if existing_tx:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"DUPLICATE_TRANSACTION_DETECTED: Transaksi serupa (Ref: {existing_tx.reference_no}, Tanggal: {existing_tx.transaction_date}, Total: Rp {existing_tx.total_amount:,.0f}) sudah pernah dicatat."
+            )
 
     # 2. Create Transaction Header
     ref_no = trans_in.reference_no or _generate_reference_no(db, trans_in.transaction_type, t_id)
@@ -367,6 +683,24 @@ def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, us
     # 3b. Smart Master Data Extraction & Automatic HPP Calculation
     from app.models.inventory import Product, InventoryLog, Contact
     import uuid
+
+    if trans_in.items:
+        # Filter item dummy ringkasan (tanpa rincian produk ritel spesifik)
+        summary_kws = ["pendapatan", "penjualan", "omzet", "omset", "rekap", "hasil toko", "penerimaan", "total penjualan", "kasir"]
+        valid_items = []
+        for item in trans_in.items:
+            it_name_low = (item.name or "").lower().strip()
+            desc_low = (trans_in.description or "").lower().strip()
+            
+            is_dummy_summary = (
+                it_name_low == desc_low
+                or (len(it_name_low) > 30 and ("penjualan" in it_name_low or "pendapatan" in it_name_low))
+                or (any(kw in it_name_low for kw in summary_kws) and not any(u in it_name_low for u in ["kg", "pcs", "@", "liter", "btl", "ctn", "pack", "rtg", "dus", "sak", "gram", "gr"]))
+            )
+            if not is_dummy_summary:
+                valid_items.append(item)
+                
+        trans_in.items = valid_items
 
     if trans_in.items:
         from app.models.setting import AppSetting
@@ -456,7 +790,7 @@ def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, us
                 if not contact:
                     contact = Contact(
                         tenant_id=tenant_id,
-                        name=item.contact_name,
+                        name=item.contact_name[:100].strip(),
                         contact_type=contact_type,
                         address=item.contact_address
                     )
@@ -466,16 +800,46 @@ def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, us
 
             # 2. Resolve Product
             product = db.query(Product).filter(
-                Product.name.ilike(item.name)
+                Product.name.ilike(item.name[:100].strip())
             ).first()
+            
             if not product:
+                # 2.1 Coba cari lewat MCP Server (Item-Level RAG)
+                from app.services.mcp_client import mcp_client
+                try:
+                    rag_res = mcp_client.search_item_alias_sync(item.name, tenant_id)
+                    if rag_res.get("success") and rag_res.get("resolved_name"):
+                        resolved_name = rag_res.get("resolved_name")
+                        # Cari ulang dengan nama yang disarankan MCP
+                        product = db.query(Product).filter(
+                            Product.name.ilike(resolved_name[:100].strip())
+                        ).first()
+                except Exception as e:
+                    print(f"[RAG] MCP Item Alias search failed: {e}")
+
+            if not product:
+                clean_product_name = item.name[:100].strip() if item.name else "Produk Non-Nama"
                 product = Product(
                     sku=str(uuid.uuid4())[:8].upper(),
-                    name=item.name,
+                    name=clean_product_name,
                     base_unit=item.unit or "pcs"
                 )
                 db.add(product)
                 db.flush()
+
+            # 2.2 Trigger Ingestion (Auto-Learning) jika nama dikoreksi dari OCR / editan pengguna
+            raw_ocr = getattr(item, "ocr_name", None) or getattr(item, "name", None)
+            if raw_ocr and raw_ocr.strip() != "" and raw_ocr.strip().lower() != product.name.strip().lower():
+                from app.services.mcp_client import mcp_client
+                try:
+                    mcp_client.ingest_item_alias_sync(
+                        raw_name=raw_ocr.strip(),
+                        resolved_name=product.name.strip(),
+                        tenant_id=tenant_id
+                    )
+                    logger.info(f"[RAG Auto-Ingest] Learned Alias: '{raw_ocr.strip()}' -> '{product.name.strip()}'")
+                except Exception as e:
+                    logger.error(f"[RAG] MCP Item Ingest failed: {e}")
 
             # 3. Update Stock and Create Inventory Log
             # Purchase/Op OR Sales Return -> Stock IN
@@ -503,16 +867,22 @@ def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, us
                         current_hpp = PricingEngine.get_current_hpp(db, tenant_id, product.id)
                         total_cost_for_hpp -= (Decimal(str(item.qty)) * current_hpp)
                 else:
-                    # Stock OUT logic
-                    InventoryService.update_stock_after_transaction(db, tenant_id, product.id, item.qty, "out")
+                    # Stock OUT logic & HPP Calculation (Bypass jika transaksi adalah DP / Customer Deposit karena barang belum diserahkan)
+                    is_dp_payment = (
+                        (trans_in.payment_method and trans_in.payment_method.lower() in ["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
+                        or any(kw in (trans_in.description or "").lower() for kw in ["dp ", "uang muka", "down payment", "panjar"])
+                    )
                     
-                    # HPP Calculation for Sales/Income
-                    if trans_in.transaction_type.value in ["income", "sales"]:
-                        current_hpp = PricingEngine.get_current_hpp(db, tenant_id, product.id)
-                        # FALLBACK: If current_hpp is 0, estimate it from item.unit_price * cogs_rate
-                        if current_hpp == 0:
-                            current_hpp = (Decimal(str(item.unit_price)) * cogs_rate).quantize(Decimal('0.00'))
-                        total_cost_for_hpp += (Decimal(str(item.qty)) * current_hpp)
+                    if not is_dp_payment:
+                        InventoryService.update_stock_after_transaction(db, tenant_id, product.id, item.qty, "out")
+                        
+                        # HPP Calculation for Sales/Income
+                        if trans_in.transaction_type.value in ["income", "sales"]:
+                            current_hpp = PricingEngine.get_current_hpp(db, tenant_id, product.id)
+                            # FALLBACK: If current_hpp is 0, estimate it from item.unit_price * cogs_rate
+                            if current_hpp == 0:
+                                current_hpp = (Decimal(str(item.unit_price)) * cogs_rate).quantize(Decimal('0.00'))
+                            total_cost_for_hpp += (Decimal(str(item.qty)) * current_hpp)
 
                 # Common logic for both IN and OUT
                 log = InventoryLog(
@@ -592,6 +962,7 @@ def update_transaction_draft(db: Session, transaction_id: int, trans_update: any
     if trans_update.description is not None:
         db_transaction.description = trans_update.description
     if trans_update.transaction_date is not None:
+        trans_update.transaction_date = _normalize_and_validate_transaction_date(trans_update.transaction_date)
         db_transaction.transaction_date = trans_update.transaction_date
     if trans_update.status is not None:
         db_transaction.status = trans_update.status
@@ -774,70 +1145,120 @@ def delete_transaction_draft(db: Session, transaction_id: int, tenant_id: int) -
     db.commit()
     return True
 
-def get_dashboard_summary(db: Session, tenant_id: int | None = None) -> dict:
+def get_dashboard_summary(db: Session, tenant_id: int | None = None, days: int = 30) -> dict:
     """
     Calculates dashboard statistics for the given tenant.
-    Includes both DRAFT and POSTED transactions for immediate 'Live' feedback.
-    Now supports Implicit Global Context.
+    Includes YTD and MTD calculations for Revenue, Expense, and Inventory Asset.
+    Supports dynamic chart_data period (days parameter).
     """
-    from sqlalchemy import func
+    from sqlalchemy import func, or_
     from app.models.accounting import TransactionType, TransactionStatus, JournalEntry, Account
     from decimal import Decimal
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, date
 
     t_id = tenant_id or context.get_tenant_context()
+    today = datetime.now().date()
+    start_of_year = date(today.year, 1, 1)
+    start_of_month = date(today.year, today.month, 1)
+    end_of_last_month = start_of_month - timedelta(days=1)
+    start_of_last_month = date(end_of_last_month.year, end_of_last_month.month, 1)
 
-    # Total Revenue (Income + Sales)
     revenue_types = [TransactionType.INCOME, TransactionType.SALES]
-    total_revenue = db.query(func.sum(Transaction.total_amount)).filter(
+    expense_types = [TransactionType.PURCHASE, TransactionType.OPERATIONAL, TransactionType.EXPENSE]
+
+    # Total Revenue YTD (Year To Date)
+    total_revenue_ytd = db.query(func.sum(Transaction.total_amount)).filter(
         Transaction.tenant_id == t_id,
-        Transaction.transaction_type.in_(revenue_types)
-        # Removed status check for real-time "live" feeling
+        Transaction.transaction_type.in_(revenue_types),
+        Transaction.transaction_date >= start_of_year
     ).scalar() or Decimal('0.00')
 
-    # Total Expense (Purchase + Operational + Expense)
-    expense_types = [TransactionType.PURCHASE, TransactionType.OPERATIONAL, TransactionType.EXPENSE]
+    # Total Revenue MTD (This Month)
+    total_revenue = db.query(func.sum(Transaction.total_amount)).filter(
+        Transaction.tenant_id == t_id,
+        Transaction.transaction_type.in_(revenue_types),
+        Transaction.transaction_date >= start_of_month
+    ).scalar() or Decimal('0.00')
+
+    # Total Revenue Last Month
+    total_revenue_last_month = db.query(func.sum(Transaction.total_amount)).filter(
+        Transaction.tenant_id == t_id,
+        Transaction.transaction_type.in_(revenue_types),
+        Transaction.transaction_date >= start_of_last_month,
+        Transaction.transaction_date <= end_of_last_month
+    ).scalar() or Decimal('0.00')
+
+    # Total Expense YTD
+    total_expense_ytd = db.query(func.sum(Transaction.total_amount)).filter(
+        Transaction.tenant_id == t_id,
+        Transaction.transaction_type.in_(expense_types),
+        Transaction.transaction_date >= start_of_year
+    ).scalar() or Decimal('0.00')
+
+    # Total Expense MTD (This Month)
     total_expense = db.query(func.sum(Transaction.total_amount)).filter(
         Transaction.tenant_id == t_id,
-        Transaction.transaction_type.in_(expense_types)
+        Transaction.transaction_type.in_(expense_types),
+        Transaction.transaction_date >= start_of_month
+    ).scalar() or Decimal('0.00')
+
+    # Total Expense Last Month
+    total_expense_last_month = db.query(func.sum(Transaction.total_amount)).filter(
+        Transaction.tenant_id == t_id,
+        Transaction.transaction_type.in_(expense_types),
+        Transaction.transaction_date >= start_of_last_month,
+        Transaction.transaction_date <= end_of_last_month
     ).scalar() or Decimal('0.00')
 
     net_profit = total_revenue - total_expense
 
-    # Actual Cash Balance (Sum of all journal entries for Cash/Bank accounts: 1-11xx)
-    cash_balance = db.query(func.sum(JournalEntry.debit - JournalEntry.credit)).join(
+    # Actual Cash & Bank Balances (Sum of all journal entries for Cash/Bank accounts: 1-11xx or 1-10xx)
+    cash_bank_entries = db.query(
+        Account.code,
+        Account.name,
+        func.sum(JournalEntry.debit - JournalEntry.credit).label("balance")
+    ).join(
         Account, Account.id == JournalEntry.account_id
     ).join(
         Transaction, Transaction.id == JournalEntry.transaction_id
     ).filter(
         Transaction.tenant_id == t_id,
         Transaction.status == TransactionStatus.POSTED,
-        Account.code.startswith("1-11")
-    ).scalar() or Decimal('0.00')
+        or_(Account.code.startswith("1-11"), Account.code.startswith("1-10"))
+    ).group_by(Account.id, Account.code, Account.name).all()
+
+    total_cash = Decimal('0.00')
+    total_bank = Decimal('0.00')
+
+    for code, name, bal_val in cash_bank_entries:
+        bal = bal_val or Decimal('0.00')
+        name_lower = (name or "").lower()
+        if "bank" in name_lower or code.startswith("1-1102"):
+            total_bank += bal
+        else:
+            total_cash += bal
+
+    cash_balance = total_cash + total_bank
 
     recent_transactions = db.query(Transaction).filter(
         Transaction.tenant_id == t_id
     ).order_by(Transaction.id.desc()).limit(5).all()
 
-    # Chart Data: Last 7 Days comparison
-    # Use the date of the most recent transaction as the end date, or today if no transactions exist
-    latest_tx = db.query(func.max(Transaction.transaction_date)).filter(Transaction.tenant_id == t_id).scalar()
-    end_date = latest_tx if latest_tx else datetime.now().date()
-    
+    # Chart Data: Dynamic timeframe based on days parameter (default 30, supports 7, 30, 60, 90)
     chart_data = []
-    for i in range(6, -1, -1):
-        day = end_date - timedelta(days=i)
+    num_days = max(1, min(days, 365))
+    for i in range(num_days - 1, -1, -1):
+        day = today - timedelta(days=i)
         
-        # Gunakan func.date untuk memastikan perbandingan hanya tanggal
         day_rev = db.query(func.sum(Transaction.total_amount)).filter(
             Transaction.tenant_id == t_id,
-            func.date(Transaction.transaction_date) == day,
+            Transaction.transaction_date == day,
             Transaction.transaction_type.in_(revenue_types)
         ).scalar() or Decimal('0.00')
         
         day_exp = db.query(func.sum(Transaction.total_amount)).filter(
             Transaction.tenant_id == t_id,
-            func.date(Transaction.transaction_date) == day,
+            Transaction.transaction_date == day,
             Transaction.transaction_type.in_(expense_types)
         ).scalar() or Decimal('0.00')
         
@@ -846,34 +1267,57 @@ def get_dashboard_summary(db: Session, tenant_id: int | None = None) -> dict:
             "revenue": float(day_rev),
             "expense": float(day_exp)
         })
-    # Fetch Upcoming Debts (H-7 to any future date)
-    # Get debts that are due, sorted by nearest date (filter to Purchases on credit/tempo)
-    from sqlalchemy import or_
+
+    # Fetch Upcoming Debts & Bills (Hutang Pembelian Supplier + DP Customer Penjualan)
+    from sqlalchemy import or_, and_
     upcoming_debts = db.query(Transaction).filter(
         Transaction.tenant_id == t_id,
-        Transaction.transaction_type == TransactionType.PURCHASE,
         or_(
-            Transaction.payment_method != "lunas",
-            Transaction.payment_method.is_(None)
-        ),
-        or_(
-            Transaction.due_date.isnot(None),
-            Transaction.payment_method.in_(["tempo", "credit", "invoice", "utang", "hutang"])
+            and_(
+                Transaction.transaction_type == TransactionType.PURCHASE,
+                or_(
+                    Transaction.payment_method != "lunas",
+                    Transaction.payment_method.is_(None)
+                ),
+                or_(
+                    Transaction.due_date.isnot(None),
+                    Transaction.payment_method.in_(["tempo", "credit", "invoice", "utang", "hutang"])
+                )
+            ),
+            and_(
+                Transaction.transaction_type == TransactionType.SALES,
+                Transaction.payment_method.in_(["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
+            )
         )
-    ).order_by(Transaction.due_date.asc().nullslast(), Transaction.id.desc()).limit(10).all()
+    ).order_by(Transaction.due_date.asc().nullslast(), Transaction.id.desc()).limit(15).all()
 
-    # ── 1. Calculate Inventory Aset (Total Pembelian - Total Penjualan) ──
-    purchase_val = db.query(func.sum(Transaction.total_amount)).filter(
+    # ── Calculate Inventory Asset ──
+    # Total Pembelian - Total Penjualan
+    purchase_val_ytd = db.query(func.sum(Transaction.total_amount)).filter(
         Transaction.tenant_id == t_id,
         Transaction.transaction_type == TransactionType.PURCHASE
     ).scalar() or Decimal('0.00')
     
-    sales_val = db.query(func.sum(Transaction.total_amount)).filter(
+    sales_val_ytd = db.query(func.sum(Transaction.total_amount)).filter(
         Transaction.tenant_id == t_id,
         Transaction.transaction_type == TransactionType.SALES
     ).scalar() or Decimal('0.00')
     
-    total_inventory_value = purchase_val - sales_val
+    total_inventory_value_ytd = purchase_val_ytd - sales_val_ytd
+
+    purchase_val_mtd = db.query(func.sum(Transaction.total_amount)).filter(
+        Transaction.tenant_id == t_id,
+        Transaction.transaction_type == TransactionType.PURCHASE,
+        Transaction.transaction_date >= start_of_month
+    ).scalar() or Decimal('0.00')
+
+    sales_val_mtd = db.query(func.sum(Transaction.total_amount)).filter(
+        Transaction.tenant_id == t_id,
+        Transaction.transaction_type == TransactionType.SALES,
+        Transaction.transaction_date >= start_of_month
+    ).scalar() or Decimal('0.00')
+
+    total_inventory_value = purchase_val_mtd - sales_val_mtd
 
     # Calculate low stock count for info
     from app.models.setting import AppSetting
@@ -908,7 +1352,7 @@ def get_dashboard_summary(db: Session, tenant_id: int | None = None) -> dict:
         if qty < 10:
             low_stock_count += 1
 
-    # ── 2. Top 5 Purchased Products (by purchase total amount: quantity * price_per_unit) ──
+    # ── Top 5 Purchased Products ──
     top_products = db.query(
         Product.name,
         func.sum(InventoryLog.quantity * InventoryLog.price_per_unit).label("total_amount")
@@ -919,7 +1363,7 @@ def get_dashboard_summary(db: Session, tenant_id: int | None = None) -> dict:
     
     top_products_list = [{"name": name, "qty": float(amount)} for name, amount in top_products]
 
-    # ── 3. Purchase Distribution per Supplier (jml uang per supplier) ──
+    # ── Purchase Distribution per Supplier ──
     from app.models.inventory import Contact
     purchase_by_supplier = db.query(
         Contact.name,
@@ -933,13 +1377,20 @@ def get_dashboard_summary(db: Session, tenant_id: int | None = None) -> dict:
 
     return {
         "total_revenue": float(total_revenue),
+        "total_revenue_ytd": float(total_revenue_ytd),
+        "total_revenue_last_month": float(total_revenue_last_month),
         "total_expense": float(total_expense),
+        "total_expense_ytd": float(total_expense_ytd),
+        "total_expense_last_month": float(total_expense_last_month),
         "net_profit": float(net_profit),
         "cash_balance": float(cash_balance),
+        "total_cash": float(total_cash),
+        "total_bank": float(total_bank),
         "recent_transactions": recent_transactions,
         "chart_data": chart_data,
         "upcoming_debts": upcoming_debts,
         "total_inventory_value": float(total_inventory_value),
+        "total_inventory_value_ytd": float(total_inventory_value_ytd),
         "low_stock_count": low_stock_count,
         "top_products": top_products_list,
         "supplier_purchases": supplier_purchases

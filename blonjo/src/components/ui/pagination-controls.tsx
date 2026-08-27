@@ -2,6 +2,7 @@ import React from 'react';
 import { Button } from './button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './select';
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 interface PaginationControlsProps {
   totalItems: number;
@@ -19,11 +20,12 @@ export function PaginationControls({
   onRowsPerPageChange
 }: PaginationControlsProps) {
   const totalPages = Math.ceil(totalItems / rowsPerPage) || 1;
+  const { t } = useTranslation();
 
   return (
     <div className="flex items-center justify-between px-2 py-4 border-t border-border/50">
       <div className="flex items-center space-x-2">
-        <p className="text-sm text-muted-foreground hidden sm:block">Baris per halaman</p>
+        <p className="text-sm text-muted-foreground">{t('show_rows')}</p>
         <Select
           value={rowsPerPage.toString()}
           onValueChange={(value) => {
@@ -44,8 +46,8 @@ export function PaginationControls({
         </Select>
       </div>
       <div className="flex items-center space-x-4">
-        <div className="flex w-[100px] items-center justify-center text-sm font-medium">
-          Hal {currentPage} / {totalPages}
+        <div className="flex w-[120px] items-center justify-center text-sm font-medium">
+          {t('page_info', { current: currentPage, total: totalPages })}
         </div>
         <div className="flex items-center space-x-2">
           <Button

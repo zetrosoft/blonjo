@@ -250,7 +250,7 @@ export default function ChartOfAccounts() {
                   paginatedItems.map((acc) => (
                     <TableRow key={acc.id} className="border-border/50">
                       <TableCell className="font-semibold text-primary">{acc.code}</TableCell>
-                      <TableCell className="font-medium">{acc.name}</TableCell>
+                      <TableCell className="font-medium">{t(acc.name)}</TableCell>
                       <TableCell>{getAccountTypeBadge(acc.account_type)}</TableCell>
                       <TableCell className="text-center">
                         {acc.is_active ? (

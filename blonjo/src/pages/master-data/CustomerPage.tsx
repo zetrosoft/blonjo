@@ -121,6 +121,10 @@ export default function CustomerPage() {
     loadCustomers();
   }, []);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
+
   const handleAdd = () => {
     setEditingCustomer(null);
     setFormData({

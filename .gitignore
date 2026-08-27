@@ -36,3 +36,9 @@ sajen/uv.lock
 GEMINI.md
 blonjo/.pnpm-store/
 #docs/ARCHITECTURE.md
+
+# Model files (terlalu besar untuk Git, download via script)
+sajen/app/resources/models/*.onnx
+sajen/app/resources/models/tokenizer.json
+sajen/sql_app.db
+test_keys.py

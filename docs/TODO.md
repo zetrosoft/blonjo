@@ -277,6 +277,17 @@ baris 507-560) dan sudah mengembalikan pricing matrix lengkap. Task MCP hanya wr
 
 ---
 
+### ⏳ FASE PENDING — Deteksi Ambigu & Dialog Konfirmasi Semantik AI (BELUM DIEKSEKUSI)
+
+> **Dokumen Rancangan:** [`docs/plan_ai_ambiguity_detection_dialog.md`](file:///Users/user/kerjaan/jualan/docs/plan_ai_ambiguity_detection_dialog.md)  
+> **Status:** 📌 **DRAFT / SIMPAN (MENUNGGU PERSETUJUAN/INSTRUKSI EKSEKUSI)**
+
+- [ ] Update `smart_parser.py` & System Prompt untuk mengeluarkan schema `is_ambiguous` + `options` jika kalimat ambigu.
+- [ ] Buat komponen `AmbiguityResolutionModal.tsx` di frontend `blonjo` (Pop-up dialog + Autocomplete dropdown).
+- [ ] Integrasikan `AmbiguityResolutionModal` dengan handler tombol Parse pada `TxNoteCard.tsx`.
+
+---
+
 ## ✅ Checklist Keamanan (Wajib Sebelum Setiap Fase)
 
 - [ ] Baca seluruh file yang akan dimodifikasi terlebih dahulu

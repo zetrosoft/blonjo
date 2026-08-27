@@ -6,6 +6,7 @@ import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { useTheme } from '../theme-provider';
 import { useAuthStore } from '../../store/auth';
+import { fetchClient } from '../../api/client';
 
 interface NavSubItem {
   label: string;
@@ -34,6 +35,21 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
   const { theme } = useTheme();
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
   const [expandedMenus, setExpandedMenus] = useState<Record<string, boolean>>({});
+  const [maintenanceStock, setMaintenanceStock] = useState<boolean>(true);
+
+  useEffect(() => {
+    const loadMaintenanceSetting = async () => {
+      try {
+        const res = await fetchClient('/finance/compass/summary');
+        if (res && typeof res.maintenance_stock === 'boolean') {
+          setMaintenanceStock(res.maintenance_stock);
+        }
+      } catch (err) {
+        console.error('Failed to load maintenance_stock in sidebar', err);
+      }
+    };
+    loadMaintenanceSetting();
+  }, []);
 
   // Dynamic Settings sub-items based on user superuser permission
   const settingsSubItems = [
@@ -65,16 +81,21 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       icon: Boxes,
       label: 'menu_material_control',
       path: '/material-control',
-      subItems: [
-        { label: 'menu_inventory_control', path: '/material-control/inventory', icon: Package },
-        { label: 'menu_purchasing_history', path: '/material-control/purchases', icon: History },
-        { label: 'menu_stock_level', path: '/material-control/stock-level', icon: TrendingUp },
-        { label: 'menu_recommended_purchase', path: '/material-control/recommended', icon: ShoppingCart },
-        { label: 'menu_purchase_plan_form', path: '/material-control/purchase-plan', icon: FileText },
-        { label: 'menu_budgeting', path: '/material-control/budgeting', icon: DollarSign },
-        { label: 'menu_waste', path: '/material-control/waste', icon: AlertTriangle },
-        { label: 'menu_projection_accuracy', path: '/material-control/projection-accuracy', icon: BarChart2 }
-      ]
+      subItems: (function() {
+        const items = [];
+        if (maintenanceStock) {
+          items.push({ label: 'menu_inventory_control', path: '/material-control/inventory', icon: Package });
+        }
+        items.push(
+          { label: 'menu_purchasing_history', path: '/material-control/purchases', icon: History },
+          { label: 'menu_recommended_purchase', path: '/material-control/recommended', icon: ShoppingCart },
+          { label: 'menu_purchase_plan_form', path: '/material-control/purchase-plan', icon: FileText },
+          { label: 'menu_budgeting', path: '/material-control/budgeting', icon: DollarSign },
+          { label: 'menu_waste', path: '/material-control/waste', icon: AlertTriangle },
+          { label: 'menu_projection_accuracy', path: '/material-control/projection-accuracy', icon: BarChart2 }
+        );
+        return items;
+      })()
     },
     {
       icon: PieChart,
@@ -82,12 +103,15 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       path: '/reports',
       subItems: [
         { label: 'menu_journal_list', path: '/reports/journals', icon: Receipt },
+        { label: 'menu_general_ledger', path: '/reports/general-ledger', icon: BookOpen },
         { label: 'menu_profit_loss', path: '/reports/profit-loss', icon: TrendingUp },
         { label: 'menu_balance_sheet', path: '/reports/balance-sheet', icon: Scale },
         { label: 'menu_equity_changes', path: '/reports/equity-changes', icon: Landmark },
-        { label: 'menu_cash_flow', path: '/reports/cash-flow', icon: Wallet }
+        { label: 'menu_cash_flow', path: '/reports/cash-flow', icon: Wallet },
+        { label: 'menu_trial_balance', path: '/reports/trial-balance', icon: FileText }
       ]
     },
+
     {
       icon: TrendingUp,
       label: 'menu_insights',
@@ -110,6 +134,7 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       path: '/master-data',
       subItems: [
         { label: 'menu_item', path: '/master-data/item', icon: Package },
+        { label: 'menu_category', path: '/master-data/category', icon: Tag },
         { label: 'menu_supplier', path: '/master-data/supplier', icon: Users },
         { label: 'menu_customer', path: '/master-data/customer', icon: User },
         { label: 'menu_uom', path: '/master-data/uom', icon: Ruler },

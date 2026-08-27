@@ -32,18 +32,39 @@ export function useSmartConfirm(
   const buildDefaultEntries = useCallback((
     txType: string,
     amount: number,
+    paymentMethod?: string,
+    description?: string,
   ): JournalEntry[] => {
+    const isTempo = paymentMethod && ['tempo', 'hutang', 'utang', 'kredit'].some(kw => paymentMethod.toLowerCase().includes(kw));
+    const descLower = (description || '').toLowerCase();
+    const isCapitalWithdrawal = txType === 'capital' && ['tarik', 'pengembalian', 'penarikan', 'prive', 'withdraw', 'ambil'].some(kw => descLower.includes(kw));
+    
+    // Default credit for purchase is cash/bank, but if tempo it's hutang
+    const purchaseCredit = isTempo ? ['hutang', 'utang'] : ['kas', 'bank'];
+    // Default debit for sales is cash/bank, but if tempo it's piutang
+    const salesDebit = isTempo ? ['piutang'] : ['kas', 'bank'];
+
+    const capitalDebit = isCapitalWithdrawal ? ['modal pemilik', 'modal'] : ['kas', 'bank'];
+    const capitalCredit = isCapitalWithdrawal ? ['kas', 'bank'] : ['modal'];
+
     const keyMap: Record<string, [string[], string[]]> = {
-      purchase:   [['persediaan', 'beli', 'biaya'], ['kas', 'bank']],
+      purchase:   [['persediaan', 'beli', 'biaya'], purchaseCredit],
       income:     [['kas', 'bank'],                  ['pendapatan', 'jual']],
       operational:[['beban', 'biaya', 'operasional'], ['kas', 'bank']],
       capital:    [['kas', 'bank'],                  ['modal']],
+      capital_withdrawal: [['modal', 'prive'],         ['kas', 'bank']],
+      capital_reclassification: [['modal'],            ['titipan', 'simpanan', 'hutang']],
+      customer_deposit:    [['kas', 'bank'],         ['tabungan', 'paket', 'hutang']],
+      customer_withdrawal: [['tabungan', 'paket', 'hutang'], ['kas', 'bank']],
       non_cash_out:[['bank'],                         ['kas']],
       non_cash_in: [['kas'],                          ['bank']],
-      sales:      [['kas', 'bank'],                  ['pendapatan', 'jual']],
+      sales:      [salesDebit,                       ['pendapatan', 'jual']],
+      purchase_return: [['kas', 'bank', 'hutang'],   ['persediaan']],
+      sales_return:    [['pendapatan', 'retur'],     ['kas', 'bank', 'piutang']],
       expense:    [['beban', 'biaya'],               ['kas', 'bank']],
-      cash_count: [['kas', 'utama'],                  ['pendapatan', 'lain', 'beban', 'operasional']],
+      cash_count: [['kas', 'utama'],                 ['pendapatan', 'lain', 'beban', 'operasional']],
     };
+    
     const [debitKws, creditKws] = keyMap[txType] ?? [[], []];
     return [
       { account_id: findAccount(debitKws),  debit: amount, credit: 0 },
@@ -71,7 +92,7 @@ export function useSmartConfirm(
         account: e.account,
       })));
     } else {
-      setEntries(buildDefaultEntries(parsedResult.transaction_type, amount));
+      setEntries(buildDefaultEntries(parsedResult.transaction_type, amount, parsedResult.payment_method, parsedResult.description || parsedResult.raw_text));
     }
 
     setIsOpen(true);
@@ -108,17 +129,18 @@ export function useSmartConfirm(
           description:      parsedResult.description,
           transaction_type: parsedResult.transaction_type,
           total_amount:     parsedResult.total_amount,
-          payment_method:   parsedResult.payment_method,
-          due_date:         parsedResult.due_date,
+          payment_method:   parsedResult.payment_method || null,
+          due_date:         parsedResult.due_date ? parsedResult.due_date : null,
           status,
           entries: entries.map(e => ({
-            account_id: parseInt(e.account_id),
-            debit:  Number(e.debit),
-            credit: Number(e.credit),
+            account_id: parseInt(String(e.account_id), 10),
+            debit:  Number(e.debit || 0),
+            credit: Number(e.credit || 0),
           })),
-          items: parsedResult.items.map(i => ({
+          items: (parsedResult.items || []).map(i => ({
             ...i,
-            contact_name: parsedResult.contact_name,
+            ocr_name: i.ocr_name || i.name,
+            contact_name: parsedResult.contact_name || null,
           })),
         }),
       });
@@ -134,7 +156,7 @@ export function useSmartConfirm(
             total_amount:     parsedResult.total_amount,
             transaction_type: parsedResult.transaction_type,
             items: parsedResult.items.map(i => ({
-              name: i.name, qty: i.qty, price: i.unit_price,
+              name: i.name, ocr_name: i.ocr_name || i.name, qty: i.qty, price: i.unit_price,
               total: i.total, contact_name: parsedResult.contact_name,
             })),
           }),
@@ -147,7 +169,14 @@ export function useSmartConfirm(
       setIsOpen(false);
       onSuccess();
     } catch (error: any) {
-      toast.error('Gagal menyimpan transaksi', { description: error.message });
+      if (error.status === 409 || (error.message && error.message.includes('DUPLICATE_TRANSACTION'))) {
+        toast.warning('⚠️ DUPLIKASI TRANSAKSI', {
+          description: 'Transaksi serupa (Supplier, Tanggal, Nominal) sudah pernah dicatat sebelumnya.',
+          duration: 6000
+        });
+      } else {
+        toast.error('Gagal menyimpan transaksi', { description: error.message });
+      }
     } finally {
       setSaving(false);
     }

@@ -17,8 +17,8 @@ class AccountCreate(AccountBase):
 
 class AccountResponse(AccountBase):
     id: int
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -52,9 +52,14 @@ class TransactionBase(BaseModel):
 
 class ParsedItem(BaseModel):
     name: str
+    ocr_name: Optional[str] = None
     qty: Decimal = Field(default=Decimal('1.00'))
     unit: str = "pcs"
     unit_price: Decimal = Field(default=Decimal('0.00'))
+    discount: Decimal = Field(default=Decimal('0.00'))
+    discount_value: Optional[Decimal] = None
+    is_percent: Optional[bool] = None
+    is_manual_correction: Optional[bool] = None
     total: Decimal = Field(default=Decimal('0.00'))
     contact_name: Optional[str] = None
     contact_address: Optional[str] = None
@@ -63,6 +68,7 @@ class TransactionCreate(TransactionBase):
     entries: List[JournalEntryCreate]
     items: Optional[List[ParsedItem]] = None
     status: TransactionStatus = TransactionStatus.DRAFT # Default to draft
+    allow_duplicate: Optional[bool] = False
 
 class ProductResponseMin(BaseModel):
     id: int
@@ -111,12 +117,19 @@ class TransactionUpdate(BaseModel):
 class DashboardSummaryResponse(BaseModel):
     total_revenue: Decimal
     total_expense: Decimal
+    total_revenue_ytd: Optional[Decimal] = Decimal("0.00")
+    total_expense_ytd: Optional[Decimal] = Decimal("0.00")
+    total_revenue_last_month: Optional[Decimal] = Decimal("0.00")
+    total_expense_last_month: Optional[Decimal] = Decimal("0.00")
     net_profit: Decimal
     cash_balance: Decimal
+    total_cash: Optional[Decimal] = Decimal("0.00")
+    total_bank: Optional[Decimal] = Decimal("0.00")
     recent_transactions: List[TransactionResponse]
     chart_data: List[dict]
     upcoming_debts: List[TransactionResponse]
     total_inventory_value: Decimal
+    total_inventory_value_ytd: Optional[Decimal] = Decimal("0.00")
     low_stock_count: int
     top_products: List[dict]
     supplier_purchases: List[dict]
@@ -217,4 +230,20 @@ class MarketIntelligenceItem(BaseModel):
     copywriting: CopywritingTemplates
 
 
+# --- General Ledger (Buku Besar) Schemas ---
+class GeneralLedgerMutation(BaseModel):
+    transaction_id: int
+    transaction_date: date
+    reference_no: Optional[str] = None
+    description: str
+    debit: Decimal
+    credit: Decimal
+    running_balance: Decimal
 
+class GeneralLedgerResponse(BaseModel):
+    account_id: int
+    account_code: str
+    account_name: str
+    opening_balance: Decimal
+    closing_balance: Decimal
+    mutations: List[GeneralLedgerMutation]

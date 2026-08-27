@@ -18,11 +18,23 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def safe_execute(conn, func, *args, **kwargs):
+    from sqlalchemy import text
+    try:
+        conn.execute(text('SAVEPOINT sp1'))
+        func(*args, **kwargs)
+        conn.execute(text('RELEASE SAVEPOINT sp1'))
+    except Exception as e:
+        conn.execute(text('ROLLBACK TO SAVEPOINT sp1'))
+        print(f"Skipping due to error: {e}")
+
 def upgrade() -> None:
-    op.add_column('contacts', sa.Column('sales_visit_day', sa.String(length=20), nullable=True))
-    op.add_column('contacts', sa.Column('sales_visit_interval', sa.Integer(), nullable=True))
+    conn = op.get_bind()
+    safe_execute(conn, op.add_column, 'contacts', sa.Column('sales_visit_day', sa.String(length=20), nullable=True))
+    safe_execute(conn, op.add_column, 'contacts', sa.Column('sales_visit_interval', sa.Integer(), nullable=True))
 
 
 def downgrade() -> None:
-    op.drop_column('contacts', 'sales_visit_interval')
-    op.drop_column('contacts', 'sales_visit_day')
+    conn = op.get_bind()
+    safe_execute(conn, op.drop_column, 'contacts', 'sales_visit_interval')
+    safe_execute(conn, op.drop_column, 'contacts', 'sales_visit_day')

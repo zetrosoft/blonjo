@@ -13,7 +13,7 @@ export default function MasterDataLayout() {
           {t('menu_master_data')}
         </h1>
         <p className="text-zinc-500 dark:text-zinc-400 mt-1">
-          Kelola data master persediaan, pemasok, pelanggan, dan satuan barang.
+          {t('md_hub_subtitle')}
         </p>
       </div>
 

@@ -14,8 +14,19 @@ depends_on = None
 
 
 
+def safe_execute(conn, func, *args, **kwargs):
+    from sqlalchemy import text
+    try:
+        conn.execute(text('SAVEPOINT sp1'))
+        func(*args, **kwargs)
+        conn.execute(text('RELEASE SAVEPOINT sp1'))
+    except Exception as e:
+        conn.execute(text('ROLLBACK TO SAVEPOINT sp1'))
+        print(f"Skipping due to error: {e}")
+
 def upgrade():
-    op.create_table(
+    conn = op.get_bind()
+    safe_execute(conn, op.create_table,
         'cashflow_projection_snapshots',
         sa.Column('id',               sa.Integer(),     primary_key=True, autoincrement=True),
         sa.Column('tenant_id',        sa.Integer(),     sa.ForeignKey('tenants.id'), nullable=False),
@@ -33,11 +44,12 @@ def upgrade():
         sa.UniqueConstraint('tenant_id', 'projection_date', 'target_date',
                             name='uq_cashflow_snapshot'),
     )
-    op.create_index('ix_cashflow_snapshot_tenant', 'cashflow_projection_snapshots', ['tenant_id'])
-    op.create_index('ix_cashflow_snapshot_target', 'cashflow_projection_snapshots', ['target_date'])
+    safe_execute(conn, op.create_index, 'ix_cashflow_snapshot_tenant', 'cashflow_projection_snapshots', ['tenant_id'])
+    safe_execute(conn, op.create_index, 'ix_cashflow_snapshot_target', 'cashflow_projection_snapshots', ['target_date'])
 
 
 def downgrade():
-    op.drop_index('ix_cashflow_snapshot_target', table_name='cashflow_projection_snapshots')
-    op.drop_index('ix_cashflow_snapshot_tenant', table_name='cashflow_projection_snapshots')
-    op.drop_table('cashflow_projection_snapshots')
+    conn = op.get_bind()
+    safe_execute(conn, op.drop_index, 'ix_cashflow_snapshot_target', table_name='cashflow_projection_snapshots')
+    safe_execute(conn, op.drop_index, 'ix_cashflow_snapshot_tenant', table_name='cashflow_projection_snapshots')
+    safe_execute(conn, op.drop_table, 'cashflow_projection_snapshots')

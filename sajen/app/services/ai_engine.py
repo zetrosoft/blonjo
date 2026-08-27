@@ -9,13 +9,21 @@ from sqlalchemy.orm import Session
 from app.models.log import AIModelQuota
 from datetime import datetime
 
-# UPDATED Priority list — verified June 2026
+# UPDATED Priority list — verified August 2026
 GEMINI_MODELS = [
     {"name": "gemini-2.5-flash", "limit": 500},        # Primary: Fast & reliable
-    {"name": "gemini-2.0-flash", "limit": 1500},       # Fallback: High RPD
-    {"name": "gemini-2.0-flash-lite", "limit": 1500},  # Budget fallback
-    {"name": "gemini-2.5-pro", "limit": 50},           # High reasoning, low quota
+    {"name": "gemini-3.6-flash", "limit": 1500},       # Latest Flash
+    {"name": "gemini-3.5-flash-lite", "limit": 1500},  # Lite fallback
+    {"name": "gemini-3.1-pro-preview", "limit": 50},   # High reasoning
 ]
+
+def _get_google_keys() -> list[str]:
+    keys = [
+        settings.GOOGLE_API_KEY,
+        getattr(settings, 'GOOGLE_API_KEY_FALLBACK', None),
+        getattr(settings, 'GOOGLE_API_KEY_FALLBACK_2', None)
+    ]
+    return [k for k in keys if k]
 
 def _clean_json_output(raw_text: str) -> str:
     """Robust JSON extraction from LLM output, supporting both arrays and objects"""
@@ -50,6 +58,8 @@ def _clean_json_output(raw_text: str) -> str:
 
 def _track_quota(db: Session, model_name: str, tokens: int = 0):
     """Update local usage statistics in DB"""
+    if not db or not hasattr(db, "query"):
+        return
     try:
         today = datetime.now().date()
         quota = db.query(AIModelQuota).filter(
@@ -72,7 +82,8 @@ def _track_quota(db: Session, model_name: str, tokens: int = 0):
         db.commit()
     except Exception as e:
         print(f"Quota tracking error: {e}")
-        db.rollback()
+        if hasattr(db, "rollback"):
+            db.rollback()
 
 # In-memory cache for Ollama offline status to prevent hanging requests when host is offline
 _OLLAMA_OFFLINE_CACHE = {}  # host -> last_checked_timestamp
@@ -227,61 +238,65 @@ def call_ai_text(db: Session, prompt: str, system_instruction: str = None, tempe
         print("All Ollama hosts are offline. Falling back to Gemini...")
 
     # --- Try Gemini (Iterative Switching) ---
-    if settings.GOOGLE_API_KEY:
-        client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-        
+    google_keys = _get_google_keys()
+    if google_keys:
         for model_info in GEMINI_MODELS:
             model_name = model_info["name"]
-            try:
-                print(f"Attempting AI with model: {model_name}...")
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config={
-                        "system_instruction": system_instruction,
-                        "temperature": temperature
-                    }
-                )
-                raw_output = response.text
-                token_in = len(prompt.split())
-                token_out = len(raw_output.split())
-                
-                # Track usage
-                _track_quota(db, model_name, token_in + token_out)
-                
+            
+            for key_idx, api_key in enumerate(google_keys):
+                client = genai.Client(api_key=api_key)
                 try:
-                    clean_json = _clean_json_output(raw_output)
-                    parsed_data = json.loads(clean_json)
+                    print(f"Attempting AI with model: {model_name} (Key {key_idx+1}/{len(google_keys)})...")
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config={
+                            "system_instruction": system_instruction,
+                            "temperature": temperature
+                        }
+                    )
+                    raw_output = response.text
+                    token_in = len(prompt.split())
+                    token_out = len(raw_output.split())
                     
-                    res = {
-                        "parsed_data": parsed_data,
-                        "processor": model_name,
-                        "token_in": token_in,
-                        "token_out": token_out,
-                        "raw_output": raw_output
-                    }
-
-                    # Save to cache if successful
-                    if redis_client:
-                        try:
-                            redis_client.setex(cache_key, 3600 * 24 * 7, json.dumps(res))
-                        except Exception as e_save:
-                            print(f"Redis Cache Error (set): {e_save}")
+                    # Track usage
+                    _track_quota(db, model_name, token_in + token_out)
                     
-                    return res
-                except (json.JSONDecodeError, Exception) as e_json:
-                    print(f"Model {model_name} produced invalid JSON: {e_json}, switching to next...")
-                    continue # Switch to next Gemini model
+                    try:
+                        clean_json = _clean_json_output(raw_output)
+                        parsed_data = json.loads(clean_json)
+                        
+                        res = {
+                            "parsed_data": parsed_data,
+                            "processor": model_name,
+                            "token_in": token_in,
+                            "token_out": token_out,
+                            "raw_output": raw_output
+                        }
 
-            except Exception as e_gemini:
-                err_msg = str(e_gemini).lower()
-                # Switch model if: Quota hit, Model not found, or API Error
-                if any(kw in err_msg for kw in ["429", "quota", "exhausted", "404", "api_key", "internal"]):
-                    print(f"Gemini Model {model_name} failed: {e_gemini}, switching to next...")
-                    continue 
-                else:
-                    print(f"Gemini Critical Error ({model_name}): {e_gemini}")
-                    break # Stop if it's a critical error not related to quota/availability
+                        # Save to cache if successful
+                        if redis_client:
+                            try:
+                                redis_client.setex(cache_key, 3600 * 24 * 7, json.dumps(res))
+                            except Exception as e_save:
+                                print(f"Redis Cache Error (set): {e_save}")
+                        
+                        return res
+                    except (json.JSONDecodeError, Exception) as e_json:
+                        print(f"Model {model_name} produced invalid JSON: {e_json}, switching to next...")
+                        break # Break key loop, try next model
+                        
+                except Exception as e_gemini:
+                    err_msg = str(e_gemini).lower()
+                    if any(kw in err_msg for kw in ["429", "quota", "exhausted"]):
+                        print(f"Gemini {model_name} (Key {key_idx+1}) quota exceeded: {e_gemini}, trying next key...")
+                        continue # Try next key for the same model
+                    elif any(kw in err_msg for kw in ["404", "not_found", "api_key"]):
+                        print(f"Gemini Model {model_name} unavailable on Key {key_idx+1}: {e_gemini}")
+                        continue # Try next key
+                    else:
+                        print(f"Gemini Critical Error ({model_name}): {e_gemini}")
+                        break # Stop trying keys for this model, try next model
 
     return {
         "parsed_data": None,
@@ -317,34 +332,36 @@ def call_ai_freetext(db: Session, prompt: str, system_instruction: str = None, t
             print(f"Ollama freetext failed on {active_host}: {e_ollama}. Falling back to Gemini...")
 
     # --- 2. Try Gemini (Iterative Switching) ---
-    if settings.GOOGLE_API_KEY:
-        client = genai.Client(api_key=settings.GOOGLE_API_KEY)
+    google_keys = _get_google_keys()
+    if google_keys:
         for model_info in GEMINI_MODELS:
             model_name = model_info["name"]
-            try:
-                print(f"Attempting freetext AI with model: {model_name}...")
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config={
-                        "system_instruction": system_instruction,
-                        "temperature": temperature
-                    }
-                )
-                raw_output = response.text.strip() if response.text else ""
-                if raw_output:
-                    token_in = len(prompt.split())
-                    token_out = len(raw_output.split())
-                    _track_quota(db, model_name, token_in + token_out)
-                    return {"raw_output": raw_output, "processor": model_name}
-            except Exception as e_gemini:
-                err_msg = str(e_gemini).lower()
-                if any(kw in err_msg for kw in ["429", "quota", "exhausted", "404", "not_found"]):
-                    print(f"Gemini {model_name} failed (freetext): {e_gemini}, switching to next...")
-                    continue
-                else:
-                    print(f"Gemini Critical Error ({model_name}) freetext: {e_gemini}")
-                    break
+            for key_idx, api_key in enumerate(google_keys):
+                client = genai.Client(api_key=api_key)
+                try:
+                    print(f"Attempting freetext AI with model: {model_name} (Key {key_idx+1}/{len(google_keys)})...")
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config={
+                            "system_instruction": system_instruction,
+                            "temperature": temperature
+                        }
+                    )
+                    raw_output = response.text.strip() if response.text else ""
+                    if raw_output:
+                        token_in = len(prompt.split())
+                        token_out = len(raw_output.split())
+                        _track_quota(db, model_name, token_in + token_out)
+                        return {"raw_output": raw_output, "processor": f"{model_name} (key {key_idx+1})"}
+                except Exception as e_gemini:
+                    err_msg = str(e_gemini).lower()
+                    if any(kw in err_msg for kw in ["429", "quota", "exhausted", "404", "not_found", "api_key"]):
+                        print(f"Gemini {model_name} failed (freetext) on key {key_idx+1}: {e_gemini}, switching...")
+                        continue
+                    else:
+                        print(f"Gemini Critical Error ({model_name}) freetext: {e_gemini}")
+                        break
 
     return {"raw_output": "", "processor": "error"}
 
@@ -405,11 +422,10 @@ def call_ai_vision(db: Session, image_bytes: bytes, mime_type: str, prompt: str,
     """
     Expert OCR Vision caller with switching support.
     """
-    if not settings.GOOGLE_API_KEY:
+    google_keys = _get_google_keys()
+    if not google_keys:
         raise Exception("GOOGLE_API_KEY is required for Vision.")
 
-    client = genai.Client(api_key=settings.GOOGLE_API_KEY)
-    
     expert_instruction = (
         "Anda adalah sistem OCR Vision yang ahli dalam membaca dokumen, nota, dan manifes tulisan tangan dengan standar akurasi tinggi.\n"
         "Tugas Anda adalah mengekstrak seluruh data dari gambar nota yang diberikan secara presisi.\n\n"
@@ -424,33 +440,39 @@ def call_ai_vision(db: Session, image_bytes: bytes, mime_type: str, prompt: str,
 
     for model_info in GEMINI_MODELS:
         model_name = model_info["name"]
-        try:
-            from google.genai import types
-            response = client.models.generate_content(
-                model=model_name,
-                contents=[
-                    types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                    prompt
-                ],
-                config={
-                    "system_instruction": full_instruction,
-                    "temperature": 0.0
+        for key_idx, api_key in enumerate(google_keys):
+            client = genai.Client(api_key=api_key)
+            try:
+                from google.genai import types
+                print(f"Attempting OCR Vision with model: {model_name} (Key {key_idx+1}/{len(google_keys)})...")
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                        prompt
+                    ],
+                    config={
+                        "system_instruction": full_instruction,
+                        "temperature": 0.0
+                    }
+                )
+                
+                raw_text = response.text
+                _track_quota(db, f"{model_name}-vision")
+                
+                return {
+                    "raw_text": raw_text,
+                    "processor": f"{model_name}-vision (key {key_idx+1})",
+                    "token_in": 0,
+                    "token_out": len(raw_text.split())
                 }
-            )
-            
-            raw_text = response.text
-            _track_quota(db, f"{model_name}-vision")
-            
-            return {
-                "raw_text": raw_text,
-                "processor": f"{model_name}-vision",
-                "token_in": 0,
-                "token_out": len(raw_text.split())
-            }
-        except Exception as e:
-            if "429" in str(e) or "quota" in str(e) or "404" in str(e):
-                print(f"Vision Model {model_name} failed: {e}, switching...")
-                continue
-            raise e
+            except Exception as e:
+                err_msg = str(e).lower()
+                if any(kw in err_msg for kw in ["429", "quota", "exhausted", "404", "not_found", "api_key"]):
+                    print(f"Vision Model {model_name} failed on key {key_idx+1}: {e}, switching...")
+                    continue
+                else:
+                    print(f"Vision Critical Error ({model_name}): {e}")
+                    break # Critical error, try next model
     
-    raise Exception("All Vision models exhausted or error occurred.")
+    raise Exception("All Vision models and API keys exhausted or error occurred.")

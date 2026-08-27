@@ -24,6 +24,7 @@ class OCRTask(Base):
     extracted_data = Column(JSON, nullable=True)
     error_message = Column(String, nullable=True)
     corrected_data = Column(JSON, nullable=True)
+    image_hash = Column(String, nullable=True, index=True)
 
     tenant = relationship("Tenant")
     user = relationship("User")
@@ -60,3 +61,20 @@ class CommodityTrend(Base):
     source = Column(String(20), nullable=False, default="internal")  # "internal" or "web"
     price = Column(Numeric(15, 2), nullable=False)
     unit = Column(String(20), nullable=True)
+
+
+class OCRAliasMapping(Base):
+    """
+    Entity-Level Semantic Correction Memory.
+    Menyimpan pasangan kata mentah OCR vs kata hasil validasi pengguna (merchant, product_name, uom).
+    Digunakan untuk auto-normalisasi instan (<5ms) pada pemrosesan OCR masa depan.
+    """
+    __tablename__ = "ocr_alias_mappings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
+    entity_type = Column(String(50), nullable=False, index=True)  # 'merchant', 'product_name', 'uom'
+    raw_pattern = Column(String(255), nullable=False, index=True)
+    corrected_value = Column(String(255), nullable=False)
+    confidence_count = Column(Integer, default=1, nullable=False)
+

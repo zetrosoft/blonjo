@@ -12,6 +12,11 @@ class CategoryBase(BaseModel):
 class CategoryCreate(CategoryBase):
     pass
 
+class CategoryUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
 class CategoryResponse(CategoryBase):
     id: int
     model_config = ConfigDict(from_attributes=True)
@@ -166,3 +171,23 @@ class UomResponse(UomBase):
 class StockAdjustRequest(BaseModel):
     qty: float
     notes: str
+
+# --- Autocomplete Schemas ---
+class AutocompleteRequest(BaseModel):
+    query: str
+    limit: Optional[int] = 50
+
+class AutocompleteItemResponse(BaseModel):
+    id: int
+    sku: str
+    name: str
+    category_id: Optional[int] = None
+    current_stock: Decimal = Field(default=Decimal('0.00'))
+    sell_price: Decimal = Field(default=Decimal('0.00'))
+    score: float
+
+
+# --- Product Merge Request ---
+class ProductMergeRequest(BaseModel):
+    source_sku: str
+    target_sku: str

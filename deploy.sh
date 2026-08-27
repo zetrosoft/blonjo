@@ -64,11 +64,23 @@ ssh $VPS_HOST << EOF
   echo "🚀 Re-starting production containers gracefully..."
   docker compose --env-file .env.production -f $COMPOSE_FILE -p jualan up -d --remove-orphans $SERVICE_TARGETS
 
-  echo "⏳ Waiting for services to be healthy..."
-  sleep 8
+  echo "⏳ Waiting for sajen-api backend container to be fully HEALTHY..."
+  MAX_WAIT=30
+  WAIT_COUNT=0
+  until [ "\$(docker inspect --format='{{json .State.Health.Status}}' sajen_backend_api 2>/dev/null)" == "\"healthy\"" ] || [ \$WAIT_COUNT -ge \$MAX_WAIT ]; do
+    echo "   [Waiting] FastAPI Uvicorn engine starting up... (\${WAIT_COUNT}s)"
+    sleep 2
+    WAIT_COUNT=\$((WAIT_COUNT + 2))
+  done
+
+  if [ \$WAIT_COUNT -ge \$MAX_WAIT ]; then
+    echo "⚠️ Warning: sajen-api container health check timed out after 30s."
+  else
+    echo "✅ sajen-api is fully HEALTHY and ready to serve HTTP requests!"
+  fi
 
   echo "🔄 Running database migrations (Alembic)..."
-  docker compose --env-file .env.production -f $COMPOSE_FILE -p jualan exec -T sajen-api alembic upgrade head
+  docker compose --env-file .env.production -f $COMPOSE_FILE -p jualan exec -T sajen-api alembic upgrade heads
 
   echo "🔍 Verifying container status..."
   docker compose --env-file .env.production -f $COMPOSE_FILE -p jualan ps
@@ -91,5 +103,5 @@ EOF
 
 echo ""
 echo "✅ JUALAN Deployment Complete!"
-echo "   🖥️  Frontend (Blonjo): http://$(ssh $VPS_HOST hostname -I | awk '{print $1}'):7500"
-echo "   🔌  Backend  (Sajen) : http://$(ssh $VPS_HOST hostname -I | awk '{print $1}'):8005"
+echo "   🖥️  Frontend & API (Blonjo Production): https://blonjo.samkarsa.com"
+echo "   🔌  Backend Internal Endpoint : http://localhost:8005"

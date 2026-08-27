@@ -19,6 +19,7 @@ class OCRTaskResponse(BaseModel):
     extracted_data: Optional[Any] = None
     error_message: Optional[str] = None
     corrected_data: Optional[Any] = None
+    is_duplicate: Optional[bool] = False
     created_at: datetime
     updated_at: datetime
 

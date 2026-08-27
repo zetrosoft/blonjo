@@ -8,12 +8,13 @@ from app.models.inventory import PurchasePlan, StockDiscard
 from app.schemas.material_control import (
     PurchasePlanCreate, PurchasePlanResponse,
     StockDiscardCreate, StockDiscardResponse,
-    CashflowProjectionItem, PurchasePlanExecuteRequest
+    CashflowProjectionItem, PurchasePlanExecuteRequest, PurchasePlanUpdate
 )
 from app.services.material_control import (
     get_replenishment_recommendations,
     list_purchase_plans,
     create_purchase_plan,
+    update_purchase_plan,
     approve_purchase_plan,
     delete_purchase_plan,
     record_stock_discard,
@@ -91,6 +92,45 @@ def create_new_purchase_plan(
     plan = create_purchase_plan(db=session, tenant_id=current_user.tenant_id, plan_in=plan_in)
     
     # Map items response
+    items_mapped = []
+    for it in plan.items:
+        items_mapped.append({
+            "id": it.id,
+            "purchase_plan_id": it.purchase_plan_id,
+            "product_id": it.product_id,
+            "custom_product_name": it.custom_product_name,
+            "product_name": it.product.name if it.product else it.custom_product_name,
+            "sku": it.product.sku if it.product else "N/A",
+            "supplier_contact_id": it.supplier_contact_id,
+            "supplier_name": it.supplier.name if it.supplier else None,
+            "qty": it.qty,
+            "unit_price": it.unit_price,
+            "subtotal": it.subtotal,
+            "is_purchased": it.is_purchased
+        })
+    return {
+        "id": plan.id,
+        "tenant_id": plan.tenant_id,
+        "status": plan.status,
+        "send_via_wa": plan.send_via_wa,
+        "send_via_email": plan.send_via_email,
+        "total_amount": plan.total_amount,
+        "planned_date": plan.planned_date,
+        "created_at": plan.created_at,
+        "items": items_mapped
+    }
+
+@router.put("/purchase-plans/{plan_id}", response_model=PurchasePlanResponse)
+def update_existing_purchase_plan(
+    plan_id: int,
+    plan_in: PurchasePlanUpdate,
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    plan = update_purchase_plan(db=session, tenant_id=current_user.tenant_id, plan_id=plan_id, plan_in=plan_in)
+    if not plan:
+        raise HTTPException(status_code=404, detail="Purchase plan not found or cannot be edited")
+
     items_mapped = []
     for it in plan.items:
         items_mapped.append({

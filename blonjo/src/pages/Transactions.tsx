@@ -17,7 +17,7 @@
  */
 
 import { PaginationControls } from '@/components/ui/pagination-controls';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ShoppingCart, Table2, Wand2 } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -25,12 +25,14 @@ import { cn } from '../lib/utils';
 import { SmartNoteTab }        from './transaction/SmartNoteTab';
 import { ManualEntryTab }      from './transaction/ManualEntryTab';
 import { ConfirmJournalDialog } from './transaction/ConfirmJournalDialog';
+import { DuplicateWarningDialog } from './transaction/components/DuplicateWarningDialog';
 import type { InputMode }       from './transaction/types';
 
 import {
   useAccounts,
   useSmartNote,
   useOcrUpload,
+  preloadOcrModel,
   useSmartConfirm,
   useManualEntry,
 } from './transaction/hooks';
@@ -39,6 +41,11 @@ export default function Transactions() {
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(10);
 
+  // Background download for local OCR model
+  useEffect(() => {
+    preloadOcrModel();
+  }, []);
+
   const { t } = useTranslation();
   const [inputMode, setInputMode] = useState<InputMode>('smart');
 
@@ -46,7 +53,17 @@ export default function Transactions() {
   const { accounts, loading }  = useAccounts();
   const smartNote              = useSmartNote();
   const ocr                    = useOcrUpload(smartNote.setNoteText, smartNote.mergeAndSet);
-  const smartConfirm           = useSmartConfirm(accounts, smartNote.parsedResult, smartNote.handleReset);
+
+  const handleFullReset = React.useCallback(() => {
+    smartNote.handleReset();
+    ocr.resetOcr();
+    const fileInput = document.getElementById('receipt-upload-input') as HTMLInputElement;
+    if (fileInput) {
+      fileInput.value = '';
+    }
+  }, [smartNote, ocr]);
+
+  const smartConfirm           = useSmartConfirm(accounts, smartNote.parsedResult, handleFullReset);
   const manual                 = useManualEntry();
 
   // ── Render ────────────────────────────────────────────────────────
@@ -99,7 +116,7 @@ export default function Transactions() {
           parsedResult={smartNote.parsedResult}
           onParse={smartNote.handleParse}
           onVoiceTranscript={smartNote.handleVoiceTranscript}
-          onReset={smartNote.handleReset}
+          onReset={handleFullReset}
           onLoadExample={smartNote.handleLoadExample}
           onFileUpload={ocr.handleFileUpload}
           onPhotoCaptured={ocr.uploadFileDirectly}
@@ -107,6 +124,7 @@ export default function Transactions() {
           onOpenConfirm={smartConfirm.open}
           saving={smartConfirm.saving}
           updateParsed={smartNote.updateParsed}
+          ocrSource={ocr.ocrSource}
         />
       )}
 
@@ -143,6 +161,13 @@ export default function Transactions() {
         onUpdateEntry={smartConfirm.updateEntry}
         onExecuteSubmit={(status) => smartConfirm.submit(status, ocr.currentOcrTaskId)}
         saving={smartConfirm.saving}
+      />
+
+      {/* Duplicate Warning Dialog (Popup Modal with Soft Reload) */}
+      <DuplicateWarningDialog
+        isOpen={Boolean((smartNote.parsedResult as any)?.is_duplicate)}
+        onClose={handleFullReset}
+        parsedResult={smartNote.parsedResult}
       />
     </div>
   );

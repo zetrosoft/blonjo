@@ -1,16 +1,34 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { LayoutGrid, Package, History, Store, Plus, ArrowRight, Boxes, FileText, DollarSign, AlertTriangle, BarChart2 } from 'lucide-react';
+import { LayoutGrid, Package, History, Plus, ArrowRight, Boxes, FileText, DollarSign, AlertTriangle, BarChart2 } from 'lucide-react';
+import { fetchClient } from '../../api/client';
 
 export default function MaterialControlHub() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [maintenanceStock, setMaintenanceStock] = useState<boolean>(true);
 
-  const cards = [
-    {
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const res = await fetchClient('/finance/compass/summary');
+        if (res && typeof res.maintenance_stock === 'boolean') {
+          setMaintenanceStock(res.maintenance_stock);
+        }
+      } catch (err) {
+        console.error('Failed to load compass settings in Hub:', err);
+      }
+    };
+    loadSettings();
+  }, []);
+
+  const cards = [];
+
+  if (maintenanceStock) {
+    cards.push({
       title: t('menu_inventory_control'),
       desc: t('mc_hub_inv_desc'),
       btnText: t('mc_hub_inv_btn'),
@@ -18,7 +36,10 @@ export default function MaterialControlHub() {
       path: '/material-control/inventory',
       color: 'text-blue-500',
       bg: 'bg-blue-50 dark:bg-blue-950/30'
-    },
+    });
+  }
+
+  cards.push(
     {
       title: t('menu_purchasing_history'),
       desc: t('mc_hub_purch_desc'),
@@ -27,15 +48,6 @@ export default function MaterialControlHub() {
       path: '/material-control/purchases',
       color: 'text-emerald-500',
       bg: 'bg-emerald-50 dark:bg-emerald-950/30'
-    },
-    {
-      title: t('menu_stock_level'),
-      desc: t('mc_hub_stock_desc'),
-      btnText: t('mc_hub_stock_btn'),
-      icon: Store,
-      path: '/material-control/stock-level',
-      color: 'text-indigo-500',
-      bg: 'bg-indigo-50 dark:bg-indigo-950/30'
     },
     {
       title: t('menu_recommended_purchase'),
@@ -82,7 +94,7 @@ export default function MaterialControlHub() {
       color: 'text-fuchsia-500',
       bg: 'bg-fuchsia-50 dark:bg-fuchsia-950/30'
     }
-  ];
+  );
 
   return (
     <div className="w-full max-w-7xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-16">
@@ -104,7 +116,7 @@ export default function MaterialControlHub() {
         <div className="absolute right-0 bottom-0 w-64 h-64 bg-primary/10 rounded-full filter blur-3xl pointer-events-none" />
       </div>
 
-      {/* Grid 4 Kolom */}
+      {/* Grid Kolom */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {cards.map((card, idx) => (
           <Card 

@@ -15,6 +15,8 @@ def seed_psak_complete():
         {"code": "2-1102", "name": "Hutang Belum Ditagih", "type": AccountType.LIABILITY},
         {"code": "1-1303", "name": "Persediaan Barang Dalam Proses (WIP)", "type": AccountType.ASSET},
         {"code": "1-1202", "name": "Uang Muka Operasional", "type": AccountType.ASSET},
+        {"code": "2-1205", "name": "Uang Muka Pelanggan", "type": AccountType.LIABILITY},
+        {"code": "2-1206", "name": "Simpanan / Titipan Dana Pelanggan", "type": AccountType.LIABILITY},
     ]
     
     for acc in needed_accounts:
@@ -27,6 +29,8 @@ def seed_psak_complete():
                 account_type=acc["type"],
                 is_active=True
             ))
+        else:
+            existing.name = acc["name"]
     db.commit()
 
     # Helper get account
@@ -79,11 +83,40 @@ def seed_psak_complete():
     db.add(JournalMappingLine(mapping_id=m_cash.id, account_id=get_id("1-1101"), side="debit", value_type="total_amount")) 
     db.add(JournalMappingLine(mapping_id=m_cash.id, account_id=get_id("4-2101"), side="credit", value_type="total_amount")) 
 
-    # 2.6 Modal
+    # 2.6 Modal (Setoran & Pengembalian)
     m_cap = JournalMapping(tenant_id=tenant_id, transaction_type=TransactionType.CAPITAL, description="Setoran Modal Pemilik", is_active=True)
     db.add(m_cap); db.flush()
     db.add(JournalMappingLine(mapping_id=m_cap.id, account_id=get_id("1-1101"), side="debit", value_type="total_amount")) 
     db.add(JournalMappingLine(mapping_id=m_cap.id, account_id=get_id("3-1101"), side="credit", value_type="total_amount")) 
+
+    m_cap_w = JournalMapping(tenant_id=tenant_id, transaction_type=TransactionType.CAPITAL_WITHDRAWAL, description="Pengembalian Modal Pemilik", is_active=True)
+    db.add(m_cap_w); db.flush()
+    db.add(JournalMappingLine(mapping_id=m_cap_w.id, account_id=get_id("3-1101"), side="debit", value_type="total_amount"))
+    db.add(JournalMappingLine(mapping_id=m_cap_w.id, account_id=get_id("1-1101"), side="credit", value_type="total_amount"))
+
+    for t_id in [tenant_id, None]:
+        # Helper get account
+        def get_acc_id(code):
+            a = db.query(Account).filter(Account.code == code, or_(Account.tenant_id == t_id, Account.tenant_id == None)).order_by(Account.tenant_id.desc()).first()
+            return a.id if a else None
+
+        for t_type, desc, lines in [
+            (TransactionType.CUSTOMER_DEPOSIT, "Penerimaan Uang Muka / Titipan Pelanggan", [("1-1101", "debit"), ("2-1206", "credit")]),
+            (TransactionType.CUSTOMER_WITHDRAWAL, "Pengembalian Titipan Pelanggan", [("2-1206", "debit"), ("1-1101", "credit")]),
+            (TransactionType.CAPITAL_RECLASSIFICATION, "Koreksi Reklasifikasi Modal Pemilik", [("3-1101", "debit"), ("2-1206", "credit")]),
+        ]:
+            existing_m = db.query(JournalMapping).filter(
+                JournalMapping.tenant_id == t_id,
+                JournalMapping.transaction_type == t_type
+            ).first()
+            if not existing_m:
+                m_obj = JournalMapping(tenant_id=t_id, transaction_type=t_type, description=desc, is_active=True)
+                db.add(m_obj)
+                db.flush()
+                for acc_code, side in lines:
+                    acc_id = get_acc_id(acc_code)
+                    if acc_id:
+                        db.add(JournalMappingLine(mapping_id=m_obj.id, account_id=acc_id, side=side, value_type="total_amount"))
 
     db.commit()
     print("Berhasil memperbarui Mapping Jurnal ke Standar PSAK EMKM (Lengkap).")

@@ -16,15 +16,17 @@ Pipeline:
 """
 
 import re
-from datetime import datetime
+import numpy as np
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional, List
 
 
 class TransactionClass(str, Enum):
-    KAS_GLOBAL = "KAS_GLOBAL"       # Kas, rekonsiliasi, selisih — SKIP pricing rules
-    PRODUCT_SALES = "PRODUCT_SALES" # Jual beli barang — butuh pricing rules
-    UNKNOWN = "UNKNOWN"             # Fallback — bawa context minimal
+    KAS_GLOBAL = "KAS_GLOBAL"           # Kas, rekonsiliasi, selisih — SKIP pricing rules
+    PRODUCT_SALES = "PRODUCT_SALES"     # Jual ke pelanggan — butuh pricing rules
+    PRODUCT_PURCHASE = "PRODUCT_PURCHASE"  # Beli dari supplier/kulakan — SKIP pricing rules
+    UNKNOWN = "UNKNOWN"                 # Fallback — bawa context minimal
 
 
 PATTERNS_KAS_GLOBAL = [
@@ -33,21 +35,136 @@ PATTERNS_KAS_GLOBAL = [
     r'(?i)(pendapatan|pengeluaran)\s+(tambahan|lain[- ]?lain)\s*([\d.,]+)?',
     r'(?i)(setoran|penarikan)\s+(kas|tunai)\s*([\d.,]+)?',
     r'(?i)^(biaya|bayar)\s+\w+[\s\d.,]+$',
-    r'(?i)(modal|gaji|upah|sewa)\s+[\d.,]+',
+    r'(?i)\b(modal|gaji|upah|sewa)\b',
 ]
+
+
+# Cache untuk vektor jangkar (anchor vectors)
+_ANCHOR_VECTORS_CACHE = {}
+
+def _get_anchor_vectors() -> dict:
+    """Mengembalikan dan malas-memuat vektor jangkar untuk klasifikasi semantik."""
+    global _ANCHOR_VECTORS_CACHE
+    if not _ANCHOR_VECTORS_CACHE:
+        try:
+            from app.services.onnx_embed import get_onnx_embedding
+            anchors = {
+                TransactionClass.PRODUCT_PURCHASE: [
+                    "belanja persediaan barang dan kulakan stok dari supplier distributor",
+                    "pembelian bahan baku stok masuk dari suplier",
+                    "tambah stok barang restock dari supplier",
+                    "nota struk pembelian barang dagangan"
+                ],
+                TransactionClass.PRODUCT_SALES: [
+                    "jual produk barang dagangan ke pelanggan customer",
+                    "penjualan toko kasir laku produk ritel harian",
+                    "penerimaan omset penjualan toko dari konsumen",
+                    "nota penjualan barang eceran grosir"
+                ],
+                TransactionClass.KAS_GLOBAL: [
+                    "gaji upah bulanan karyawan staff",
+                    "setoran modal operasional kas bisnis",
+                    "bayar sewa tempat ruko kantor",
+                    "selisih kas tunai rekonsiliasi uang masuk keluar",
+                    "suntik dana tambahan modal pemilik usaha investasi"
+                ]
+            }
+            for tx_class, sentences in anchors.items():
+                _ANCHOR_VECTORS_CACHE[tx_class] = [
+                    np.array(get_onnx_embedding(s, is_query=False)) for s in sentences
+                ]
+        except Exception as e:
+            # Fallback jika model ONNX tidak bisa diload
+            print(f"[SmartParser] Gagal memuat ONNX embedding untuk anchors: {e}")
+            _ANCHOR_VECTORS_CACHE = {}
+    return _ANCHOR_VECTORS_CACHE
+
+
+def classify_via_vector_similarity(text: str, threshold: float = 0.72) -> TransactionClass:
+    """Mengklasifikasikan transaksi menggunakan kesamaan kosinus vektor lokal."""
+    anchor_cache = _get_anchor_vectors()
+    if not anchor_cache:
+        return TransactionClass.UNKNOWN
+        
+    try:
+        from app.services.onnx_embed import get_onnx_embedding
+        # Dapatkan embedding untuk inputan (sebagai query)
+        query_vec = np.array(get_onnx_embedding(text, is_query=True))
+        
+        best_class = TransactionClass.UNKNOWN
+        max_sim = -1.0
+        
+        for tx_class, vectors in anchor_cache.items():
+            for vec in vectors:
+                # e5 model sudah ternormalisasi L2, jadi cosine similarity = dot product
+                sim = float(np.dot(query_vec, vec))
+                if sim > max_sim:
+                    max_sim = sim
+                    best_class = tx_class
+                    
+        if max_sim >= threshold:
+            return best_class
+    except Exception as e:
+        print(f"[SmartParser] Kesalahan pada klasifikasi vektor similarity: {e}")
+        
+    return TransactionClass.UNKNOWN
 
 
 def classify_transaction(text: str) -> TransactionClass:
     normalized = text.lower().strip()
+    
+    # 1. Cek Kas Global / Pengeluaran Administrasi
     for pattern in PATTERNS_KAS_GLOBAL:
         if re.search(pattern, normalized):
             return TransactionClass.KAS_GLOBAL
+            
+    # 2. Cek Kata Kunci Pembelian vs Penjualan secara Semantis & Dinamis
+    purchase_keywords = [
+        'beli', 'belanja', 'kulak', 'kulakan', 'pembelian', 
+        'supplier', 'suplier', 'stok masuk', 'tambah stok', 
+        'masuk barang', 'restock'
+    ]
+    sales_keywords = [
+        'jual', 'jualan', 'penjualan', 'laku', 'sold', 
+        'omset', 'omzet', 'pendapatan', 'kasir', 'pelanggan', 'customer'
+    ]
+    
+    has_purchase_signal = any(kw in normalized for kw in purchase_keywords)
+    has_sales_signal = any(kw in normalized for kw in sales_keywords)
+    
+    # Jika dominan pembelian (ada kata beli/belanja dan tidak ada kata jual)
+    if has_purchase_signal and not has_sales_signal:
+        return TransactionClass.PRODUCT_PURCHASE
+        
+    # Jika dominan penjualan (ada kata jual/laku dan tidak ada kata beli)
+    if has_sales_signal and not has_purchase_signal:
+        return TransactionClass.PRODUCT_SALES
+        
+    # Jika kedua sinyal ada, atau menggunakan frase terstruktur, cek regex pembelian fleksibel
+    extended_purchase_patterns = [
+        r'(?i)(pembelian|beli|belanja|kulak)(?:[\w\s]{0,30}?)(di|dari|ke|supplier|suplier)\s+\w+',
+        r'(?i)(nota|struk|faktur)\s+(pembelian|kulak)',
+        r'(?i)supplier\s*[:(]',
+        r'(?i)dari\s+supplier'
+    ]
+    for pattern in extended_purchase_patterns:
+        if re.search(pattern, normalized):
+            return TransactionClass.PRODUCT_PURCHASE
+            
+    # 3. L2: Gunakan Vector Similarity lokal (Cerdas & Kontekstual)
+    vec_class = classify_via_vector_similarity(text)
+    if vec_class != TransactionClass.UNKNOWN:
+        return vec_class
+
+    # Sinyal unit produk umum (kg, pcs, @, ctn, dll.)
     product_signals = [
         'kg', 'gram', 'gr', 'pcs', 'btl', 'ctn', 'pack', 'ons',
-        'liter', 'beli', 'belanja', 'jual', 'jualan', '@', 'per '
+        'liter', '@', 'per '
     ]
     if any(kw in normalized for kw in product_signals):
+        # Default jika terindikasi memiliki item ritel tetapi tidak ada kata kunci beli/belanja yang jelas
         return TransactionClass.PRODUCT_SALES
+        
     return TransactionClass.UNKNOWN
 
 
@@ -195,6 +312,15 @@ def _extract_date(text: str) -> str:
     lower = text.lower()
     today = datetime.now().date()
 
+    # Tanggal Nota eksplisit dari OCR: (Tanggal Nota: YYYY-MM-DD) atau Tanggal Nota: YYYY-MM-DD
+    m_nota = re.search(r"(?:tanggal\s*nota|tgl\s*nota|tanggal)\s*[:=]?\s*(\d{4}[/-]\d{1,2}[/-]\d{1,2})", lower)
+    if m_nota:
+        try:
+            parts = [int(p) for p in re.split(r"[/-]", m_nota.group(1))]
+            return datetime(parts[0], parts[1], parts[2]).date().isoformat()
+        except ValueError:
+            pass
+
     if any(kw in lower for kw in ["kemarin", "kemaren", "yesterday"]):
         return (today - timedelta(days=1)).isoformat()
     if any(kw in lower for kw in ["tadi pagi", "pagi ini", "siang ini", "malam tadi"]):
@@ -240,6 +366,19 @@ def _extract_date(text: str) -> str:
     return today.isoformat()
 
 
+def _extract_payment_method(text: str) -> str:
+    """Ekstrak metode pembayaran dari teks."""
+    lower = text.lower()
+    if any(kw in lower for kw in ["qris", "qr"]):
+        return "qris"
+    if any(kw in lower for kw in ["transfer", "tf", "bank", "bca", "mandiri", "bri", "bni", "cimb", "gopay", "ovo", "dana", "shopeepay"]):
+        return "transfer"
+    # Jangan tandai 'tempo' jika ada frasa 'hutang modal' / 'utang modal' / 'modal'
+    if any(kw in lower for kw in ["tempo", "kredit", "bon"]) or (any(kw in lower for kw in ["hutang", "utang"]) and "modal" not in lower):
+        return "tempo"
+    return "cash"
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # SECTION 3: DETEKSI TIPE TRANSAKSI
 # ──────────────────────────────────────────────────────────────────────────────
@@ -259,7 +398,17 @@ KEYWORDS_CASH_COUNT = [
 KEYWORDS_CAPITAL = [
     "modal", "setoran modal", "setoran awal", "investasi awal",
     "ekuitas", "dana awal", "modal usaha", "modal kerja",
-    "tambah modal", "setor modal",
+    "tambah modal", "setor modal", "pengembalian modal", "penarikan modal",
+    "tarik modal", "prive", "withdraw modal", "ambil modal", "ditarik investor", "penyertaan modal",
+]
+
+KEYWORDS_CUSTOMER_DEPOSIT = [
+    "tabungan customer", "tabungan pelanggan", "setor tabungan", "simpanan",
+    "paket lebaran", "angsuran lebaran", "cicilan lebaran", "setor paket", "titipan pelanggan",
+]
+
+KEYWORDS_CUSTOMER_WITHDRAWAL = [
+    "tarik tabungan", "penarikan tabungan", "ambil tabungan", "kembalikan tabungan", "cairkan tabungan",
 ]
 
 # Retur selalu ke LLM — efek jurnal berbeda (retur beli vs retur jual)
@@ -294,6 +443,9 @@ KEYWORDS_PURCHASE = [
     "bayar supplier", "bayar vendor", "bayar ke supplier",
     "hutang supplier", "pelunasan hutang beli", "bayar hutang pembelian",
     "purchase", "procure", "restock", "restok",
+    # Dokumen pembelian — PATOKAN UTAMA
+    "faktur", "invoice", "nota pembelian", "nota beli",
+    "inv.", "inv ", "fak.", "fak ",
     # Informal — hanya bila konteks jelas (bukan bensin/listrik)
     "borong", "kulak",
 ]
@@ -357,8 +509,20 @@ def _detect_type(text_lower: str) -> Optional[str]:
         return "income"
     if any(kw in text_lower for kw in KEYWORDS_CASH_COUNT):
         return "cash_count"
+    if any(kw in text_lower for kw in ["koreksi", "pindah", "pemindahan", "reklasifikasi"]) and "modal" in text_lower and any(kw in text_lower for kw in ["titipan", "hutang", "utang", "simpanan", "pelanggan", "tabungan"]):
+        return "capital_reclassification"
+    if any(kw in text_lower for kw in KEYWORDS_CUSTOMER_WITHDRAWAL):
+        return "customer_withdrawal"
+    if any(kw in text_lower for kw in KEYWORDS_CUSTOMER_DEPOSIT):
+        return "customer_deposit"
     if any(kw in text_lower for kw in KEYWORDS_CAPITAL):
+        if any(kw in text_lower for kw in ["tarik", "pengembalian", "penarikan", "prive", "withdraw", "ambil"]):
+            return "capital_withdrawal"
         return "capital"
+
+    # Deteksi utilitas & BBM operasional spesifik terlebih dahulu
+    if any(kw in text_lower for kw in ["listrik", "pln", "token", "pdam", "internet", "wifi", "indihome", "speedy", "telepon", "pulsa", "bensin", "bbm", "pertalite", "pertamax", "solar", "spbu"]):
+        return "operational"
 
     is_sales    = any(kw in text_lower for kw in KEYWORDS_SALES)
     is_expense  = any(kw in text_lower for kw in KEYWORDS_EXPENSE)
@@ -450,7 +614,11 @@ _TYPE_DESCRIPTION = {
     "expense":    "Pengeluaran/Beban Operasional",
     "income":     "Pendapatan Lain-lain",
     "cash_count": "Opname Kas",
-    "capital":    "Setoran Modal",
+    "capital":                 "Setoran Modal",
+    "capital_withdrawal":      "Pengembalian Modal",
+    "capital_reclassification":"Koreksi Reklasifikasi Modal",
+    "customer_deposit":        "Penerimaan Uang Muka / Titipan Pelanggan",
+    "customer_withdrawal":     "Pengembalian Titipan Pelanggan",
 }
 
 
@@ -491,8 +659,9 @@ def try_rule_based_parse(text: str) -> Optional[dict]:
     if not _is_summary_input(norm):
         return None
 
-    # Ekstrak tanggal dari teks asli (sebelum normalisasi angka)
+    # Ekstrak tanggal dan metode pembayaran dari teks asli
     transaction_date = _extract_date(text)
+    payment_method = _extract_payment_method(text)
 
     desc = text.strip()[:120] if len(text.strip()) >= 5 else _TYPE_DESCRIPTION.get(t_type, text)
 
@@ -501,42 +670,62 @@ def try_rule_based_parse(text: str) -> Optional[dict]:
         "description": desc,
         "total_amount": total,
         "transaction_type": t_type,
+        "payment_method": payment_method,
         "items": [],
         "_source": "rule_based",
     }
 
 
-def build_minimal_prompt(normalized_text: str, today_date: str, coa_context: str = "") -> tuple:
+def build_minimal_prompt(normalized_text: str, today_date: str, coa_context: str = "", catalog_context: str = "") -> tuple:
     """
     Bangun prompt minimal untuk teks kompleks yang tidak tertangani rule-based.
 
     COA hanya di-inject jika non-empty (coa_context).
+    Katalog hanya di-inject jika non-empty (catalog_context).
 
     Returns:
         (system_instruction, prompt)
     """
     system_instruction = (
-        "Anda adalah pakar akuntansi retail PSAK EMKM. "
+        "Anda adalah pakar akuntansi retail SAK EMKM / PSAK. "
         "Ekstrak data dari Smart Note menjadi JSON.\n\n"
         "ATURAN WAJIB:\n"
         "1. KLASIFIKASI RINGKASAN VS DETAIL (PENTING):\n"
         "   - Jika teks bermakna penjualan global, rekapitulasi, total penjualan hari kemarin/hari ini, atau pendapatan global (misal: 'total penjualan kemarin Rp 2.500.000', 'omset hari ini 5 juta', 'pendapatan toko 3jt') TANPA menyebutkan barang-barang ritel secara spesifik, maka transaksi ini adalah TRANSAKSI RINGKASAN.\n"
         "   - Untuk TRANSAKSI RINGKASAN, dilarang keras memecah barang atau membuat item dummy. Properti 'items' HARUS diset kosong: []. Ini penting agar sistem dapat menghitung HPP secara pro-rata otomatis.\n"
-        "   - Properti 'items' HANYA boleh diisi jika pengguna secara eksplisit menyebutkan daftar nama barang, jumlah (qty), dan harga satuan yang jelas (misal: '2 sabun @5000, beras 50rb').\n"
+        "   - Properti 'items' HANYA boleh diisi jika pengguna secara eksplisit menyebutkan daftar nama barang, jumlah (qty), dan harga satuan yang jelas (misal: '2 sabun @5000, beras 50rb'). PENTING: Anda WAJIB mengekstrak item tersebut meskipun ditulis menyambung dalam satu kalimat tanpa menggunakan format daftar/bullet point (contoh: 'Pembelian Telur 15kg @22700' harus diekstrak sebagai item telur, BUKAN diringkas menjadi items kosong).\n"
         "2. ZERO HALUSINASI: Jika tidak ada rincian barang nyata → items: [].\n"
-        "3. Jika terdapat kata 'Pembelian', 'Kulakan', 'Belanja', atau ketika nama toko tenant kita terdaftar sebagai Pelanggan pada nota tagihan supplier → set transaction_type: 'purchase'.\n"
-        "4. Jika terdapat kata 'Penjualan', 'Pendapatan', 'Penerimaan' operasional toko kita ke konsumen → set transaction_type: 'sales'.\n"
-        "5. 'income' HANYA untuk pendapatan non-operasional (bunga bank, hibah, dividen).\n"
-        "6. Angka shorthand (3jt/500rb/Rp) sudah dinormalisasi sebelum dikirim ke sini.\n"
-        "7. Jika ada tanggal eksplisit di teks, gunakan itu. Jika tidak → gunakan today_date.\n"
-        "8. Ekstrak satuan barang (seperti kg, pcs, btl, ctn, ltr) ke dalam properti 'unit' jika ada di teks. Jika tidak ada, gunakan default 'pcs'.\n"
-        "9. Standardisasi Barang: Jika mendeteksi kata 'telor' (atau variasinya), selalu ubah nama barang tersebut menjadi 'Telur'."
+        "3. KLASIFIKASI SEMANTIK TIPE TRANSAKSI (WHOLE-CONTEXT ECONOMIC INTENT):\n"
+        "   Evaluasi SELURUH KALIMAT secara utuh untuk memahami tujuan ekonomi transaksi:\n"
+        "   - EXPENSE / OPERATIONAL (Beban Operasional Toko): Bila barang/layanan dibeli untuk DIPAKAI SENDIRI / DIKONSUMSI OPERASIONAL toko (contoh: BBM/Bensin/Pertalite/Pertamax/Solar di SPBU untuk armada/kendaraan toko, Listrik/PLN, Beli Token, Wifi/Internet, Air/PDAM, Makan karyawan, Alat tulis kantor, Sewa tempat). PENTING: Meskipun kalimat diawali kata 'Pembelian' atau 'Beli' (misal: 'Pembelian BBM Pertalite di SPBU', 'Beli bensin 50rb', 'Pembelian token listrik 100rb'), Anda WAJIB mengklasifikasikannya sebagai 'operational' atau 'expense' karena barang tersebut dikonsumsi sendiri untuk operasional toko, BUKAN stok barang dagangan.\n"
+        "   - PURCHASE (Pembelian Stok Dagangan / Restock): Bila barang yang dibeli adalah BARANG RETAIL / MATERIAL UNTUK DIJUAL KEMBALI atau diproses menjadi produk jualan toko (contoh: kulakan beras, minyak, rokok, tepung, belanja grosir dari supplier eksternal seperti Kusuma Tk, SUKUN, Indomarco, dll.).\n"
+        "   - SALES (Penjualan / Omzet): Bila transaksi merupakan pendapatan/penerimaan dari pembeli/konsumen eceran toko.\n"
+        "   - RETUR SUPPLIER / PELANGGAN: 'purchase_return' jika pengembalian barang ke supplier, 'sales_return' jika retur dari pelanggan.\n"
+        "   - 'income' HANYA untuk pendapatan non-operasional (bunga bank, hibah, dividen).\n"
+        "4. PEMETAAN AKUN COA YANG TEPAT:\n"
+        "   - Pengeluaran utilitas toko (seperti 'Belanja Listrik Toko', 'Wifi/Internet', 'Bayar PDAM/Air') WAJIB dikategorikan ke akun 'Beban Listrik, Air & Internet' (atau akun sejenis berkode 6-1301) bila tersedia di daftar COA, bukan ke akun beban lain-lain / beban operasional lainnya.\n"
+        "5. Angka shorthand (3jt/500rb/Rp) sudah dinormalisasi sebelum dikirim ke sini.\n"
+        "6. Jika ada tanggal eksplisit di teks, gunakan itu. Jika ada kata 'kemarin' atau 'hari kemarin', hitung tanggal kemarin relatif dari today_date. Jika tidak ada tanggal → gunakan today_date.\n"
+        "7. Ekstrak satuan barang (seperti kg, pcs, btl, ctn, ltr, rtg) ke dalam properti 'unit' jika ada di teks. Jika tidak ada, gunakan default 'pcs'.\n"
+        "8. Standardisasi Barang & Supplier: Prioritaskan penggunaan nama barang dan nama supplier dari KATALOG DATABASE jika bunyinya mirip (koreksi typo).\n"
+        "9. PEMISAHAN NAMA BARANG BER-ANGKA DAN KUANTITAS (QTY):\n"
+        "   Seringkali nama barang memiliki angka/ukuran (seperti '500g', '10Kg', 'ISI 15') yang bersebelahan dengan jumlah barang (QTY).\n"
+        "   - Contoh 1: 'tepung beras 500g 10Kg 12000' -> Nama='tepung beras 500g', Qty=10, Unit='Kg', Harga=12000.\n"
+        "   - Contoh 2: 'Beras Obor 10Kg 5pack x 146000' -> Nama='Beras Obor 10Kg', Qty=5, Unit='pack', Harga=146000.\n"
+        "   - Contoh 3: 'TONG TJI TEA ISI 15 20 pcs @ 2800' -> Nama='TONG TJI TEA ISI 15', Qty=20, Unit='pcs', Harga=2800.\n"
+        "   PANDUAN PENTING: Angka/satuan yang berada paling belakang atau berdekatan dengan lambang harga ('@', 'x', 'Rp') adalah QTY transaksi Anda. Angka yang mendahuluinya adalah bagian dari NAMA BARANG.\n"
+        "10. METODE PEMBAYARAN: Jika terdapat kata 'QRIS', 'QR', 'Transfer', 'TF', 'Bank', 'Gopay', 'Ovo', 'Dana', 'ShopeePay', Anda WAJIB mengeset payment_method: 'qris' atau 'transfer'. Ini penting agar sistem secara otomatis mendebit akun Bank (1-1102 / Non-Tunai) bukan Kas Tunai (1-1101).\n"
+        "11. DETEKSI UANG MUKA / DP CUSTOMER (PENTING & WAJIB):\n"
+        "   - Jika teks mengandung kata 'DP', 'Uang Muka', 'Down Payment', 'Deposit', atau 'Panjar' dari pembeli/pelanggan (contoh: 'Pendapatan DP Uang Muka dari Bu Hariyani', 'Terima DP 500rb dari Pak Budi'), Anda WAJIB mengeset payment_method: 'customer_deposit'.\n"
+        "   - JANGAN PERNAH mengeset payment_method menjadi 'cash' biasa jika ada penyebutan 'DP' atau 'Uang Muka'. Ini mutlak agar sistem mendebit Kas dan mengkreditkan Uang Muka Penjualan (Kewajiban 2-1402) bukan Pendapatan Penjualan."
     )
 
     coa_section = f"\n{coa_context.strip()}\n" if coa_context.strip() else ""
+    catalog_sec = f"\n{catalog_context.strip()}\n" if catalog_context.strip() else ""
 
     prompt = (
         f"{coa_section}"
+        f"{catalog_sec}"
         f"\nTeks Input Transaksi: \"{normalized_text}\"\n"
         f"(today_date = \"{today_date}\" jika tidak ada tanggal di teks)\n\n"
         "Output JSON:\n"
@@ -544,11 +733,15 @@ def build_minimal_prompt(normalized_text: str, today_date: str, coa_context: str
         "  \"transaction_date\": \"YYYY-MM-DD\",\n"
         "  \"description\": \"string singkat\",\n"
         "  \"total_amount\": number,\n"
-        "  \"transaction_type\": \"sales|purchase|expense|income|cash_count|capital\",\n"
+        "  \"transaction_type\": \"sales|purchase|expense|operational|income|cash_count|capital|capital_withdrawal|capital_reclassification|customer_deposit|customer_withdrawal|purchase_return|sales_return\",\n"
+        "  \"contact_name\": \"nama supplier atau pelanggan (opsional)\",\n"
+        "  \"payment_method\": \"cash|transfer|qris|tempo\",\n"
+        "  \"due_date\": \"YYYY-MM-DD (jika tempo)\",\n"
         "  \"items\": [\n"
-        "    { \"name\": \"string\", \"qty\": number, \"unit\": \"string (kg|pcs|btl|ctn|dll)\", \"unit_price\": number, \"total\": number }\n"
+        "    { \"name\": \"string\", \"qty\": number, \"unit\": \"string (kg|pcs|rtg|btl|ctn|dll)\", \"unit_price\": number, \"discount\": number, \"total\": number }\n"
         "  ]\n"
         "}"
     )
 
     return system_instruction, prompt
+

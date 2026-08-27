@@ -47,12 +47,144 @@ export default function ItemPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [uoms, setUoms] = useState<any[]>([]);
+  const [categories, setCategories] = useState<any[]>([]);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
-  const loadItems = async () => {
-    setLoading(true);
+  // Profile, History & Merge States
+  const [profileDialogOpen, setProfileDialogOpen] = useState(false);
+  const [selectedItem, setSelectedItem] = useState<Item | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [itemHistory, setItemHistory] = useState<any[]>([]);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [selectedMergeSku, setSelectedMergeSku] = useState('');
+  const [isUpdatingName, setIsUpdatingName] = useState(false);
+
+  // History Pagination
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyRowsPerPage, setHistoryRowsPerPage] = useState(10);
+
+  const getSimilarItems = (currentName: string) => {
+    if (!currentName) return [];
+    return items.filter(i => {
+      if (i.id === selectedItem?.id) return false;
+      const cNameLower = currentName.toLowerCase();
+      const iNameLower = i.name.toLowerCase();
+      
+      const words1 = cNameLower.split(/\s+/).filter(w => w.length > 2);
+      const words2 = iNameLower.split(/\s+/).filter(w => w.length > 2);
+      
+      const hasSimilarWord = words1.some(w => words2.some(w2 => w2.includes(w) || w.includes(w2)));
+      const isSubStr = iNameLower.includes(cNameLower) || cNameLower.includes(iNameLower);
+      
+      return hasSimilarWord || isSubStr;
+    });
+  };
+
+  const handleUpdateItemName = async () => {
+    if (!selectedItem || !selectedMergeSku) return;
+
+    setIsUpdatingName(true);
+    try {
+      await fetchClient(`/inventory/products/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          source_sku: selectedItem.sku,
+          target_sku: selectedMergeSku
+        })
+      });
+      toast.success('Item berhasil digabungkan (merge) dengan sukses!');
+      setIsEditingName(false);
+      setProfileDialogOpen(false); // Tutup profil karena item asal sudah dihapus
+      loadItems();
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err.message || 'Gagal menggabungkan item');
+    } finally {
+      setIsUpdatingName(false);
+    }
+  };
+
+  const handleOpenProfile = async (item: Item) => {
+    setSelectedItem(item);
+    setProfileDialogOpen(true);
+    setLoadingHistory(true);
+    setHistoryPage(1);
+    try {
+      // Ambil seluruh transaksi posted milik tenant
+      const txs = await fetchClient('/finance/transactions?limit=500');
+      if (Array.isArray(txs)) {
+        const history: any[] = [];
+        
+        // 1. Ekstrak data logistik persediaan (in/out) khusus untuk produk ini
+        txs.forEach((tx: any) => {
+          if (tx.status !== 'posted') return;
+          
+          tx.inventory_logs?.forEach((log: any) => {
+            if (log.product_id === item.id) {
+              const qty = Number(log.quantity);
+              const price = Number(log.price_per_unit);
+              
+              // Keterangan diisi Supplier (untuk IN) atau Customer (untuk OUT)
+              let info = '-';
+              if (log.log_type === 'in') {
+                info = tx.contact?.name || 'Pemasok';
+              } else {
+                info = tx.contact?.name || 'Pelanggan Umum';
+              }
+
+              history.push({
+                date: tx.transaction_date,
+                description: info,
+                log_type: log.log_type,
+                qty: qty,
+                price: price,
+                timestamp: new Date(tx.transaction_date).getTime()
+              });
+            }
+          });
+        });
+
+        // 2. Urutkan ASCENDING (terlama ke terbaru) untuk menghitung Saldo Berjalan (Running Balance) secara kronologis
+        history.sort((a, b) => a.timestamp - b.timestamp);
+        
+        let running = 0;
+        const mappedHistory = history.map((h) => {
+          if (h.log_type === 'in') {
+            running += h.qty;
+          } else {
+            running -= h.qty;
+          }
+          return {
+            ...h,
+            running_balance: running
+          };
+        });
+
+        // 3. Urutkan DESCENDING (terbaru ke terlama) untuk ditampilkan di tabel
+        mappedHistory.sort((a, b) => b.timestamp - a.timestamp || b.date.localeCompare(a.date));
+        setItemHistory(mappedHistory);
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error('Gagal mengambil riwayat transaksi barang');
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const loadItems = async (isBackgroundRefresh = false) => {
+    if (!isBackgroundRefresh) {
+      setLoading(true);
+    }
     setError(null);
     try {
+      const cats = await fetchClient('/inventory/categories');
+      const sortedCats = Array.isArray(cats)
+        ? [...cats].sort((a: any, b: any) => a.name.localeCompare(b.name, 'id', { sensitivity: 'base' }))
+        : [];
+      setCategories(sortedCats);
+
       const data = await fetchClient('/inventory/products');
       if (Array.isArray(data)) {
         const mappedItems: Item[] = data.map((prod: any) => {
@@ -64,11 +196,12 @@ export default function ItemPage() {
           } else if (stock <= minStock) {
             status = 'low_stock';
           }
+          const catObj = sortedCats.find((c: any) => c.id === prod.category_id);
           return {
             id: prod.id,
             sku: prod.sku,
             name: prod.name,
-            category: 'Umum',
+            category: catObj ? catObj.name : 'Umum',
             stock,
             uom: prod.base_unit || 'pcs',
             purchase_price: prod.purchase_price || 0,
@@ -85,9 +218,11 @@ export default function ItemPage() {
       const msg = err.message || 'Gagal memuat data dari server';
       setError(msg);
       toast.error('Error', { description: msg });
-      setItems([]);
+      if (!isBackgroundRefresh) setItems([]);
     } finally {
-      setLoading(false);
+      if (!isBackgroundRefresh) {
+        setLoading(false);
+      }
     }
   };
 
@@ -106,6 +241,10 @@ export default function ItemPage() {
     loadItems();
     loadUoms();
   }, []);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery]);
 
 
 
@@ -137,11 +276,12 @@ export default function ItemPage() {
 
   const handleEdit = (item: Item) => {
     setEditingItem(item);
+    const cat = categories.find(c => c.name === item.category);
     setFormData({
       sku: item.sku,
       name: item.name,
       base_unit: item.uom || 'pcs',
-      category_id: '' // Add category ID fetch/mapping logic if needed
+      category_id: cat ? String(cat.id) : ''
     });
     setIsDialogOpen(true);
   };
@@ -166,25 +306,48 @@ export default function ItemPage() {
     }
     
     setIsSubmitting(true);
+    const payload = {
+      sku: formData.sku,
+      name: formData.name,
+      base_unit: formData.base_unit,
+      category_id: formData.category_id && formData.category_id !== '0' ? Number(formData.category_id) : null
+    };
+
     try {
       if (editingItem) {
         await fetchClient(`/inventory/products/${editingItem.sku}`, {
           method: 'PUT',
           body: JSON.stringify({
             name: formData.name,
-            base_unit: formData.base_unit
+            base_unit: formData.base_unit,
+            category_id: payload.category_id
           })
         });
         toast.success('Berhasil', { description: `Item ${editingItem.sku} berhasil diperbarui.` });
+
+        // Optimistic UI state update: update local item immediately for instant feedback
+        const selectedCat = categories.find(c => String(c.id) === String(payload.category_id));
+        setItems(prev => prev.map(item => {
+          if (item.sku === editingItem.sku) {
+            return {
+              ...item,
+              name: formData.name,
+              uom: formData.base_unit,
+              category: selectedCat ? selectedCat.name : 'Umum'
+            };
+          }
+          return item;
+        }));
       } else {
         await fetchClient('/inventory/products', {
           method: 'POST',
-          body: JSON.stringify(formData)
+          body: JSON.stringify(payload)
         });
         toast.success('Berhasil', { description: `Item ${formData.sku} berhasil ditambahkan.` });
       }
       setIsDialogOpen(false);
-      loadItems();
+      // Fast background refresh without screen freezing
+      loadItems(true);
     } catch (err: any) {
       toast.error('Gagal', { description: err.message || 'Gagal menyimpan item' });
     } finally {
@@ -254,7 +417,7 @@ export default function ItemPage() {
             />
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="icon" onClick={loadItems} disabled={loading} className="h-9 w-9">
+            <Button variant="outline" size="icon" onClick={() => loadItems()} disabled={loading} className="h-9 w-9">
               <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
             </Button>
             <Button onClick={handleAdd} className="flex items-center gap-2">
@@ -274,7 +437,7 @@ export default function ItemPage() {
               <AlertTriangle className="w-12 h-12 text-rose-500 mx-auto" />
               <h3 className="text-md font-semibold text-zinc-700 dark:text-zinc-300">Gagal Memuat Data</h3>
               <p className="text-sm text-zinc-400 dark:text-zinc-500 max-w-sm mx-auto">{error}</p>
-              <Button variant="outline" onClick={loadItems} className="mt-2">Coba Lagi</Button>
+              <Button variant="outline" onClick={() => loadItems()} className="mt-2">Coba Lagi</Button>
             </div>
           ) : filteredItems.length === 0 ? (
             <div className="text-center py-16 space-y-3">
@@ -302,7 +465,14 @@ export default function ItemPage() {
                   {paginatedItems.map((item) => (
                     <TableRow key={item.id} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40 border-b border-zinc-100 dark:border-zinc-800">
                       <TableCell className="font-mono text-xs font-semibold text-zinc-700 dark:text-zinc-300 py-3.5 pl-6">{item.sku}</TableCell>
-                      <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100 py-3.5">{item.name}</TableCell>
+                      <TableCell className="font-medium text-sm text-zinc-900 dark:text-zinc-100 py-3.5">
+                        <button 
+                          onClick={() => handleOpenProfile(item)}
+                          className="text-primary hover:underline font-bold text-left"
+                        >
+                          {item.name}
+                        </button>
+                      </TableCell>
                       <TableCell className="text-xs text-zinc-500 py-3.5">{item.category}</TableCell>
                       <TableCell className="text-right font-mono text-xs font-bold py-3.5">{item.stock}</TableCell>
                       <TableCell className="text-xs font-semibold text-zinc-400 capitalize py-3.5">{item.uom}</TableCell>
@@ -411,6 +581,25 @@ export default function ItemPage() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="category_id">Kategori</Label>
+                <Select
+                  value={formData.category_id || '0'}
+                  onValueChange={(val) => setFormData({ ...formData, category_id: val })}
+                >
+                  <SelectTrigger id="category_id">
+                    <SelectValue placeholder="Pilih kategori" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0">Umum / Tanpa Kategori</SelectItem>
+                    {categories.map((c) => (
+                      <SelectItem key={c.id} value={String(c.id)}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
@@ -448,6 +637,172 @@ export default function ItemPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Profil & Riwayat Item (Kartu Persediaan/Buku Besar Pembantu) */}
+      <Dialog open={profileDialogOpen} onOpenChange={setProfileDialogOpen}>
+        <DialogContent className="sm:max-w-[750px] max-h-[85vh] overflow-y-auto bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-black uppercase tracking-wider text-zinc-800 dark:text-zinc-200 flex justify-between items-center pr-6">
+              <span>Kartu Riwayat & Profil Item</span>
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Detail stok barang fisik, profil UOM, dan buku besar pembantu persediaan (Mutasi In / Out).
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedItem && (
+            <div className="space-y-6 py-4">
+              {/* Profile Card */}
+              <div className="p-4 rounded-xl border border-zinc-200 dark:border-zinc-800/80 bg-zinc-50 dark:bg-zinc-900/40 grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground flex justify-between items-center max-w-[200px]">
+                    <span>Nama Item</span>
+                    {!isEditingName && (
+                      <button 
+                        onClick={() => {
+                          setIsEditingName(true);
+                          const similar = getSimilarItems(selectedItem.name);
+                          if (similar.length > 0) {
+                            setSelectedMergeSku(similar[0].sku);
+                          } else {
+                            setSelectedMergeSku('');
+                          }
+                        }}
+                        className="text-[9px] text-primary hover:underline font-bold"
+                      >
+                        Koreksi Nama
+                      </button>
+                    )}
+                  </p>
+                  {isEditingName ? (
+                    <div className="mt-1 flex items-center gap-1.5">
+                      <select
+                        value={selectedMergeSku}
+                        onChange={(e) => setSelectedMergeSku(e.target.value)}
+                        className="text-xs bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded p-1 flex-1 max-w-[200px]"
+                      >
+                        <option value="">-- Pilih Item Serupa --</option>
+                        {getSimilarItems(selectedItem.name).map((i) => (
+                          <option key={i.id} value={i.sku}>[{i.sku}] - {i.name}</option>
+                        ))}
+                      </select>
+                      <Button 
+                        size="sm" 
+                        onClick={handleUpdateItemName} 
+                        disabled={isUpdatingName || !selectedMergeSku}
+                        className="h-7 text-[10px] px-2"
+                      >
+                        {isUpdatingName ? '...' : 'Merge'}
+                      </Button>
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        onClick={() => setIsEditingName(false)}
+                        className="h-7 text-[10px] px-2"
+                      >
+                        Batal
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="text-sm font-bold text-zinc-900 dark:text-zinc-200">{selectedItem.name}</p>
+                  )}
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Kode Item (SKU)</p>
+                  <p className="text-xs font-mono font-semibold text-zinc-500 dark:text-zinc-400">{selectedItem.sku}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Satuan Dasar (UoM)</p>
+                  <p className="text-xs text-zinc-700 dark:text-zinc-300 uppercase font-semibold">{selectedItem.uom}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Kategori</p>
+                  <p className="text-xs text-zinc-700 dark:text-zinc-300 font-bold">{selectedItem.category}</p>
+                </div>
+              </div>
+
+              {/* Mutations Table */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-black uppercase tracking-widest text-zinc-800 dark:text-zinc-300">Histori Pergerakan Stok</h4>
+                {loadingHistory ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Loader2 className="w-6 h-6 animate-spin text-primary" />
+                  </div>
+                ) : itemHistory.length > 0 ? (
+                  <div className="border border-border/80 rounded-xl overflow-hidden bg-card">
+                    <Table>
+                      <TableHeader className="bg-zinc-50/50 dark:bg-zinc-900/40">
+                        <TableRow>
+                          <TableHead className="w-[50px] text-center">No</TableHead>
+                          <TableHead className="w-[100px]">Tanggal</TableHead>
+                          <TableHead>Keterangan</TableHead>
+                          <TableHead className="text-right w-[90px]">In</TableHead>
+                          <TableHead className="text-right w-[90px]">Out</TableHead>
+                          <TableHead className="text-right w-[100px]">Saldo</TableHead>
+                          <TableHead className="text-right w-[110px]">Harga</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {itemHistory
+                          .slice((historyPage - 1) * historyRowsPerPage, historyPage * historyRowsPerPage)
+                          .map((h, idx) => (
+                            <TableRow key={idx} className="hover:bg-zinc-55/30 border-b border-border/40 text-xs">
+                              <TableCell className="text-center font-mono font-medium text-zinc-500">
+                                {(historyPage - 1) * historyRowsPerPage + idx + 1}
+                              </TableCell>
+                              <TableCell className="font-mono text-[10px] whitespace-nowrap">{h.date}</TableCell>
+                              <TableCell className="font-medium truncate max-w-[150px]" title={h.description}>
+                                {h.description}
+                              </TableCell>
+                              <TableCell className="text-right font-mono font-bold text-emerald-600">
+                                {h.log_type === 'in' ? `${h.qty} ${selectedItem.uom}` : '-'}
+                              </TableCell>
+                              <TableCell className="text-right font-mono font-bold text-rose-600">
+                                {h.log_type === 'out' ? `${h.qty} ${selectedItem.uom}` : '-'}
+                              </TableCell>
+                              <TableCell className="text-right font-mono font-semibold text-zinc-700 dark:text-zinc-300">
+                                {h.running_balance} {selectedItem.uom}
+                              </TableCell>
+                              <TableCell className="text-right font-mono font-medium">
+                                {formatRp(h.price)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                      </TableBody>
+                    </Table>
+                    <div className="px-4 py-3 border-t border-border bg-zinc-50/50 dark:bg-zinc-950/20">
+                      <PaginationControls 
+                        totalItems={itemHistory.length} 
+                        currentPage={historyPage} 
+                        rowsPerPage={historyRowsPerPage} 
+                        onPageChange={setHistoryPage} 
+                        onRowsPerPageChange={setHistoryRowsPerPage} 
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground/60 text-center py-8 border border-dashed rounded-xl">
+                    Belum ada riwayat pergerakan stok untuk barang ini.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button 
+              variant="outline" 
+              onClick={() => {
+                setProfileDialogOpen(false);
+                setIsEditingName(false);
+              }} 
+              className="text-xs"
+            >
+              Tutup
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

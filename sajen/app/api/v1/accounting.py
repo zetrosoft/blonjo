@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Query
 from typing import List, Optional
 from app.api.deps import SessionDep, CurrentUser, check_role
 from app.models.user import UserRole, User
@@ -17,10 +17,12 @@ from app.schemas.accounting import (
     TransactionPayoffRequest,
     TransactionRescheduleRequest,
     CompassSummaryResponse,
-    MarketIntelligenceItem
+    MarketIntelligenceItem,
+    GeneralLedgerResponse
 )
-from app.models.accounting import Account, Transaction, TransactionType, JournalMapping, JournalMappingLine
+from app.models.accounting import Account, Transaction, TransactionType, TransactionStatus, JournalMapping, JournalMappingLine, JournalEntry
 from app.models.log import AIParsingLog, AIModelQuota, ParserType
+from sqlalchemy import or_, and_, func
 from app.models.ocr import OCRTask, OCRStatus
 from app.services.accounting import (
     create_transaction_with_journal, 
@@ -82,6 +84,7 @@ async def parse_transaction_note(
     token_in = 0
     token_out = 0
     prompt = "[BYPASSED — rule-based parser]"
+    system_instruction = "[BYPASSED — rule-based parser]"
 
     if rule_result:
         # ✅ Langsung selesai tanpa LLM!
@@ -126,21 +129,24 @@ async def parse_transaction_note(
             if rag_clean.strip():
                 rag_context += "\n" + rag_clean.strip()
 
-        # 3. COA: gunakan targeted COA dari build_minimal_context (bukan full get_coa_string)
-        #    - KAS_GLOBAL     → hanya akun kas (kode 1-1xxx, max 20)
-        #    - PRODUCT_SALES  → akun kas + penjualan (max 25)
-        #    - UNKNOWN        → akun umum (max 35), fallback ke get_coa_string jika kosong
-        coa_section = ""
-        coa_str = min_context.get("coa", "")
-        if not coa_str and tx_class == TransactionClass.UNKNOWN:
-            coa_str = get_coa_string(session, current_user.tenant_id)
-        if coa_str:
-            coa_section = f"\n--- DAFTAR AKUN (COA) ---\n{coa_str}\n"
+        # 3. Ambil Aturan Khusus (Voice AI Rules) dari Setting
+        from app.models.setting import AppSetting
+        voice_ai_setting = session.query(AppSetting).filter(
+            AppSetting.tenant_id == current_user.tenant_id,
+            AppSetting.key == "voice_ai_rules"
+        ).first()
+        voice_ai_rules = voice_ai_setting.value if voice_ai_setting else ""
+
+        # 4. (Dihapus: Catalog Context tidak lagi diinjeksi ke LLM untuk menghemat token)
+        # Ekstraksi nama mentah akan ditangani backend menggunakan pg_trgm & ProductAlias
+        catalog_section = ""
 
         # Bangun prompt minimal
-        system_instruction, prompt = build_minimal_prompt(
-            normalized_text, today_date, coa_section
+        sys_inst, p_inst = build_minimal_prompt(
+            normalized_text, today_date, "", catalog_section
         )
+        system_instruction = sys_inst
+        prompt = p_inst
 
         # Gabungkan RAG context ke prompt jika ada
         if rag_context.strip():
@@ -151,8 +157,10 @@ async def parse_transaction_note(
         mcp_result = await mcp_client.parse_transaction(
             session,
             normalized_text,
-            {"coa": coa_section, "pricing_rules": rules}
+            {"pricing_rules": rules, "catalog_context": catalog_section, "voice_ai_rules": voice_ai_rules},
+            tenant_id=current_user.tenant_id
         )
+
         # Ambil semua info dari hasil — processor & token sekarang akurat
         final_parsed_data = mcp_result.get("parsed_data") if isinstance(mcp_result, dict) else mcp_result
         processor_name = mcp_result.get("processor", "local_fallback") if isinstance(mcp_result, dict) else "local_fallback"
@@ -163,17 +171,38 @@ async def parse_transaction_note(
 
         # ── Post-processing: Override & Sanity Check ─────────────────────────
         if final_parsed_data:
-            # Force 'sales' jika heuristik mendeteksi pendapatan operasional
-            if is_operational_revenue and final_parsed_data.get("transaction_type") == "income":
+            # Force 'purchase_return' atau 'sales_return' jika ada kata kunci retur/kembali
+            is_retur_keyword = any(kw in low_text for kw in ["retur", "return", "refund", "pengembalian", "kembali"])
+            if is_retur_keyword:
+                t_type = final_parsed_data.get("transaction_type")
+                # Jika terdeteksi purchase atau sales, paksa ke tipe return yang sesuai
+                if t_type == "purchase":
+                    final_parsed_data["transaction_type"] = "purchase_return"
+                elif t_type == "sales":
+                    final_parsed_data["transaction_type"] = "sales_return"
+                elif t_type not in ["purchase_return", "sales_return"]:
+                    # Default fallback jika tidak ada tipe, atau keliru terdeteksi sebagai 'expense' / lainnya
+                    # Jika ada 'supplier', 'sales bumbu', dll, arahkan ke purchase_return
+                    if any(kw in low_text for kw in ["supplier", "distributor", "vendor", "sales"]):
+                        final_parsed_data["transaction_type"] = "purchase_return"
+                    else:
+                        final_parsed_data["transaction_type"] = "sales_return"
+
+            # Force 'sales' jika heuristik mendeteksi pendapatan operasional (selama bukan retur)
+            if is_operational_revenue and final_parsed_data.get("transaction_type") == "income" and not is_retur_keyword:
                 final_parsed_data["transaction_type"] = "sales"
 
-            # Bersihkan halusinasi untuk input ringkasan
-            if len(normalized_text.split()) < 6 and is_operational_revenue:
-                items = final_parsed_data.get("items", [])
-                if len(items) == 1 and items[0].get("total") == final_parsed_data.get("total_amount"):
-                    item_name = str(items[0].get("name", "")).lower()
-                    if item_name not in low_text:
-                        final_parsed_data["items"] = []
+            # Bersihkan item dummy untuk input ringkasan/global (hanya simpan histori & jurnal)
+            items = final_parsed_data.get("items", [])
+            summary_kws = ["pendapatan", "penjualan", "omzet", "omset", "rekap", "hasil toko", "penerimaan", "total penjualan"]
+            if items:
+                is_summary = any(
+                    str(it.get("name", "")).lower().strip() == low_text.strip()
+                    or (any(kw in str(it.get("name", "")).lower() for kw in summary_kws) and not any(u in str(it.get("name", "")).lower() for u in ["kg", "pcs", "@", "liter", "btl", "ctn", "pack", "rtg", "dus", "sak", "gram", "gr"]))
+                    for it in items
+                )
+                if is_summary:
+                    final_parsed_data["items"] = []
 
             # ── SAPU BERSIH: Sanitize Supplier Name & Description ──
             # 1. Ekstrak nama toko dari JSON mentah dalam input teks jika ada
@@ -182,13 +211,23 @@ async def parse_transaction_note(
             if toko_match:
                 extracted_toko = toko_match.group(1).strip()
             
-            # Jika contact_name kosong, '|', atau salah deteksi pelanggan (KUSUMA) padahal beli
+            # 1b. Ekstrak pintar jika teks mengandung 'di supplier X' atau 'X supplier'
+            if not extracted_toko:
+                # Pola 1: "di/dari/ke supplier NAMA"
+                m1 = re.search(r'\b(?:di|dari|ke)\s+(?:supplier|suplier)\s+([a-zA-Z\s]+?)(?=\s+\d|\s+@|\s+pcs|\s+kg|\s+liter|\s+rp|$)', low_text, re.IGNORECASE)
+                if m1:
+                    extracted_toko = m1.group(1).strip().title()
+                else:
+                    # Pola 2: "di/dari/ke NAMA supplier"
+                    m2 = re.search(r'\b(?:di|dari|ke)\s+([a-zA-Z\s]+?)\s+(?:supplier|suplier)\b', low_text, re.IGNORECASE)
+                    if m2:
+                        extracted_toko = m2.group(1).strip().title()
+
             c_name = final_parsed_data.get("contact_name") or ""
-            if not c_name or c_name == "|" or c_name.strip() == "" or (final_parsed_data.get("transaction_type") == "purchase" and "KUSUMA" in c_name.upper() and extracted_toko):
-                if extracted_toko:
-                    final_parsed_data["contact_name"] = extracted_toko
-                elif c_name == "|":
-                    final_parsed_data["contact_name"] = ""
+            if extracted_toko:
+                final_parsed_data["contact_name"] = extracted_toko
+            elif c_name == "|" or c_name.strip() == "" or (final_parsed_data.get("transaction_type") == "purchase" and "KUSUMA" in c_name.upper()):
+                final_parsed_data["contact_name"] = ""
 
             # 2. Perbaiki tanggal yang tertukar (misal DD/MM/YY terbaca YY/MM/DD)
             tgl = final_parsed_data.get("transaction_date") or ""
@@ -204,27 +243,127 @@ async def parse_transaction_note(
                 except Exception as e:
                     print(f"Date correction error: {e}")
 
+            # 2b. Validasi sanity check: tanggal tidak boleh tidak masuk akal
+            from datetime import date as _date, timedelta
+            try:
+                parsed_tgl_str = final_parsed_data.get("transaction_date") or ""
+                if parsed_tgl_str:
+                    parsed_dt = _date.fromisoformat(parsed_tgl_str)
+                    today_dt = _date.fromisoformat(today_date)
+                    max_future = today_dt.replace(year=today_dt.year + 1)
+                    min_past = _date(2020, 1, 1)
+                    if parsed_dt > max_future or parsed_dt < min_past:
+                        print(f"[DATE SANITY] Tanggal AI '{parsed_tgl_str}' tidak masuk akal, diganti dengan today_date='{today_date}'")
+                        final_parsed_data["transaction_date"] = today_date
+                else:
+                    final_parsed_data["transaction_date"] = today_date
+            except (ValueError, TypeError) as e:
+                print(f"[DATE SANITY] Error validasi tanggal: {e}, fallback ke today_date")
+                final_parsed_data["transaction_date"] = today_date
+
+            # 2c. Force Tanggal Relatif jika teks mengandung 'kemarin' / 'hari kemarin'
+            if any(kw in low_text for kw in ["kemarin", "kemaren", "yesterday"]):
+                try:
+                    today_dt = _date.fromisoformat(today_date)
+                    final_parsed_data["transaction_date"] = (today_dt - timedelta(days=1)).isoformat()
+                except Exception as e:
+                    print(f"Error setting yesterday date: {e}")
+
+            # 2d. Force Payment Method berdasarkan kata kunci di input teks
+            if any(kw in low_text for kw in ["dp ", " dp", "uang muka", "down payment", "deposit", "panjar"]):
+                final_parsed_data["payment_method"] = "customer_deposit"
+            elif any(kw in low_text for kw in ["qris", "qr"]):
+                final_parsed_data["payment_method"] = "qris"
+            elif any(kw in low_text for kw in ["transfer", "tf", "bank", "bca", "mandiri", "bri", "bni", "cimb", "gopay", "ovo", "dana", "shopeepay"]):
+                final_parsed_data["payment_method"] = "transfer"
+            elif any(kw in low_text for kw in ["tempo", "kredit", "hutang", "utang", "bon"]):
+                final_parsed_data["payment_method"] = "tempo"
+            elif not final_parsed_data.get("payment_method"):
+                final_parsed_data["payment_method"] = "cash"
+
             # 3. Re-generate Description yang bersih dan manusiawi
             desc = final_parsed_data.get("description") or ""
             items = final_parsed_data.get("items") or []
             tgl = final_parsed_data.get("transaction_date") or today_date
             supplier = final_parsed_data.get("contact_name") or extracted_toko or "Supplier"
             
-            # Jika deskripsi mengandung LLM babble atau tidak standar
             has_babble = any(kw in desc for kw in ["Berikut adalah", "ekstraksi data", "tabel data", "markdown", "format tabel", "|"])
-            if not desc or has_babble:
-                item_names = [i.get("name", "Item") for i in items[:3]]
-                item_str = ", ".join(item_names)
-                if len(items) > 3:
-                    item_str += f" dan {len(items)-3} item lainnya"
-                
+            if not desc or has_babble or len(desc) > 35:
                 if final_parsed_data.get("transaction_type") == "purchase":
-                    new_desc = f"Pembelian di {supplier} pada {tgl}"
-                    if item_str:
-                        new_desc += f" ({item_str})"
-                    final_parsed_data["description"] = new_desc
+                    final_parsed_data["description"] = f"Pembelian di {supplier}"
+                elif final_parsed_data.get("transaction_type") == "purchase_return":
+                    final_parsed_data["description"] = f"Retur Pembelian di {supplier}"
+                elif final_parsed_data.get("transaction_type") == "sales_return":
+                    final_parsed_data["description"] = f"Retur Penjualan"
                 else:
                     final_parsed_data["description"] = f"Transaksi di {supplier} pada {tgl}"
+
+            # 4. Perbaiki masalah matematika LLM (halusinasi hitungan total item)
+            if items and len(items) > 0:
+                calculated_total = 0
+                for it in items:
+                    qty = it.get("qty", it.get("quantity"))
+                    if qty is None: qty = 1
+                    try: qty = float(qty)
+                    except: qty = 1
+                        
+                    price = it.get("unit_price") or 0
+                    try: price = float(price)
+                    except: price = 0
+                        
+                    discount = it.get("discount") or 0
+                    try: discount = float(discount)
+                    except: discount = 0
+                        
+                    item_total = it.get("total") or 0
+                    try: item_total = float(item_total)
+                    except: item_total = 0
+                        
+                    # Normalize fields in dictionary for frontend compatibility
+                    it["qty"] = qty
+                    it["unit_price"] = price
+                    it["discount"] = discount
+                    
+                    # Jika price dan qty valid, hitung ulang total per item
+                    if price > 0:
+                        item_total = (qty * price) - discount
+                        it["total"] = item_total
+                    elif item_total > 0 and price == 0:
+                        it["unit_price"] = item_total
+                        
+                    calculated_total += item_total
+                
+                # Jika ada item dan calculated_total > 0, prioritaskan hasil kalkulasi matematis item
+                # daripada halusinasi/kesalahan teks total nota (misal selisih antara total_amount dengan calculated_total).
+                llm_total = final_parsed_data.get("total_amount", 0)
+                try: llm_total = float(llm_total)
+                except: llm_total = 0
+
+                if calculated_total > 0 and (llm_total == 0 or abs(llm_total - calculated_total) > 0.01):
+                    final_parsed_data["total_amount"] = calculated_total
+
+            # 5. Konversi Jatuh Tempo Relatif menjadi Absolute Date
+            due_date_raw = final_parsed_data.get("due_date")
+            if due_date_raw and isinstance(due_date_raw, str):
+                due_lower = due_date_raw.lower()
+                if "hari" in due_lower or "day" in due_lower or "tempo" in due_lower or "+" in due_lower:
+                    nums = re.findall(r'\d+', due_lower)
+                    if nums:
+                        try:
+                            from datetime import timedelta
+                            days_added = int(nums[0])
+                            tgl_obj = datetime.strptime(tgl, "%Y-%m-%d").date()
+                            final_parsed_data["due_date"] = (tgl_obj + timedelta(days=days_added)).isoformat()
+                        except Exception as e:
+                            print(f"Error parsing relative due_date '{due_date_raw}': {e}")
+                            final_parsed_data.pop("due_date", None)
+                else:
+                    # Coba validasi jika itu ISO string atau format lain
+                    try:
+                        # Jika parse gagal, Pydantic akan error nanti, biarkan saja
+                        datetime.strptime(due_date_raw[:10], "%Y-%m-%d")
+                    except ValueError:
+                        final_parsed_data.pop("due_date", None)
 
     # ── Local Fallback terakhir jika semua gagal ─────────────────────────────
     if not final_parsed_data:
@@ -299,16 +438,46 @@ async def parse_transaction_note(
                 TransactionType(t_type_str),
                 Decimal(str(t_amount)),
                 is_tax_exempt=is_exempt,
-                payment_method=final_parsed_data.get("payment_method")
+                payment_method=final_parsed_data.get("payment_method"),
+                description=text
             )
     except Exception as e:
+        import traceback
         print(f"Auto-journal suggestion error: {e}")
+        traceback.print_exc()
+
+    # ── Check Duplicate Transaction Signature in Postgres DB ──────────────────
+    tgl_parsed = final_parsed_data.get("transaction_date")
+    total_parsed = final_parsed_data.get("total_amount", 0)
+    try:
+        total_parsed_val = float(total_parsed)
+    except (ValueError, TypeError):
+        total_parsed_val = 0.0
+
+    if tgl_parsed and total_parsed_val > 0:
+        existing_tx = session.query(Transaction).filter(
+            Transaction.tenant_id == current_user.tenant_id,
+            Transaction.transaction_date == tgl_parsed,
+            Transaction.total_amount == total_parsed_val,
+            Transaction.status == TransactionStatus.POSTED
+        ).first()
+        if existing_tx:
+            supplier_name = final_parsed_data.get("contact_name") or "Supplier"
+            final_parsed_data["is_duplicate"] = True
+            final_parsed_data["duplicate_warning"] = (
+                f"⚠️ DUPLIKASI AI TERDETEKSI: Transaksi dari '{supplier_name}' "
+                f"(Tanggal: {tgl_parsed}, Total: Rp {total_parsed_val:,.0f}) "
+                f"SUDAH PERNAH DICATAT sebelumnya (Ref #{existing_tx.id})."
+            )
+
+    # Combine complete dynamic system prompt and user prompt for full transparency logging
+    full_logged_prompt = f"[SYSTEM INSTRUCTION]\n{system_instruction}\n\n[USER PROMPT]\n{prompt}"
 
     # ── Simpan Activity Log ───────────────────────────────────────────────────
     new_log = AIParsingLog(
         tenant_id=current_user.tenant_id,
         original_text=text,
-        prompt=prompt,
+        prompt=full_logged_prompt,
         parsed_result=json.dumps(final_parsed_data),
         token_in=token_in,
         token_out=token_out,
@@ -374,6 +543,69 @@ def get_ai_quotas(
             "usage_date": q.usage_date
         })
     return results
+
+@router.get("/deposit-liquidity-metrics")
+def get_deposit_liquidity_metrics(
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    """
+    Get liquidity metrics for customer deposits & savings reserves.
+    """
+    tenant_id = current_user.tenant_id
+    
+    # Accounts: Kas & Bank (1-1101, 1-1102, 1-1103)
+    cash_accounts = session.query(Account).filter(
+        Account.code.in_(["1-1101", "1-1102", "1-1103"]),
+        or_(Account.tenant_id == tenant_id, Account.tenant_id == None)
+    ).all()
+    cash_account_ids = [a.id for a in cash_accounts]
+
+    # Deposit accounts: 2-1205 (Hutang Paket Lebaran), 2-1206 (Hutang Tabungan Pelanggan), 2-1200
+    deposit_accounts = session.query(Account).filter(
+        Account.code.in_(["2-1205", "2-1206", "2-1200"]),
+        or_(Account.tenant_id == tenant_id, Account.tenant_id == None)
+    ).all()
+    deposit_account_ids = [a.id for a in deposit_accounts]
+
+    # Compute Cash Reserve Balance
+    cash_reserve = Decimal("0.00")
+    if cash_account_ids:
+        entries = session.query(JournalEntry).filter(
+            JournalEntry.account_id.in_(cash_account_ids)
+        ).all()
+        for e in entries:
+            cash_reserve += (e.debit or Decimal("0.00")) - (e.credit or Decimal("0.00"))
+
+    # Compute Total Customer Deposits Balance
+    total_deposits = Decimal("0.00")
+    if deposit_account_ids:
+        entries = session.query(JournalEntry).filter(
+            JournalEntry.account_id.in_(deposit_account_ids)
+        ).all()
+        for e in entries:
+            total_deposits += (e.credit or Decimal("0.00")) - (e.debit or Decimal("0.00"))
+
+    reserve_ratio = float((cash_reserve / total_deposits * 100)) if total_deposits > Decimal("0.00") else 100.0
+    
+    status = "healthy"
+    if total_deposits > Decimal("0.00"):
+        if reserve_ratio < 15.0:
+            status = "critical"
+        elif reserve_ratio < 30.0:
+            status = "warning"
+
+    return {
+        "total_customer_deposits": float(total_deposits),
+        "cash_reserve": float(cash_reserve),
+        "reserve_ratio": round(reserve_ratio, 2),
+        "liquidity_status": status,
+        "recommended_allocations": {
+            "reserve_standby_20": round(float(total_deposits) * 0.20, 2),
+            "lock_price_supplier_50": round(float(total_deposits) * 0.50, 2),
+            "fast_moving_goods_30": round(float(total_deposits) * 0.30, 2)
+        }
+    }
 
 @router.get("/journal-mappings", response_model=List[JournalMappingResponse])
 def get_journal_mappings(
@@ -452,12 +684,13 @@ def create_journal_mapping(
 @router.get("/dashboard/summary", response_model=DashboardSummaryResponse)
 def get_summary(
     session: SessionDep,
-    current_user: CurrentUser
+    current_user: CurrentUser,
+    days: int = Query(30, description="Filter timeframe for chart data: 7, 30, 60, 90")
 ):
     """
     Get dashboard summary statistics.
     """
-    return get_dashboard_summary(db=session, tenant_id=current_user.tenant_id)
+    return get_dashboard_summary(db=session, tenant_id=current_user.tenant_id, days=days)
 
 @router.get("/compass/summary", response_model=CompassSummaryResponse)
 def get_compass_summary(
@@ -588,12 +821,15 @@ def create_new_transaction(
     Ensure debits and credits balance.
     Only accessible by Admin and Manager roles.
     """
-    return create_transaction_with_journal(
+    res = create_transaction_with_journal(
         db=session,
         trans_in=trans_in,
         user_id=current_user.id,
         tenant_id=current_user.tenant_id
     )
+    from app.core.redis import invalidate_tenant_cache
+    invalidate_tenant_cache(current_user.tenant_id, ["products", "dashboard", "insights", "material_control"])
+    return res
 
 
 
@@ -634,6 +870,111 @@ def get_transactions(
         Transaction.id.desc()
     ).offset(skip).limit(limit).all()
 
+@router.get("/transactions/general-ledger", response_model=GeneralLedgerResponse)
+def get_general_ledger(
+    session: SessionDep,
+    current_user: CurrentUser,
+    account_id: int,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+):
+    """
+    Dapatkan mutasi Buku Besar dan saldo berjalan untuk akun tertentu.
+    Menghitung saldo awal sebelum start_date dan memetakan mutasi secara kronologis.
+    """
+    from app.models.accounting import JournalEntry, Account, Transaction, TransactionStatus, AccountType
+    from sqlalchemy import func
+    from fastapi import HTTPException
+    from datetime import date
+    
+    # 1. Pastikan akun ada dan milik tenant
+    account = session.query(Account).filter(
+        Account.id == account_id,
+        (Account.tenant_id == current_user.tenant_id) | (Account.tenant_id.is_(None))
+    ).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Akun tidak ditemukan")
+
+    # Parsing dates
+    today = date.today()
+    s_date = today.replace(day=1)
+    if start_date:
+        try:
+            s_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+        except ValueError:
+            pass
+            
+    e_date = today
+    if end_date:
+        try:
+            e_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            pass
+
+    # 2. Hitung Saldo Awal (sebelum s_date)
+    # Akun normal debit: Asset, Expense.
+    # Akun normal kredit: Liability, Equity, Revenue.
+    is_normal_debit = account.account_type in [AccountType.ASSET, AccountType.EXPENSE]
+    
+    op_debit = session.query(func.coalesce(func.sum(JournalEntry.debit), 0)).join(Transaction).filter(
+        Transaction.tenant_id == current_user.tenant_id,
+        JournalEntry.account_id == account.id,
+        Transaction.status == TransactionStatus.POSTED,
+        Transaction.transaction_date < s_date
+    ).scalar() or Decimal('0.00')
+
+    op_credit = session.query(func.coalesce(func.sum(JournalEntry.credit), 0)).join(Transaction).filter(
+        Transaction.tenant_id == current_user.tenant_id,
+        JournalEntry.account_id == account.id,
+        Transaction.status == TransactionStatus.POSTED,
+        Transaction.transaction_date < s_date
+    ).scalar() or Decimal('0.00')
+
+    opening_balance = (op_debit - op_credit) if is_normal_debit else (op_credit - op_debit)
+
+    # 3. Ambil Mutasi Jurnal Jelas (POSTED) dalam rentang tanggal
+    entries = session.query(JournalEntry).join(Transaction).filter(
+        Transaction.tenant_id == current_user.tenant_id,
+        JournalEntry.account_id == account.id,
+        Transaction.status == TransactionStatus.POSTED,
+        Transaction.transaction_date >= s_date,
+        Transaction.transaction_date <= e_date
+    ).order_by(Transaction.transaction_date.asc(), Transaction.id.asc()).all()
+
+    # 4. Susun Mutasi dengan Saldo Berjalan (Running Balance)
+    mutations = []
+    running = opening_balance
+    for je in entries:
+        tx = je.transaction
+        deb = Decimal(str(je.debit))
+        cred = Decimal(str(je.credit))
+        
+        if is_normal_debit:
+            running += (deb - cred)
+        else:
+            running += (cred - deb)
+            
+        mutations.append({
+            "transaction_id": tx.id,
+            "transaction_date": tx.transaction_date,
+            "reference_no": tx.reference_no,
+            "description": tx.description,
+            "debit": deb,
+            "credit": cred,
+            "running_balance": running
+        })
+
+    return {
+        "account_id": account.id,
+        "account_code": account.code,
+        "account_name": account.name,
+        "opening_balance": opening_balance,
+        "closing_balance": running,
+        "mutations": mutations,
+        "start_date": s_date.strftime("%Y-%m-%d"),
+        "end_date": e_date.strftime("%Y-%m-%d")
+    }
+
 @router.get("/transactions/debts/upcoming", response_model=List[TransactionResponse])
 def get_upcoming_debts(
     session: SessionDep,
@@ -641,16 +982,24 @@ def get_upcoming_debts(
     limit: int = 20
 ):
     """
-    Retrieve upcoming debts (Hutang) sorted by due date ascending.
-    Only returns transactions that have a due_date and haven't been fully paid (we assume here all with due_date are relevant).
+    Retrieve upcoming debts & bills (Hutang Pembelian + DP Customer Penjualan) sorted by due date ascending.
     """
-    from sqlalchemy import or_
+    from sqlalchemy import or_, and_
     return session.query(Transaction).filter(
         Transaction.tenant_id == current_user.tenant_id,
-        Transaction.due_date.isnot(None),
-        or_(Transaction.payment_method != "lunas", Transaction.payment_method.is_(None))
+        or_(
+            and_(
+                Transaction.transaction_type == TransactionType.PURCHASE,
+                or_(Transaction.payment_method != "lunas", Transaction.payment_method.is_(None)),
+                or_(Transaction.due_date.isnot(None), Transaction.payment_method.in_(["tempo", "credit", "invoice", "utang", "hutang"]))
+            ),
+            and_(
+                Transaction.transaction_type == TransactionType.SALES,
+                Transaction.payment_method.in_(["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
+            )
+        )
     ).order_by(
-        Transaction.due_date.asc()
+        Transaction.due_date.asc().nullslast(), Transaction.id.desc()
     ).limit(limit).all()
 
 
@@ -702,11 +1051,14 @@ def post_transaction_api(
     Post a transaction (change status from DRAFT to POSTED).
     Only accessible by Admin and Manager roles.
     """
-    return post_transaction(
+    res = post_transaction(
         db=session,
         transaction_id=transaction_id,
         tenant_id=current_user.tenant_id
     )
+    from app.core.redis import invalidate_tenant_cache
+    invalidate_tenant_cache(current_user.tenant_id, ["products", "dashboard", "insights", "material_control"])
+    return res
 
 
 @router.post("/transactions/{transaction_id}/unpost", response_model=TransactionResponse)
@@ -719,11 +1071,14 @@ def unpost_transaction_api(
     Unpost a transaction (change status from POSTED to DRAFT).
     Only accessible by Admin and Manager roles.
     """
-    return unpost_transaction(
+    res = unpost_transaction(
         db=session,
         transaction_id=transaction_id,
         tenant_id=current_user.tenant_id
     )
+    from app.core.redis import invalidate_tenant_cache
+    invalidate_tenant_cache(current_user.tenant_id, ["products", "dashboard", "insights", "material_control"])
+    return res
 
 
 @router.delete("/transactions/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -741,6 +1096,8 @@ def delete_transaction_api(
         transaction_id=transaction_id,
         tenant_id=current_user.tenant_id
     )
+    from app.core.redis import invalidate_tenant_cache
+    invalidate_tenant_cache(current_user.tenant_id, ["products", "dashboard", "insights", "material_control"])
     return None
 
 @router.post("/transactions/{transaction_id}/pay", response_model=TransactionResponse)

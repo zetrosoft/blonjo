@@ -18,9 +18,21 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def safe_execute(conn, func, *args, **kwargs):
+    from sqlalchemy import text
+    try:
+        conn.execute(text('SAVEPOINT sp1'))
+        func(*args, **kwargs)
+        conn.execute(text('RELEASE SAVEPOINT sp1'))
+    except Exception as e:
+        conn.execute(text('ROLLBACK TO SAVEPOINT sp1'))
+        print(f"Skipping due to error: {e}")
+
 def upgrade() -> None:
-    op.add_column('purchase_plan_items', sa.Column('is_purchased', sa.Boolean(), server_default=sa.text('false'), nullable=False))
+    conn = op.get_bind()
+    safe_execute(conn, op.add_column, 'purchase_plan_items', sa.Column('is_purchased', sa.Boolean(), server_default=sa.text('false'), nullable=False))
 
 
 def downgrade() -> None:
-    op.drop_column('purchase_plan_items', 'is_purchased')
+    conn = op.get_bind()
+    safe_execute(conn, op.drop_column, 'purchase_plan_items', 'is_purchased')

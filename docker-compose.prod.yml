@@ -24,12 +24,21 @@ services:
     volumes:
       - uploads_data:/app/uploads
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8005/health')\" || exit 1"]
+      interval: 3s
+      timeout: 2s
+      retries: 15
+      start_period: 3s
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.sajen-api.rule=Host(`blonjo.samkarsa.com`) && PathPrefix(`/api`)"
       - "traefik.http.routers.sajen-api.entrypoints=websecure"
       - "traefik.http.routers.sajen-api.tls.certresolver=myresolver"
       - "traefik.http.services.sajen-api.loadbalancer.server.port=8005"
+      - "traefik.http.services.sajen-api.loadbalancer.healthcheck.path=/health"
+      - "traefik.http.services.sajen-api.loadbalancer.healthcheck.interval=3s"
+      - "traefik.http.services.sajen-api.loadbalancer.healthcheck.timeout=2s"
       - "traefik.docker.network=bijexa-network"
     logging:
       driver: "json-file"

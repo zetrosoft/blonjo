@@ -56,21 +56,6 @@ def call_gemini_fallback(prompt: str) -> str:
             raise Exception(f"Seluruh jalur AI Gagal. Gemini Secondary Error: {str(e2)}")
 
 
-def get_ocr_text(file_path: str) -> str:
-    """
-    Ekstraksi teks dari gambar menggunakan PyTesseract dengan bahasa Indonesia dan Inggris.
-    """
-    import pytesseract
-    from PIL import Image
-    try:
-        img = Image.open(file_path)
-        # Menggunakan bahasa Indonesia (ind) dan Inggris (eng)
-        raw_text = pytesseract.image_to_string(img, lang="ind+eng")
-        return raw_text
-    except Exception as e:
-        print(f"Error dalam ekstraksi Tesseract OCR: {str(e)}")
-        raise e
-
 
 def _clean_json_output(raw_text: str) -> str:
     """
@@ -153,13 +138,45 @@ def process_receipt_ocr(self, task_id: int):
                 with open(task.file_path, "rb") as f:
                     img_bytes = f.read()
                 
+                # --- DEPRECATED: FASE 3 VISUAL-FIRST MATCH & CROP ---
+                # Dinonaktifkan (dikomen) karena pemrosesan OCR kini 100% menggunakan RAG Vector Store & AI Vision utuh
+                # yang lebih akurat tanpa memotong gambar (mencegah kop toko/tanggal terpotong).
+                img_hash = ""
+                template_matched = False
+                # try:
+                #     from app.services.vision_matcher import compute_image_signature, match_and_crop
+                #     from app.services.mcp_client import mcp_client
+                #     import asyncio
+                #     
+                #     img_hash = compute_image_signature(img_bytes)
+                #     
+                #     if settings.MCP_ENABLED and img_hash:
+                #         match_res = asyncio.run(mcp_client.match_visual_template(img_hash))
+                #         if match_res and match_res.get("matched"):
+                #             template_coords = match_res.get("template", {}).get("bounding_boxes")
+                #             if template_coords:
+                #                 img_bytes, is_cropped = match_and_crop(img_bytes, template_coords)
+                #                 if is_cropped:
+                #                     template_matched = True
+                #                     print(f"[OCR Worker] Gambar dipotong menggunakan Visual Template untuk {match_res['template'].get('merchant_name')}!")
+                # except Exception as ve:
+                #     print(f"[OCR Worker] Visual matching failed (fallback to original): {ve}")
+                # --------------------------------------------------
+                
                 from app.services.mcp_client import mcp_client
                 if settings.MCP_ENABLED:
                     import asyncio
                     print("[OCR Worker] Menggunakan MCP Server untuk OCR")
-                    ocr_res = asyncio.run(mcp_client.ocr_receipt(db, img_bytes, "image/jpeg"))
+                    ocr_res = asyncio.run(mcp_client.ocr_receipt(db, img_bytes, "image/jpeg", tenant_id=task.tenant_id))
                     # Ekstrak raw text dari hasil format MCP
-                    raw_ocr_text = ocr_res.get("raw_text", "") if isinstance(ocr_res, dict) else str(ocr_res)
+                    import json
+                    if isinstance(ocr_res, dict):
+                        if "merchant" in ocr_res or "items" in ocr_res or "transaction" in ocr_res:
+                            raw_ocr_text = json.dumps(ocr_res)
+                        else:
+                            raw_ocr_text = ocr_res.get("raw_text", "")
+                    else:
+                        raw_ocr_text = str(ocr_res)
                     ai_processor = "mcp-ocr"
 
                 elif settings.GOOGLE_API_KEY:
@@ -168,18 +185,18 @@ def process_receipt_ocr(self, task_id: int):
                         db=db,
                         image_bytes=img_bytes,
                         mime_type="image/jpeg",
-                        prompt="Ekstrak seluruh teks dari nota ini secara mentah. Jangan lewatkan detail tulisan tangan. Jika ada tabel, baca baris demi baris. PENTING: Jawab HANYA dengan teks ekstraksi, DILARANG KERAS menambahkan kalimat pengantar seperti 'Berikut adalah ekstraksi data...' atau kalimat percakapan apapun."
+                        prompt="Ekstrak seluruh teks dari nota ini secara mentah dari ujung atas sampai bawah. JANGAN LEWATKAN nama supplier/toko di bagian paling atas (kop nota). Perhatikan secara teliti tanda baca pada angka desimal (seperti Qty 2.00, dst). Untuk bagian tabel barang, USAHAKAN mempertahankan spasi antar kolom (gunakan spasi atau karakter tab) agar angka kuantitas, harga satuan, dan subtotal tidak menempel menjadi satu string. Berikan jarak antar kolom. PENTING: Jawab HANYA dengan teks ekstraksi, DILARANG KERAS menambahkan kalimat pengantar."
                     )
                     raw_ocr_text = vision_res['raw_text']
                     ai_processor = "gemini-vision"
                 else:
-                    raw_ocr_text = get_ocr_text(task.file_path)
+                    raise Exception("Tidak ada layanan AI Vision (MCP/Gemini) yang aktif. OCR lokal dinonaktifkan.")
             except Exception as e:
-                print(f"Vision OCR pipeline failed, falling back to Tesseract: {e}")
-                raw_ocr_text = get_ocr_text(task.file_path)
+                print(f"Vision OCR pipeline failed: {e}")
+                raise Exception(f"Vision OCR gagal: {e}")
         else:
-            # Fallback ke Tesseract untuk PDF atau file non-image
-            raw_ocr_text = get_ocr_text(task.file_path)
+            # File non-image tidak lagi didukung oleh local fallback tanpa tesseract
+            raise Exception("Tipe file tidak didukung untuk diproses AI Vision (hanya JPG/PNG).")
 
         # Sanitize raw_ocr_text from LLM babble
         if raw_ocr_text:
@@ -211,7 +228,7 @@ def process_receipt_ocr(self, task_id: int):
         blocks = re.findall(r'```(?:json)?\s*(.*?)\s*```', raw_ocr_text, re.DOTALL)
         for block in reversed(blocks):
             parsed = try_parse_json(block)
-            if isinstance(parsed, dict) and ("toko" in parsed or "merchant" in parsed or "item_belanja" in parsed or "items" in parsed):
+            if isinstance(parsed, dict) and ("toko" in parsed or "merchant" in parsed or "item_belanja" in parsed or "items" in parsed or "readability_status" in parsed):
                 extracted_json = parsed
                 break
                 
@@ -221,21 +238,27 @@ def process_receipt_ocr(self, task_id: int):
             end = raw_ocr_text.rfind('}')
             if start != -1 and end != -1 and end > start:
                 parsed = try_parse_json(raw_ocr_text[start:end+1])
-                if isinstance(parsed, dict) and ("toko" in parsed or "merchant" in parsed):
+                if isinstance(parsed, dict) and ("toko" in parsed or "merchant" in parsed or "items" in parsed or "readability_status" in parsed):
                     extracted_json = parsed
 
         parsed_data = {}
         prompt = ""
         # 2. GLOBAL RAG: Ambil context lintas tenant (hanya jika butuh strukturisasi manual)
         if not extracted_json:
-            rag_examples = get_rag_context(db, task.tenant_id, raw_ocr_text)
+            rag_examples = get_rag_context(db, task.tenant_id, raw_ocr_text, is_ocr=True)
 
             # 3. Strukturisasi Data (Temperature 0.0)
             system_instruction = (
                 "Anda adalah pakar akuntansi OCR Vision. Tugas Anda adalah mengubah teks hasil pembacaan nota menjadi JSON terstruktur secara presisi.\n"
                 "PENTING: Abaikan teks teknis non-transaksi seperti 'Samsung Quad Camera', 'Galaxy A12', 'Shot with', atau watermark kamera lainnya.\n"
                 "PENTING: Jika ada item yang diawali dengan kata 'Potongan' (misal: 'Potongan Harga'), abaikan dari daftar 'items' (itu adalah penjelasan diskon, BUKAN barang yang dibeli).\n"
-                "PENTING: Jangan pernah memasukkan kalimat pengantar/obrolan AI seperti 'Berikut adalah ekstraksi data...' atau 'Tabel markdown' ke dalam value JSON (terutama untuk field description/nama merchant/toko)."
+                "PENTING: Jangan pernah memasukkan kalimat pengantar/obrolan AI seperti 'Berikut adalah ekstraksi data...' atau 'Tabel markdown' ke dalam value JSON.\n"
+                "PENTING: Perhatikan Qty (Kuantitas) barang. Qty bisa berbentuk desimal (contoh: 2.00, 1.5). Pertahankan titik desimal secara akurat dan jangan sampai nilai (seperti 2.00) terdeteksi sebagai 1.\n"
+                "PENTING: Logika Akuntansi untuk Harga: Jika menemukan deretan angka setelah nama barang, ingat rumus (Kuantitas x Harga Satuan = Subtotal). Jangan asal menebak kuantitas = 1 jika terdapat angka yang masuk akal sebagai kuantitas di baris tersebut.\n"
+                "PENTING: PEMBERSIHAN KODE BARANG & ANTI-HALUSINASI: Jika nama barang diawali oleh kode singkatan pabrik/kemasan (seperti '26L.HCSLP M600G501BB DTRG LIQ BERRY'), ambil deskripsi jenis produk utama (seperti 'DTRG LIQ BERRY' atau 'DETERJEN LIQUID BERRY') beserta spesifikasi ukurannya. DILARANG KERAS mengganti teks nama barang di nota dengan nama produk lain yang TIDAK TERTERA di nota (misalnya mengganti produk deterjen menjadi Minyak Kayu Putih). Jika nama barang berupa kode/singkatan pabrik, WAJIB tuliskan deskripsi teks tersebut persis seperti yang terbaca.\n"
+                "PENTING: ATURAN NOTA MULTI-KOLOM QTY (BSR, TGH, KCL): Jika nota memiliki 3 kolom kuantitas (BSR/Besar, TGH/Tengah, KCL/Kecil), ambil nilai Qty dari kolom yang bernilai > 0 dengan satuan (unit) yang relevan (misal 'box', 'pack', 'pcs'). Gunakan nilai pada kolom NETO sebagai total harga per item ('subtotal'), dan hitung harga per unit ('unit_price') dari (Nilai Neto / Qty).\n"
+                "PENTING: Ekstrak secara wajib nama merchant/toko/supplier dari bagian paling atas nota (kop surat) meskipun bentuknya terpisah atau kotor.\n"
+                "PENTING: Klasifikasi Transaksi: Jika nota diterbitkan oleh pihak eksternal (minimarket, grosir, supplier) kepada kita, maka transaction_type WAJIB diset 'purchase'. Jangan terkecoh dengan tulisan 'Nota Penjualan' di kertas, karena itu adalah penjualan dari sisi mereka, namun merupakan pembelian (pengeluaran) dari sisi kita."
             )
 
             prompt = f"""
@@ -274,9 +297,62 @@ Skema JSON:
             token_out = 0
             prompt = "MCP provided structured JSON directly."
 
+        # Check Semantic AI Transaction Signature in Postgres DB
+        if isinstance(parsed_data, dict):
+            merchant = (parsed_data.get("merchant") or {}).get("name") or parsed_data.get("toko") or parsed_data.get("contact_name") or ""
+            tgl = parsed_data.get("transaction_date") or ""
+            total = float(parsed_data.get("total_amount") or parsed_data.get("total") or 0)
+            
+            if total > 0 and tgl:
+                from app.models.accounting import Transaction, TransactionStatus
+                existing_tx = db.query(Transaction).filter(
+                    Transaction.tenant_id == task.tenant_id,
+                    Transaction.transaction_date == tgl,
+                    Transaction.total_amount == total,
+                    Transaction.status == TransactionStatus.POSTED
+                ).first()
+                if existing_tx:
+                    parsed_data["is_duplicate"] = True
+                    parsed_data["duplicate_warning"] = f"⚠️ DUPLIKASI AI DETECTED: Struk dari '{merchant or 'Supplier'}' (Tanggal: {tgl}, Total: Rp {total:,.0f}) SUDAH PERNAH DICATAT pada Transaksi Ref: {existing_tx.reference_no}."
+                    logger.warning(f"Semantic AI Duplicate match found for task {task.id}: {parsed_data['duplicate_warning']}")
+
+        # Fast-Path Entity Semantic Normalization (Learned Alias Memory)
+        from app.services.ocr_normalizer import apply_ocr_entity_aliases
+        parsed_data = apply_ocr_entity_aliases(db, task.tenant_id, parsed_data)
+
         task.extracted_data = parsed_data
         task.status = OCRStatus.COMPLETED
         db.commit()
+
+        from app.core.redis import invalidate_tenant_cache
+        invalidate_tenant_cache(task.tenant_id, ["products", "dashboard", "insights", "material_control"])
+
+        # --- DEPRECATED: FASE 4 PELAJARI TEMPLATE ---
+        # Dinonaktifkan (dikomen) karena pemrosesan OCR kini sepenuhnya ditangani oleh RAG Vector Store & AI Vision
+        # if not template_matched and extracted_json and img_hash:
+        #     try:
+        #         merchant_name = extracted_json.get("merchant", {}).get("name", "Unknown")
+        #         transaction_type = extracted_json.get("transaction_type", "purchase")
+        #         payment_method = extracted_json.get("transaction", {}).get("payment_method")
+        #         
+        #         # Deteksi area tabel secara dinamis menggunakan OpenCV
+        #         from app.services.vision_matcher import detect_receipt_bounding_box
+        #         bounding_boxes = detect_receipt_bounding_box(img_bytes)
+        #         static_headers = {"transaction_type": transaction_type, "payment_method": payment_method}
+        #         
+        #         if settings.MCP_ENABLED:
+        #             import asyncio
+        #             from app.services.mcp_client import mcp_client
+        #             asyncio.run(mcp_client.learn_visual_template(
+        #                 image_hash=img_hash,
+        #                 merchant_name=merchant_name,
+        #                 bounding_boxes=bounding_boxes,
+        #                 static_headers=static_headers
+        #             ))
+        #             print(f"[OCR Worker] Visual Template dipelajari untuk {merchant_name}.")
+        #     except Exception as e:
+        #         print(f"[OCR Worker] Gagal menyimpan Visual Template: {e}")
+        # --------------------------------------------
 
         # 4. Save Activity Log for Terminal Visibility
         new_log = AIParsingLog(

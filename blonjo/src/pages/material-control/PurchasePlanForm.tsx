@@ -334,16 +334,17 @@ export default function PurchasePlanForm() {
           let updatedCount = 0;
 
           result.items.forEach((it: any) => {
-            const matched = products.find(p => 
-              p.name.toLowerCase().includes(it.name.toLowerCase()) || 
-              it.name.toLowerCase().includes(p.name.toLowerCase())
-            );
+            const itemName = (it.name || '').toLowerCase();
+            const matched = itemName ? products.find(p => {
+              const pName = (p.name || '').toLowerCase();
+              return pName && (pName.includes(itemName) || itemName.includes(pName));
+            }) : undefined;
 
             const newItem: PlanItem = {
               productId: matched ? matched.id : 0,
               sku: matched ? matched.sku : 'N/A',
               name: matched ? matched.name : it.name,
-              qty: it.qty || 1,
+              qty: it.qty || it.quantity || 1,
               unit: it.unit || matched?.base_unit || 'pcs',
               unitPrice: it.unit_price || it.price || matched?.purchase_price || 0,
               supplierId: null,
@@ -351,11 +352,11 @@ export default function PurchasePlanForm() {
             };
 
             const existingIdx = updated.findIndex(
-              p => p.name.toLowerCase() === newItem.name.toLowerCase()
+              p => (p.name || '').toLowerCase() === (newItem.name || '').toLowerCase()
             );
 
             if (existingIdx >= 0) {
-              updated[existingIdx] = newItem;
+              updated[existingIdx].qty += newItem.qty;
               updatedCount++;
             } else {
               updated.push(newItem);
@@ -415,9 +416,8 @@ export default function PurchasePlanForm() {
         send_via_wa: sendViaWa,
         send_via_email: sendViaEmail,
         items: planItems.map(item => ({
-          // productId=0 artinya item baru yang tidak ada di master → backend tetap proses
           product_id: item.productId || null,
-          product_name: item.productId === 0 ? item.name : undefined,
+          custom_product_name: (!item.productId) ? item.name : undefined,
           supplier_contact_id: item.supplierId,
           qty: item.qty,
           unit_price: item.unitPrice

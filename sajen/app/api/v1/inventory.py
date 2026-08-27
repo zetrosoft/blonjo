@@ -12,17 +12,20 @@ from app.models.inventory import (
     InventoryLog, Contact, Uom
 )
 from app.schemas.inventory import (
-    CategoryCreate, CategoryResponse,
+    CategoryCreate, CategoryResponse, CategoryUpdate,
     ProductCreate, ProductResponse, ProductUpdate, ProductSearchQuery,
     UnitConversionCreate, UnitConversionResponse,
     InventoryLogCreate, InventoryLogResponse,
     ContactCreate, ContactResponse, ContactUpdate,
     TenantPricingRuleCreate, TenantPricingRuleResponse,
     UomCreate, UomResponse, UomUpdate,
-    StockAdjustRequest
+    StockAdjustRequest, AutocompleteRequest, AutocompleteItemResponse,
+    ProductMergeRequest
 )
 from app.services.ai_engine import get_embedding
+from app.services.onnx_embed import get_onnx_embedding
 from app.models.setting import AppSetting
+from app.models.accounting import Transaction
 from app.services.inventory import InventoryService
 
 # Logger setup
@@ -37,7 +40,29 @@ router = APIRouter()
 
 @router.get("/categories", response_model=List[CategoryResponse])
 def get_categories(session: SessionDep, skip: int = 0, limit: int = 100):
-    return session.query(ProductCategory).offset(skip).limit(limit).all()
+    from app.core.redis import get_redis_client
+    import json
+    cache_key = f"categories_list:{skip}:{limit}"
+    try:
+        redis_client = get_redis_client()
+        if redis_client:
+            cached = redis_client.get(cache_key)
+            if cached:
+                return json.loads(cached)
+    except Exception as e:
+        logger.error(f"Redis get categories error: {e}")
+
+    categories = session.query(ProductCategory).order_by(ProductCategory.name.asc()).offset(skip).limit(limit).all()
+    results = [CategoryResponse.model_validate(c).model_dump(mode="json") for c in categories]
+
+    try:
+        redis_client = get_redis_client()
+        if redis_client:
+            redis_client.setex(cache_key, 600, json.dumps(results, default=str))
+    except Exception as e:
+        logger.error(f"Redis set categories error: {e}")
+
+    return results
 
 @router.post("/categories", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
 def create_category(
@@ -53,7 +78,59 @@ def create_category(
     session.add(db_cat)
     session.commit()
     session.refresh(db_cat)
+
+    from app.core.redis import invalidate_tenant_cache
+    invalidate_tenant_cache(current_user.tenant_id, ["categories"])
     return db_cat
+
+@router.put("/categories/{category_id}", response_model=CategoryResponse)
+def update_category(
+    category_id: int,
+    cat_in: CategoryUpdate,
+    session: SessionDep,
+    current_user: User = Depends(check_role([UserRole.ADMIN]))
+):
+    db_cat = session.query(ProductCategory).filter(ProductCategory.id == category_id).first()
+    if not db_cat:
+        raise HTTPException(status_code=404, detail="Category not found")
+        
+    update_data = cat_in.model_dump(exclude_unset=True)
+    if "name" in update_data and update_data["name"] != db_cat.name:
+        existing = session.query(ProductCategory).filter(ProductCategory.name == update_data["name"]).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Category name already exists")
+            
+    for field, value in update_data.items():
+        setattr(db_cat, field, value)
+        
+    session.commit()
+    session.refresh(db_cat)
+
+    from app.core.redis import invalidate_tenant_cache
+    invalidate_tenant_cache(current_user.tenant_id, ["categories"])
+    return db_cat
+
+@router.delete("/categories/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_category(
+    category_id: int,
+    session: SessionDep,
+    current_user: User = Depends(check_role([UserRole.ADMIN]))
+):
+    db_cat = session.query(ProductCategory).filter(ProductCategory.id == category_id).first()
+    if not db_cat:
+        raise HTTPException(status_code=404, detail="Category not found")
+        
+    # Check if there are active products using this category
+    has_products = session.query(Product).filter(Product.category_id == category_id).first()
+    if has_products:
+        raise HTTPException(status_code=400, detail="Tidak dapat menghapus kategori yang masih memiliki produk")
+
+    session.delete(db_cat)
+    session.commit()
+
+    from app.core.redis import invalidate_tenant_cache
+    invalidate_tenant_cache(current_user.tenant_id, ["categories"])
+    return None
 
 # ==========================================
 # PRODUCT ENDPOINTS (GLOBAL MASTER)
@@ -68,15 +145,97 @@ def get_products(
     search: Optional[str] = None,
     category_id: Optional[int] = None
 ):
-    query = session.query(Product).filter(~Product.name.ilike('potongan%'))
+    # Cek setting stock maintenance (static vs dynamic) 1 kali untuk tenant
+    setting = session.query(AppSetting).filter(
+        AppSetting.tenant_id == current_user.tenant_id, 
+        AppSetting.key == "stock_maintenance"
+    ).first()
+    is_static = setting.value.lower() == "true" if setting else False
+
+    from sqlalchemy.orm import selectinload
+    query = session.query(Product).options(selectinload(Product.unit_conversions)).filter(~Product.name.ilike('potongan%'))
     if search:
         query = query.filter(Product.name.ilike(f"%{search}%") | Product.sku.ilike(f"%{search}%"))
     if category_id:
         query = query.filter(Product.category_id == category_id)
     
     products = query.order_by(Product.name).offset(skip).limit(limit).all()
+    if not products:
+        return []
+
+    prod_ids = [p.id for p in products]
+
+    # 1. Bulk Query TenantInventories (purchase price & static stock)
+    tenant_inv_map = {
+        ti.product_id: ti
+        for ti in session.query(TenantInventory).filter(
+            TenantInventory.tenant_id == current_user.tenant_id,
+            TenantInventory.product_id.in_(prod_ids)
+        ).all()
+    }
+
+    # 2. Bulk Query TenantProductPrices (sell price)
+    from app.models.inventory import TenantProductPrice
+    tenant_price_map = {
+        tp.product_id: float(tp.amount or 0.0)
+        for tp in session.query(TenantProductPrice).filter(
+            TenantProductPrice.tenant_id == current_user.tenant_id,
+            TenantProductPrice.product_id.in_(prod_ids)
+        ).all()
+    }
+
+    # 3. Bulk Query Current Stock (1 Batch SQL Query)
+    stock_map = {}
+    if is_static:
+        for p_id in prod_ids:
+            ti = tenant_inv_map.get(p_id)
+            stock_map[p_id] = float(ti.static_stock or 0.0) if ti else 0.0
+    else:
+        from sqlalchemy import case
+        stock_query = session.query(
+            InventoryLog.product_id,
+            func.sum(case((InventoryLog.log_type == 'in', InventoryLog.quantity), else_=0)) -
+            func.sum(case((InventoryLog.log_type == 'out', InventoryLog.quantity), else_=0))
+        ).join(Transaction, Transaction.id == InventoryLog.transaction_id)\
+         .filter(
+             Transaction.tenant_id == current_user.tenant_id,
+             InventoryLog.product_id.in_(prod_ids)
+         )\
+         .group_by(InventoryLog.product_id).all()
+
+        stock_map = {row[0]: float(row[1] or 0.0) for row in stock_query}
+
+    # 4. Bulk Query Has Transactions (1 Batch SQL Query)
+    tx_prod_ids = set(
+        r[0] for r in session.query(InventoryLog.product_id)
+        .join(Transaction, Transaction.id == InventoryLog.transaction_id)
+        .filter(
+            Transaction.tenant_id == current_user.tenant_id,
+            InventoryLog.product_id.in_(prod_ids)
+        ).distinct().all()
+    )
+
+    # Try Redis Cache
+    from app.core.redis import get_redis_client
+    import json
+    redis_client = None
+    cache_key = f"products_list:{current_user.tenant_id}:{skip}:{limit}:{search or ''}:{category_id or ''}"
+    try:
+        redis_client = get_redis_client()
+        if redis_client:
+            cached = redis_client.get(cache_key)
+            if cached:
+                return json.loads(cached)
+    except Exception as e:
+        logger.error(f"Redis get products error: {e}")
+
     results = []
     for p in products:
+        ti = tenant_inv_map.get(p.id)
+        purchase_price = float(ti.moving_average_cost or 0.0) if ti else 0.0
+        sell_price = tenant_price_map.get(p.id, 0.0)
+        stock_val = stock_map.get(p.id, 0.0)
+
         p_dict = {
             "id": p.id,
             "sku": p.sku,
@@ -85,14 +244,87 @@ def get_products(
             "category_id": p.category_id,
             "created_at": p.created_at,
             "updated_at": p.updated_at,
-            "unit_conversions": p.unit_conversions,
-            "purchase_price": p.tenant_inventories[0].moving_average_cost if p.tenant_inventories else 0.0,
-            "sell_price": p.tenant_prices[0].amount if p.tenant_prices else 0.0,
-            "current_stock": float(InventoryService.get_stock_level(session, current_user.tenant_id, p.id)),
-            "has_transactions": len(p.inventory_logs) > 0,
+            "unit_conversions": [
+                {"id": uc.id, "unit_name": uc.unit_name, "multiplier": float(uc.multiplier or 1.0)}
+                for uc in p.unit_conversions
+            ] if p.unit_conversions else [],
+            "purchase_price": purchase_price,
+            "sell_price": sell_price,
+            "current_stock": stock_val,
+            "has_transactions": p.id in tx_prod_ids,
         }
         results.append(p_dict)
+
+    # Save to Redis Cache for 10 minutes (600 seconds)
+    try:
+        if redis_client:
+            redis_client.setex(cache_key, 600, json.dumps(results, default=str))
+    except Exception as e:
+        logger.error(f"Redis set products error: {e}")
+
     return results
+
+def invalidate_tenant_products_cache(tenant_id: int = None):
+    from app.core.redis import get_redis_client
+    try:
+        redis_client = get_redis_client()
+        if redis_client:
+            pattern = f"products_list:{tenant_id}:*" if tenant_id else "products_list:*"
+            keys = redis_client.keys(pattern)
+            if keys:
+                redis_client.delete(*keys)
+                logger.info(f"Invalidated Redis products cache ({pattern}): {len(keys)} keys")
+    except Exception as e:
+        logger.error(f"Redis invalidate_tenant_products_cache error: {e}")
+
+# Cache global untuk kosakata produk di Redis (global scope)
+def get_product_vocabulary(session) -> set:
+    from app.core.redis import get_redis_client
+    import json
+    redis_client = None
+    redis_key = "product_vocab:global"
+    try:
+        redis_client = get_redis_client()
+        if redis_client:
+            cached = redis_client.get(redis_key)
+            if cached:
+                return set(json.loads(cached))
+    except Exception as e:
+        logger.error(f"Redis get_product_vocabulary error: {e}")
+
+    # Fallback ke database jika Redis offline / cache miss
+    import re
+    all_product_names = session.query(Product.name).all()
+    vocab = set()
+    for name_tuple in all_product_names:
+        p_name = name_tuple[0]
+        if p_name:
+            for word in re.findall(r'\w+', p_name.lower()):
+                if len(word) >= 2:
+                    vocab.add(word)
+
+    # Simpan ke Redis
+    try:
+        if redis_client:
+            # Simpan cache selama 24 jam
+            redis_client.setex(redis_key, 3600 * 24, json.dumps(list(vocab)))
+            logger.info(f"Cached product vocabulary to Redis (global): {len(vocab)} words")
+    except Exception as e:
+        logger.error(f"Redis set_product_vocabulary error: {e}")
+
+    return vocab
+
+def invalidate_product_vocabulary_cache():
+    from app.core.redis import get_redis_client
+    redis_key = "product_vocab:global"
+    try:
+        redis_client = get_redis_client()
+        if redis_client:
+            redis_client.delete(redis_key)
+            logger.info("Invalidated Redis product vocabulary cache (global)")
+    except Exception as e:
+        logger.error(f"Redis invalidate_product_vocabulary_cache error: {e}")
+
 
 @router.post("/products", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 def create_product(
@@ -104,11 +336,18 @@ def create_product(
     if existing:
         raise HTTPException(status_code=400, detail=f"SKU {product_in.sku} already exists globally")
 
-    embedding = get_embedding(product_in.name)
+    try:
+        embedding = get_onnx_embedding(product_in.name, is_query=False)
+    except Exception as e:
+        logger.error(f"Local ONNX embedding generation failed: {e}")
+        embedding = get_embedding(product_in.name)
+        
     db_product = Product(**product_in.model_dump(), embedding=embedding)
     session.add(db_product)
     session.commit()
     session.refresh(db_product)
+    invalidate_product_vocabulary_cache()
+    invalidate_tenant_products_cache(current_user.tenant_id)
     return db_product
 
 @router.put("/products/{sku}", response_model=ProductResponse)
@@ -126,7 +365,11 @@ def update_product(
     
     # If name is updated, update the embedding as well
     if "name" in update_data and update_data["name"] != db_product.name:
-        embedding = get_embedding(update_data["name"])
+        try:
+            embedding = get_onnx_embedding(update_data["name"], is_query=False)
+        except Exception as e:
+            logger.error(f"Local ONNX embedding generation failed during update: {e}")
+            embedding = get_embedding(update_data["name"])
         db_product.embedding = embedding
         
     for field, value in update_data.items():
@@ -134,7 +377,84 @@ def update_product(
         
     session.commit()
     session.refresh(db_product)
+    invalidate_product_vocabulary_cache()
+    invalidate_tenant_products_cache(current_user.tenant_id)
     return db_product
+
+@router.post("/products/merge", status_code=status.HTTP_200_OK)
+def merge_products(
+    payload: ProductMergeRequest,
+    session: SessionDep,
+    current_user: User = Depends(check_role([UserRole.ADMIN]))
+):
+    """
+    Menggabungkan item master source ke item master target secara transaksional.
+    Semua log persediaan, harga, dan relasi dialihkan, kemudian item source dihapus.
+    """
+    from app.models.inventory import Product, InventoryLog, TenantInventory, TenantProductPrice, TenantPricingRule
+    
+    # 1. Dapatkan source dan target product
+    source_prod = session.query(Product).filter(Product.sku == payload.source_sku).first()
+    target_prod = session.query(Product).filter(Product.sku == payload.target_sku).first()
+    
+    if not source_prod:
+        raise HTTPException(status_code=404, detail=f"Produk sumber dengan SKU {payload.source_sku} tidak ditemukan")
+    if not target_prod:
+        raise HTTPException(status_code=404, detail=f"Produk target dengan SKU {payload.target_sku} tidak ditemukan")
+        
+    if source_prod.id == target_prod.id:
+        raise HTTPException(status_code=400, detail="Produk sumber dan target tidak boleh sama")
+
+    # 2. Alihkan seluruh InventoryLog
+    session.query(InventoryLog).filter(InventoryLog.product_id == source_prod.id).update(
+        {InventoryLog.product_id: target_prod.id}
+    )
+
+    # 3. Alihkan / gabungkan TenantInventory
+    source_inventories = session.query(TenantInventory).filter(TenantInventory.product_id == source_prod.id).all()
+    for source_inv in source_inventories:
+        # Cek apakah target sudah memiliki inventory record di tenant ini
+        target_inv = session.query(TenantInventory).filter(
+            TenantInventory.tenant_id == source_inv.tenant_id,
+            TenantInventory.product_id == target_prod.id
+        ).first()
+        
+        if target_inv:
+            # Akumulasikan static stock dan perbarui last purchase price
+            target_inv.static_stock += source_inv.static_stock
+            if source_inv.last_purchase_price > target_inv.last_purchase_price:
+                target_inv.last_purchase_price = source_inv.last_purchase_price
+            session.delete(source_inv)
+        else:
+            # Alihkan relasi produk langsung
+            source_inv.product_id = target_prod.id
+
+    # 4. Alihkan / gabungkan TenantProductPrice
+    source_prices = session.query(TenantProductPrice).filter(TenantProductPrice.product_id == source_prod.id).all()
+    for source_price in source_prices:
+        target_price = session.query(TenantProductPrice).filter(
+            TenantProductPrice.tenant_id == source_price.tenant_id,
+            TenantProductPrice.product_id == target_prod.id
+        ).first()
+        
+        if target_price:
+            # Target yang menang, hapus data lama source
+            session.delete(source_price)
+        else:
+            source_price.product_id = target_prod.id
+
+    # 5. Alihkan TenantPricingRule
+    session.query(TenantPricingRule).filter(TenantPricingRule.product_id == source_prod.id).update(
+        {TenantPricingRule.product_id: target_prod.id}
+    )
+
+    # 6. Hapus master produk asal (source_prod)
+    session.delete(source_prod)
+    
+    session.commit()
+    invalidate_product_vocabulary_cache()
+    return {"message": f"Produk {payload.source_sku} berhasil digabungkan ke {payload.target_sku}"}
+
 
 @router.delete("/products/{sku}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_product(
@@ -148,6 +468,7 @@ def delete_product(
         
     session.delete(db_product)
     session.commit()
+    invalidate_product_vocabulary_cache()
     return None
 
 @router.post("/products/{sku}/adjust-stock")
@@ -358,6 +679,110 @@ def search_products_semantically(
         Product.embedding.cosine_distance(query_embedding)
     ).limit(search_query.limit).all()
 
+@router.post("/autocomplete-semantic", response_model=List[AutocompleteItemResponse])
+def autocomplete_semantic(
+    req: AutocompleteRequest,
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    """
+    Fast semantic search / autocomplete for items based on product name and SKU.
+    Uses local ONNX embedding generation and pgvector HNSW cosine search.
+    """
+    query_text = req.query.strip()
+    if not query_text:
+        return []
+
+    # 1. Ambil/bangun kosakata produk dari Redis RAM cache (global)
+    product_vocabulary = get_product_vocabulary(session)
+
+    # 2. Ekstrak kata dari kueri pencarian pengguna
+    import re
+    query_words = [w for w in re.findall(r'\w+', query_text.lower())]
+    if not query_words:
+        return []
+
+    # 3. Validasi apakah ada kata dalam kueri yang merupakan awalan dari kosakata produk kita
+    is_valid_product_query = any(
+        any(v_w.startswith(q_w) for v_w in product_vocabulary) 
+        for q_w in query_words
+    )
+    if not is_valid_product_query:
+        # Jika kata yang diketik tidak bermakna nama barang yang kita miliki, jangan tampilkan dropdown
+        return []
+
+    try:
+        query_vector = get_onnx_embedding(query_text, is_query=True)
+    except Exception as e:
+        logger.error(f"Local ONNX embedding generation failed: {e}")
+        query_vector = get_embedding(query_text)
+        
+    if not query_vector:
+        logger.warning("Embedding generation failed, falling back to standard text matching.")
+        products = session.query(Product).filter(
+            (Product.name.ilike(f"%{query_text}%") | Product.sku.ilike(f"%{query_text}%")) &
+            (~Product.name.ilike('potongan%'))
+        ).limit(req.limit).all()
+        
+        response_items = []
+        for p in products:
+            p_words = re.findall(r'\w+', p.name.lower())
+            # Validasi pencocokan awalan kata
+            if any(any(p_w.startswith(q_w) for p_w in p_words) for q_w in query_words):
+                response_items.append(
+                    AutocompleteItemResponse(
+                        id=p.id,
+                        sku=p.sku,
+                        name=p.name,
+                        category_id=p.category_id,
+                        current_stock=InventoryService.get_stock_level(session, current_user.tenant_id, p.id),
+                        sell_price=p.tenant_prices[0].amount if p.tenant_prices else 0.0,
+                        score=1.0
+                    )
+                )
+        return response_items
+
+    results = (
+        session.query(Product, Product.embedding.cosine_distance(query_vector).label("distance"))
+        .filter(Product.embedding.isnot(None))
+        .filter(~Product.name.ilike('potongan%'))
+        .order_by("distance")
+        .limit(req.limit * 3) # Ambil lebih banyak kandidat untuk difilter kata secara lokal
+        .all()
+    )
+
+    response_items = []
+    for p, distance in results:
+        score = 1.0 - float(distance) if distance is not None else 0.0
+        
+        # Batasi skor kemiripan agar tidak memunculkan hasil acak yang terlalu jauh
+        if score < 0.35:
+            continue
+            
+        p_words = re.findall(r'\w+', p.name.lower())
+        # Pastikan setidaknya ada kecocokan awalan salah satu kata pemicu
+        if not any(any(p_w.startswith(q_w) for p_w in p_words) for q_w in query_words):
+            continue
+
+        stock = InventoryService.get_stock_level(session, current_user.tenant_id, p.id)
+        sell_price = p.tenant_prices[0].amount if p.tenant_prices else 0.0
+        
+        response_items.append(
+            AutocompleteItemResponse(
+                id=p.id,
+                sku=p.sku,
+                name=p.name,
+                category_id=p.category_id,
+                current_stock=stock,
+                sell_price=sell_price,
+                score=score
+            )
+        )
+        if len(response_items) >= req.limit:
+            break
+
+    return response_items
+
 @router.get("/logs", response_model=List[InventoryLogResponse])
 def get_inventory_logs(
     session: SessionDep,
@@ -388,34 +813,138 @@ def get_contacts(
     
     contacts = query.order_by(Contact.name).offset(skip).limit(limit).all()
     
-    # Hitung sisa hutang dinamis untuk supplier
-    from app.models.accounting import Transaction, TransactionType
+    # Hitung sisa hutang dinamis untuk supplier berdasarkan Jurnal Akuntansi (Double-Entry)
+    from app.models.accounting import JournalEntry, Account, TransactionStatus
     from app.models.inventory import InventoryLog
-    from sqlalchemy import func, or_
+    from sqlalchemy import func
+    
+    # Ambil akun Utang Usaha (2-1101) milik tenant atau global
+    payable_account = session.query(Account).filter(
+        Account.code == "2-1101",
+        (Account.tenant_id == current_user.tenant_id) | (Account.tenant_id.is_(None))
+    ).order_by(Account.tenant_id.desc()).first()
     
     for c in contacts:
         if c.contact_type == "supplier":
-            # Dapatkan list transaction ID unik untuk supplier ini
-            tx_ids_sub = session.query(InventoryLog.transaction_id)\
-                .filter(InventoryLog.contact_id == c.id, InventoryLog.transaction_id.isnot(None))\
-                .distinct()\
-                .subquery()
+            if not payable_account:
+                c.current_balance = 0.0
+                continue
                 
-            # Jumlahkan total nominal transaksi PURCHASE yang belum lunas
-            unpaid_total = session.query(func.sum(Transaction.total_amount))\
+            # Ambil tx PEMBELIAN supplier yang masih OUTSTANDING (payment bukan 'lunas'/'cash'/'tunai')
+            from app.models.accounting import Transaction as Tx
+            from sqlalchemy import or_ as _or_
+            outstanding_tx_ids = session.query(InventoryLog.transaction_id)\
+                .join(Tx, Tx.id == InventoryLog.transaction_id)\
                 .filter(
-                    Transaction.id.in_(tx_ids_sub),
-                    Transaction.tenant_id == current_user.tenant_id,
-                    Transaction.transaction_type == TransactionType.PURCHASE,
-                    or_(
-                        Transaction.payment_method.is_(None),
-                        Transaction.payment_method != "lunas"
+                    InventoryLog.contact_id == c.id,
+                    InventoryLog.transaction_id.isnot(None),
+                    InventoryLog.log_type == 'in',
+                    Tx.tenant_id == current_user.tenant_id,
+                    Tx.status == TransactionStatus.POSTED,
+                    _or_(
+                        Tx.payment_method.notin_(['lunas', 'cash', 'tunai']),
+                        Tx.payment_method.is_(None)
                     )
-                ).scalar()
-            
-            c.current_balance = unpaid_total if unpaid_total is not None else 0.0
+                )\
+                .distinct()\
+                .all()
+            outstanding_ids = [r[0] for r in outstanding_tx_ids]
+
+            if not outstanding_ids:
+                c.current_balance = 0.0
+                continue
+
+            # Hitung total kredit akun 2-1101 dari tx outstanding
+            total_kredit = session.query(
+                func.coalesce(func.sum(JournalEntry.credit), 0)
+            ).filter(
+                JournalEntry.transaction_id.in_(outstanding_ids),
+                JournalEntry.account_id == payable_account.id
+            ).scalar() or 0
+
+            c.current_balance = float(total_kredit)
             
     return contacts
+
+
+def _compute_supplier_balance(session, contact_id: int, tenant_id: int, payable_account) -> float:
+    """
+    Hitung saldo utang dagang supplier secara akurat dari jurnal akuntansi.
+
+    Solusi: Filter transaksi pembelian yang payment_method BUKAN 'lunas'.
+    Saat pelunasan diproses via endpoint /pay, original_tx.payment_method di-set = 'lunas'.
+    Sehingga: outstanding_debt = SUM kredit akun 2-1101 dari tx pembelian yang masih outstanding.
+    """
+    from app.models.accounting import JournalEntry, Transaction, TransactionStatus
+    from app.models.inventory import InventoryLog
+    from sqlalchemy import func, and_, or_
+
+    if not payable_account:
+        return 0.0
+
+    # Ambil transaction_id PEMBELIAN yang:
+    # 1. Terkait supplier ini via InventoryLog (log_type='in')
+    # 2. Status = POSTED
+    # 3. payment_method BUKAN 'lunas' (masih outstanding)
+    outstanding_tx_ids = session.query(InventoryLog.transaction_id)\
+        .join(Transaction, Transaction.id == InventoryLog.transaction_id)\
+        .filter(
+            InventoryLog.contact_id == contact_id,
+            InventoryLog.transaction_id.isnot(None),
+            InventoryLog.log_type == 'in',
+            Transaction.tenant_id == tenant_id,
+            Transaction.status == TransactionStatus.POSTED,
+            or_(
+                Transaction.payment_method.notin_(['lunas', 'cash', 'tunai']),
+                Transaction.payment_method.is_(None)
+            )
+        )\
+        .distinct()\
+        .all()
+    outstanding_tx_ids = [r[0] for r in outstanding_tx_ids]
+
+    if not outstanding_tx_ids:
+        return 0.0
+
+    # Hitung total kredit akun 2-1101 dari tx outstanding tersebut
+    total_kredit = session.query(
+        func.coalesce(func.sum(JournalEntry.credit), 0)
+    ).filter(
+        JournalEntry.transaction_id.in_(outstanding_tx_ids),
+        JournalEntry.account_id == payable_account.id
+    ).scalar() or 0
+
+    return float(total_kredit)
+
+
+@router.get("/contacts/{contact_id}", response_model=ContactResponse)
+def get_contact_detail(
+    contact_id: int,
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    """FIX #1: Endpoint baru untuk mendapat detail kontak tunggal dengan saldo utang yang dihitung fresh."""
+    from app.models.accounting import Account
+
+    db_contact = session.query(Contact).filter(
+        Contact.id == contact_id,
+        Contact.tenant_id == current_user.tenant_id
+    ).first()
+    if not db_contact:
+        raise HTTPException(status_code=404, detail="Kontak tidak ditemukan")
+
+    # Hitung saldo utang fresh jika supplier
+    if db_contact.contact_type == "supplier":
+        payable_account = session.query(Account).filter(
+            Account.code == "2-1101",
+            (Account.tenant_id == current_user.tenant_id) | (Account.tenant_id.is_(None))
+        ).order_by(Account.tenant_id.desc()).first()
+
+        db_contact.current_balance = _compute_supplier_balance(
+            session, contact_id, current_user.tenant_id, payable_account
+        )
+
+    return db_contact
 
 @router.post("/contacts", response_model=ContactResponse, status_code=status.HTTP_201_CREATED)
 def create_contact(contact_in: ContactCreate, session: SessionDep, current_user: CurrentUser):
@@ -537,8 +1066,15 @@ async def ai_parse_pricing_rule(
         raise HTTPException(status_code=400, detail="Text is required")
     
     result = await mcp_client.parse_pricing_rule(session, text)
+    
+    # Flatten: jika result berupa wrapper {parsed_data: {...}, processor: ...}
+    # ambil parsed_data sebagai root agar frontend selalu dapat flat structure
+    if isinstance(result, dict) and "parsed_data" in result and isinstance(result["parsed_data"], dict):
+        flat = result["parsed_data"]
+        flat["_processor"] = result.get("processor", "")
+        return flat
+    
     return result
-
 
 from fastapi import Response
 
@@ -673,7 +1209,29 @@ def delete_pricing_rule(
 @router.get("/uoms", response_model=List[UomResponse])
 def list_uoms(session: SessionDep, current_user: CurrentUser):
     """List all global units of measure"""
-    return session.query(Uom).all()
+    from app.core.redis import get_redis_client
+    import json
+    cache_key = "uoms_list:global"
+    try:
+        redis_client = get_redis_client()
+        if redis_client:
+            cached = redis_client.get(cache_key)
+            if cached:
+                return json.loads(cached)
+    except Exception as e:
+        logger.error(f"Redis get uoms error: {e}")
+
+    uoms = session.query(Uom).all()
+    results = [UomResponse.model_validate(u).model_dump(mode="json") for u in uoms]
+
+    try:
+        redis_client = get_redis_client()
+        if redis_client:
+            redis_client.setex(cache_key, 600, json.dumps(results, default=str))
+    except Exception as e:
+        logger.error(f"Redis set uoms error: {e}")
+
+    return results
 
 @router.post("/uoms", response_model=UomResponse)
 def create_uom(
@@ -696,6 +1254,9 @@ def create_uom(
     session.add(db_uom)
     session.commit()
     session.refresh(db_uom)
+
+    from app.core.redis import invalidate_tenant_cache
+    invalidate_tenant_cache(current_user.tenant_id, ["uoms"])
     return db_uom
 
 @router.put("/uoms/{uom_id}", response_model=UomResponse)
@@ -719,6 +1280,9 @@ def update_uom(
         
     session.commit()
     session.refresh(db_uom)
+
+    from app.core.redis import invalidate_tenant_cache
+    invalidate_tenant_cache(current_user.tenant_id, ["uoms"])
     return db_uom
 
 @router.delete("/uoms/{uom_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -733,6 +1297,9 @@ def delete_uom(
         raise HTTPException(status_code=404, detail="UoM tidak ditemukan")
     session.delete(db_uom)
     session.commit()
+
+    from app.core.redis import invalidate_tenant_cache
+    invalidate_tenant_cache(current_user.tenant_id, ["uoms"])
     return None
 
 @router.get("/public/stock")

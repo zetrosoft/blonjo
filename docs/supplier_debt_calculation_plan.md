@@ -23,3 +23,20 @@ Dokumen ini berisi rencana perbaikan untuk menghitung sisa utang secara dinamis 
 
 ---
 *Silakan berikan konfirmasi "Setuju" agar saya langsung memproses perbaikan ini.*
+
+---
+
+## ✅ Status Implementasi — 2026-08-03
+
+**Implementasi selesai** dengan 3 perbaikan (sesi pertama) + 1 perbaikan kritis (sesi kedua):
+
+| Fix | File | Detail |
+|-----|------|--------|
+| #1 — Endpoint Fresh | `sajen/app/api/v1/inventory.py` | Tambah `GET /contacts/{contact_id}` — menghitung saldo utang fresh saat endpoint dipanggil |
+| #2 — Filter log_type | `sajen/app/api/v1/inventory.py` | Tambah `InventoryLog.log_type == 'in'` pada subquery kalkulasi utang agar hanya transaksi pembelian yang masuk hitungan (bukan retur/dll) |
+| #3 — Frontend refresh | `blonjo/src/pages/master-data/SupplierPage.tsx` | `handleOpenProfile` kini fetch `GET /contacts/{id}` sebelum tampilkan dialog, saldo selalu real-time |
+| **#4 — Bug Kritis: Pelunasan tidak terdeteksi** | `sajen/app/api/v1/inventory.py` | Transaksi pelunasan (`pay_tx`) dibuat sebagai `EXPENSE` **tanpa InventoryLog** — contact_id = NULL. Subquery via `InventoryLog.contact_id` tidak pernah menangkap tx pelunasan, sehingga debit 2-1101 tidak dikurangi dari total utang. Fix: strategi 2-query — (1) kredit dari tx pembelian, (2) debit dari tx pelunasan yang ditemukan via `description CONTAINS ref_no` pembelian. |
+
+**Root Cause utama (final):** Transaksi pelunasan hutang tidak memiliki `InventoryLog`, sehingga tidak bisa diidentifikasi via `contact_id`. Solusinya: lacak via `reference_no` nota pembelian yang tercantum di `description` transaksi pelunasan (`"Pelunasan Utang untuk Nota {ref_no}"`).
+
+

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { 
   FileText, PieChart, Landmark, TrendingUp, ArrowRight,
-  Receipt, Wallet, Scale
+  Receipt, Wallet, Scale, BookOpen
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 
@@ -18,6 +18,14 @@ export default function ReportsHub() {
       path: '/reports/journals',
       color: 'text-blue-500',
       bg: 'bg-blue-50'
+    },
+    {
+      title: t('menu_general_ledger') || 'Buku Besar',
+      description: 'Buku jurnal detail yang menampilkan histori mutasi dan saldo berjalan untuk setiap pos akun COA.',
+      icon: BookOpen,
+      path: '/reports/general-ledger',
+      color: 'text-rose-500',
+      bg: 'bg-rose-50'
     },
     {
       title: t('menu_profit_loss'),
@@ -50,6 +58,14 @@ export default function ReportsHub() {
       path: '/reports/cash-flow',
       color: 'text-violet-500',
       bg: 'bg-violet-50'
+    },
+    {
+      title: t('menu_trial_balance') || 'Neraca Percobaan',
+      description: 'Laporan saldo debit dan kredit dari seluruh akun COA untuk mengukur keseimbangan pencatatan.',
+      icon: FileText,
+      path: '/reports/trial-balance',
+      color: 'text-cyan-500',
+      bg: 'bg-cyan-50'
     }
   ];
 

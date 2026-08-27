@@ -9,13 +9,13 @@ export function cn(...inputs: ClassValue[]) {
  * Format number into Indonesian Rupiah format
  * Example: 1250000 -> Rp 1.250.000
  */
-export function formatRp(val: number): string {
+export function formatRp(val: number, showDecimals: boolean = false): string {
   if (isNaN(val) || val === null || val === undefined) return 'Rp 0';
   return new Intl.NumberFormat('id-ID', {
     style: 'currency',
     currency: 'IDR',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2
+    minimumFractionDigits: showDecimals ? 2 : 0,
+    maximumFractionDigits: showDecimals ? 2 : 0
   }).format(val);
 }
 
