@@ -1026,25 +1026,48 @@ def update_transaction_draft(db: Session, transaction_id: int, trans_update: any
         db_transaction.total_amount = new_total
         
         if old_total != new_total:
+            is_sales = db_transaction.transaction_type == TransactionType.SALES
             debit_entries = [e for e in db_transaction.entries if e.debit > 0]
             credit_entries = [e for e in db_transaction.entries if e.credit > 0]
-            
-            sum_debit = sum(e.debit for e in debit_entries)
-            sum_credit = sum(e.credit for e in credit_entries)
-            
-            if sum_debit > 0 and sum_credit > 0:
-                for e in debit_entries:
-                    e.debit = (e.debit * new_total / sum_debit).quantize(Decimal("0.01"))
-                for e in credit_entries:
-                    e.credit = (e.credit * new_total / sum_credit).quantize(Decimal("0.01"))
+
+            if is_sales:
+                # Pisahkan sisi omzet/kas dan sisi HPP/persediaan agar tidak terdistorsi
+                rev_debits = [e for e in debit_entries if not (e.account and e.account.code.startswith("5-"))]
+                rev_credits = [e for e in credit_entries if not (e.account and e.account.code.startswith("1-13"))]
+                sum_rev_d = sum(e.debit for e in rev_debits)
+                sum_rev_c = sum(e.credit for e in rev_credits)
+
+                if sum_rev_d > 0 and sum_rev_c > 0:
+                    for e in rev_debits:
+                        e.debit = (e.debit * new_total / sum_rev_d).quantize(Decimal("0.01"))
+                    for e in rev_credits:
+                        e.credit = (e.credit * new_total / sum_rev_c).quantize(Decimal("0.01"))
+                    new_sum_rev_d = sum(e.debit for e in rev_debits)
+                    new_sum_rev_c = sum(e.credit for e in rev_credits)
+                    if new_sum_rev_d != new_total and rev_debits:
+                        rev_debits[0].debit += (new_total - new_sum_rev_d)
+                    if new_sum_rev_c != new_total and rev_credits:
+                        rev_credits[0].credit += (new_total - new_sum_rev_c)
+
+                # Rekalkulasi HPP ringkasan secara otomatis
+                adjust_summary_sales_hpp(db, tenant_id, db_transaction.transaction_date)
+            else:
+                sum_debit = sum(e.debit for e in debit_entries)
+                sum_credit = sum(e.credit for e in credit_entries)
                 
-                new_sum_debit = sum(e.debit for e in debit_entries)
-                new_sum_credit = sum(e.credit for e in credit_entries)
-                
-                if new_sum_debit != new_total and debit_entries:
-                    debit_entries[0].debit += (new_total - new_sum_debit)
-                if new_sum_credit != new_total and credit_entries:
-                    credit_entries[0].credit += (new_total - new_sum_credit)
+                if sum_debit > 0 and sum_credit > 0:
+                    for e in debit_entries:
+                        e.debit = (e.debit * new_total / sum_debit).quantize(Decimal("0.01"))
+                    for e in credit_entries:
+                        e.credit = (e.credit * new_total / sum_credit).quantize(Decimal("0.01"))
+                    
+                    new_sum_debit = sum(e.debit for e in debit_entries)
+                    new_sum_credit = sum(e.credit for e in credit_entries)
+                    
+                    if new_sum_debit != new_total and debit_entries:
+                        debit_entries[0].debit += (new_total - new_sum_debit)
+                    if new_sum_credit != new_total and credit_entries:
+                        credit_entries[0].credit += (new_total - new_sum_credit)
 
     # 2. Update Items & Inventory Logs (if provided)
     if trans_update.items is not None:

@@ -78,10 +78,37 @@ export function useSmartConfirm(
     const amount = parsedResult.total_amount;
 
     if (parsedResult.suggested_entries?.length) {
-      // Skala ulang dari AI berdasarkan total agregat jika jumlah berbeda dengan nominal user
-      const totalDebit = parsedResult.suggested_entries.reduce((sum: number, e: any) => sum + Number(e.debit || 0), 0);
-      const totalCredit = parsedResult.suggested_entries.reduce((sum: number, e: any) => sum + Number(e.credit || 0), 0);
-      const baseTotal = Math.max(totalDebit, totalCredit);
+      // Skala ulang hanya jika pengguna secara manual mengedit total_amount di form.
+      // Catatan Arsitektur:
+      // Backend /finance/transactions/parse sudah menghitung suggested_entries secara presisi.
+      // Pada transaksi SALES dengan jurnal perpetual, terdapat 2 pasang jurnal independen:
+      // (1) Kas/Bank vs Pendapatan Penjualan = nilai penjualan (amount)
+      // (2) HPP vs Persediaan = estimasi beban pokok
+      // Oleh karena itu, amount tidak boleh dibagi dengan totalDebit gabungan (Kas + HPP).
+      const isSales = parsedResult.transaction_type === 'sales';
+      let baseTotal = 0;
+
+      if (isSales) {
+        // Cari baris penjualan/omzet primer (kredit pada pendapatan, atau debet kas/bank selain HPP/Persediaan)
+        const revenueEntry = parsedResult.suggested_entries.find((e: any) =>
+          (e.account?.code?.startsWith('4-') || e.account?.account_type === 'revenue') && Number(e.credit || 0) > 0
+        );
+        if (revenueEntry) {
+          baseTotal = Number(revenueEntry.credit);
+        } else {
+          const cashEntry = parsedResult.suggested_entries.find((e: any) =>
+            !e.account?.code?.startsWith('5-') && !e.account?.code?.startsWith('1-13') && Number(e.debit || 0) > 0
+          );
+          baseTotal = cashEntry ? Number(cashEntry.debit) : 0;
+        }
+      }
+
+      // Fallback untuk non-sales atau jika deteksi sales tidak menemukan entri primer
+      if (baseTotal <= 0) {
+        const totalDebit = parsedResult.suggested_entries.reduce((sum: number, e: any) => sum + Number(e.debit || 0), 0);
+        const totalCredit = parsedResult.suggested_entries.reduce((sum: number, e: any) => sum + Number(e.credit || 0), 0);
+        baseTotal = Math.max(totalDebit, totalCredit);
+      }
 
       const ratio = (baseTotal > 0 && Math.abs(amount - baseTotal) > 0.01) ? amount / baseTotal : 1;
 
