@@ -78,19 +78,42 @@ export function useSmartConfirm(
     const amount = parsedResult.total_amount;
 
     if (parsedResult.suggested_entries?.length) {
-      // Skala ulang dari AI jika jumlah berbeda dengan nominal user
-      const anchor = parsedResult.suggested_entries.find((e: any) =>
-        (e.debit > 0 && e.credit === 0) || (e.credit > 0 && e.debit === 0)
-      );
-      const anchorVal = anchor ? Math.max(Number(anchor.debit), Number(anchor.credit)) : 0;
-      const ratio = anchorVal > 0 ? amount / anchorVal : 1;
+      // Skala ulang dari AI berdasarkan total agregat jika jumlah berbeda dengan nominal user
+      const totalDebit = parsedResult.suggested_entries.reduce((sum: number, e: any) => sum + Number(e.debit || 0), 0);
+      const totalCredit = parsedResult.suggested_entries.reduce((sum: number, e: any) => sum + Number(e.credit || 0), 0);
+      const baseTotal = Math.max(totalDebit, totalCredit);
 
-      setEntries(parsedResult.suggested_entries.map((e: any) => ({
+      const ratio = (baseTotal > 0 && Math.abs(amount - baseTotal) > 0.01) ? amount / baseTotal : 1;
+
+      const mapped = parsedResult.suggested_entries.map((e: any) => ({
         account_id: e.account_id.toString(),
-        debit:  Math.round(Number(e.debit)  * ratio),
-        credit: Math.round(Number(e.credit) * ratio),
+        debit:  ratio === 1 ? Math.round(Number(e.debit || 0)) : Math.round(Number(e.debit || 0) * ratio),
+        credit: ratio === 1 ? Math.round(Number(e.credit || 0)) : Math.round(Number(e.credit || 0) * ratio),
         account: e.account,
-      })));
+      }));
+
+      // Self-balancing: pastikan selisih pembulatan desimal otomatis diseimbangkan
+      const sumD = mapped.reduce((s: number, e: any) => s + e.debit, 0);
+      const sumC = mapped.reduce((s: number, e: any) => s + e.credit, 0);
+      const diff = sumD - sumC;
+
+      if (diff !== 0 && mapped.length > 0) {
+        if (diff > 0) {
+          // Debit > Kredit: selaraskan ke baris kredit terbesar
+          const maxCreditIdx = mapped.reduce((maxI: number, e: any, i: number, arr: any[]) => e.credit > arr[maxI].credit ? i : maxI, 0);
+          if (mapped[maxCreditIdx].credit > 0) {
+            mapped[maxCreditIdx].credit += diff;
+          }
+        } else {
+          // Kredit > Debit: selaraskan ke baris debit terbesar
+          const maxDebitIdx = mapped.reduce((maxI: number, e: any, i: number, arr: any[]) => e.debit > arr[maxI].debit ? i : maxI, 0);
+          if (mapped[maxDebitIdx].debit > 0) {
+            mapped[maxDebitIdx].debit += Math.abs(diff);
+          }
+        }
+      }
+
+      setEntries(mapped);
     } else {
       setEntries(buildDefaultEntries(parsedResult.transaction_type, amount, parsedResult.payment_method, parsedResult.description || parsedResult.raw_text));
     }

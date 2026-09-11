@@ -10,7 +10,7 @@
 
 import React, { useRef, useCallback, useState, useEffect } from 'react';
 import { cn } from '../lib/utils';
-import { fetchClient } from '../api/client';
+import apiClient from '../api/client';
 
 interface SmartTextareaProps {
   value: string;
@@ -100,11 +100,11 @@ export function SmartTextarea({
   useEffect(() => {
     const loadAutocompleteData = async () => {
       try {
-        const prodData = await fetchClient('/inventory/products');
+        const prodData: any = await apiClient.get('/inventory/products');
         if (Array.isArray(prodData)) {
           setProducts(prodData);
         }
-        const suppData = await fetchClient('/inventory/contacts?contact_type=supplier&limit=200');
+        const suppData: any = await apiClient.get('/inventory/contacts?contact_type=supplier&limit=200');
         if (Array.isArray(suppData)) {
           setSuppliers(suppData);
         }
@@ -115,7 +115,7 @@ export function SmartTextarea({
     
     const loadSettings = async () => {
       try {
-        const res = await fetchClient('/finance/compass/summary');
+        const res: any = await apiClient.get('/finance/compass/summary');
         if (res && typeof res.maintenance_stock === 'boolean') {
           setMaintenanceStock(res.maintenance_stock);
         }
@@ -195,10 +195,7 @@ export function SmartTextarea({
       }
       searchTimeoutRef.current = setTimeout(async () => {
         try {
-          const res = await fetchClient('/inventory/autocomplete-semantic', {
-            method: 'POST',
-            body: JSON.stringify({ query, limit: 50 })
-          });
+          const res: any = await apiClient.post('/inventory/autocomplete-semantic', { query, limit: 50 });
           if (Array.isArray(res)) {
             const mapped = res.map(p => ({
               type: 'product' as const,
@@ -231,10 +228,7 @@ export function SmartTextarea({
       }
       searchTimeoutRef.current = setTimeout(async () => {
         try {
-          const res = await fetchClient('/inventory/autocomplete-semantic', {
-            method: 'POST',
-            body: JSON.stringify({ query, limit: 50 })
-          });
+          const res: any = await apiClient.post('/inventory/autocomplete-semantic', { query, limit: 50 });
           if (Array.isArray(res)) {
             const mapped = res.map(p => ({
               type: 'product' as const,
@@ -295,10 +289,7 @@ export function SmartTextarea({
         }
         searchTimeoutRef.current = setTimeout(async () => {
           try {
-            const res = await fetchClient('/inventory/autocomplete-semantic', {
-              method: 'POST',
-              body: JSON.stringify({ query, limit: 50 })
-            });
+            const res: any = await apiClient.post('/inventory/autocomplete-semantic', { query, limit: 50 });
             if (Array.isArray(res) && res.length > 0) {
               const mapped = res.map(p => ({
                 type: 'product' as const,

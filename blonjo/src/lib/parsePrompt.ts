@@ -55,8 +55,9 @@ Aturan Ekstraksi:
     A. DISKON PER ITEM (INLINE): Jika ada diskon spesifik untuk satu barang, ANDA WAJIB mengurangi nilai diskon dari harga asli. Properti 'unit_price' WAJIB berupa HARGA NETTO (Harga Asli - Diskon per item). Properti 'discount' diisi nilai potongannya untuk log. Rumus: 'total' = qty * unit_price. (Agar HPP akurat).
     B. DISKON GLOBAL (TOTAL NOTA): Jika ada diskon di akhir nota yang memotong total keseluruhan, JANGAN ubah 'unit_price' item. Biarkan harga item utuh. Anda HANYA perlu memastikan 'total_amount' diisi dengan GRAND TOTAL (setelah dipotong diskon global). Sistem backend kami akan otomatis mendistribusikan selisihnya ke HPP. Jelaskan deteksi diskon ini (apakah Inline atau Global) di "_reasoning"!
 16. DETEKSI UANG MUKA / DP CUSTOMER (PENTING & WAJIB):
-    - Jika teks mengandung kata "DP", "Uang Muka", "Down Payment", "Deposit", atau "Panjar" dari pembeli/pelanggan (contoh: "Pendapatan DP Uang Muka dari Bu Hariyani", "Terima DP 500rb dari Pak Budi"), Anda WAJIB mengeset 'payment_method': "customer_deposit".
-    - JANGAN PERNAH mengeset 'payment_method' menjadi "cash" biasa jika ada penyebutan "DP" atau "Uang Muka". Ini mutlak agar sistem mendebit Kas dan mengkreditkan Uang Muka Penjualan (Kewajiban 2-1402) bukan Pendapatan Penjualan.
+    - HANYA BERLAKU UNTUK PENJUALAN (SALES): Aturan ini HANYA berlaku jika transaksi adalah PENJUALAN dari pembeli/pelanggan ke kita (contoh: "Pendapatan DP Uang Muka dari Bu Hariyani", "Terima DP 500rb dari Pak Budi"). Anda WAJIB mengeset 'payment_method': "customer_deposit".
+    - DILARANG KERAS MENERAPKAN 'customer_deposit' PADA TRANSAKSI PEMBELIAN (PURCHASE/BELANJA): Jika teks adalah nota/faktur pembelian dari supplier atau minimarket (misal: "Pembelian di PT. BAHAGIA SUMBER ABADI"), payment_method WAJIB mengikuti cara bayar faktur (contoh: "cash" atau "tempo").
+    - ANTI-SALAH DETEKSI KODE VARIAN PRODUK: Huruf singkatan nama produk seperti 'EDP' (contoh: "SOKLIN POWDET DET EDP"), 'SUDP', atau 'DP' di dalam nama barang BUKAN penanda Down Payment. Jangan terkecoh!
 17. Hanya keluarkan output dalam format JSON mentah tanpa markdown formatting (tanpa \`\`\`json).
 
 Contoh Input Ringkasan:

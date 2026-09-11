@@ -2,9 +2,12 @@ import os
 import base64
 import json
 import re
+import logging
 from celery import shared_task
 from sqlalchemy.orm import Session
 from google import genai
+
+logger = logging.getLogger(__name__)
 
 from app.core.database import SessionLocal
 from app.core.config import settings
@@ -255,8 +258,10 @@ def process_receipt_ocr(self, task_id: int):
                 "PENTING: Jangan pernah memasukkan kalimat pengantar/obrolan AI seperti 'Berikut adalah ekstraksi data...' atau 'Tabel markdown' ke dalam value JSON.\n"
                 "PENTING: Perhatikan Qty (Kuantitas) barang. Qty bisa berbentuk desimal (contoh: 2.00, 1.5). Pertahankan titik desimal secara akurat dan jangan sampai nilai (seperti 2.00) terdeteksi sebagai 1.\n"
                 "PENTING: Logika Akuntansi untuk Harga: Jika menemukan deretan angka setelah nama barang, ingat rumus (Kuantitas x Harga Satuan = Subtotal). Jangan asal menebak kuantitas = 1 jika terdapat angka yang masuk akal sebagai kuantitas di baris tersebut.\n"
+                "PENTING: NOTASI TULISAN TANGAN RUPIAH & RIBUAN: Pada nota tulisan tangan Indonesia, angka ribuan sering disingkat menggunakan simbol strip/garis atau dua nol kecil di atas (contoh: '240.-', '240.00-', '240 00' = Rp 240.000, '140.-' = Rp 140.000, '380.-' = Rp 380.000, atau harga '2400' dengan qty 10 dan jumlah 240rb berarti harga satuan Rp 24.000). Total belanja HARUS merupakan penjumlahan matematis baris-baris tersebut. DILARANG KERAS mengartikan angka nota sebagai puluhan/ratusan rupiah jika konteks belanja ritel jelas ribuan.\n"
                 "PENTING: PEMBERSIHAN KODE BARANG & ANTI-HALUSINASI: Jika nama barang diawali oleh kode singkatan pabrik/kemasan (seperti '26L.HCSLP M600G501BB DTRG LIQ BERRY'), ambil deskripsi jenis produk utama (seperti 'DTRG LIQ BERRY' atau 'DETERJEN LIQUID BERRY') beserta spesifikasi ukurannya. DILARANG KERAS mengganti teks nama barang di nota dengan nama produk lain yang TIDAK TERTERA di nota (misalnya mengganti produk deterjen menjadi Minyak Kayu Putih). Jika nama barang berupa kode/singkatan pabrik, WAJIB tuliskan deskripsi teks tersebut persis seperti yang terbaca.\n"
                 "PENTING: ATURAN NOTA MULTI-KOLOM QTY (BSR, TGH, KCL): Jika nota memiliki 3 kolom kuantitas (BSR/Besar, TGH/Tengah, KCL/Kecil), ambil nilai Qty dari kolom yang bernilai > 0 dengan satuan (unit) yang relevan (misal 'box', 'pack', 'pcs'). Gunakan nilai pada kolom NETO sebagai total harga per item ('subtotal'), dan hitung harga per unit ('unit_price') dari (Nilai Neto / Qty).\n"
+                "PENTING: DETEKSI DISKON ITEM DISTRIBUTOR: Jika nota memiliki kolom 'Discount Product', 'Discount Customer', 'Disc', atau 'Potongan', ambil jumlah diskon tersebut ke field 'discount_amount'. Jika ada kolom 'Discount Product' dan 'Discount Customer', jumlahkan keduanya. Pastikan 'subtotal' adalah nilai bersih (netto / kolom JUMLAH).\n"
                 "PENTING: Ekstrak secara wajib nama merchant/toko/supplier dari bagian paling atas nota (kop surat) meskipun bentuknya terpisah atau kotor.\n"
                 "PENTING: Klasifikasi Transaksi: Jika nota diterbitkan oleh pihak eksternal (minimarket, grosir, supplier) kepada kita, maka transaction_type WAJIB diset 'purchase'. Jangan terkecoh dengan tulisan 'Nota Penjualan' di kertas, karena itu adalah penjualan dari sisi mereka, namun merupakan pembelian (pengeluaran) dari sisi kita."
             )
@@ -272,12 +277,12 @@ Gunakan data dari "GLOBAL GOLDEN TEMPLATES" jika pola nota mirip (terutama untuk
 
 Skema JSON:
 {{
-  "transaction": {{ "date": "YYYY-MM-DD", "invoice_number": "string" }},
+  "transaction": {{ "date": "YYYY-MM-DD", "invoice_number": "string", "payment_method": "cash|transfer|qris|tempo" }},
   "merchant": {{ "brand_name": "string", "address": "string" }},
-  "summary": {{ "grand_total": number }},
+  "summary": {{ "grand_total": number, "discount_total": number }},
   "transaction_type": "purchase|sales|expense",
   "items": [
-    {{ "product_name": "string", "quantity": number, "unit_price": number, "subtotal": number }}
+    {{ "product_name": "string", "quantity": number, "unit_price": number, "discount_amount": number, "subtotal": number }}
   ]
 }}
 """
@@ -297,28 +302,25 @@ Skema JSON:
             token_out = 0
             prompt = "MCP provided structured JSON directly."
 
-        # Check Semantic AI Transaction Signature in Postgres DB
-        if isinstance(parsed_data, dict):
-            merchant = (parsed_data.get("merchant") or {}).get("name") or parsed_data.get("toko") or parsed_data.get("contact_name") or ""
-            tgl = parsed_data.get("transaction_date") or ""
-            total = float(parsed_data.get("total_amount") or parsed_data.get("total") or 0)
-            
-            if total > 0 and tgl:
-                from app.models.accounting import Transaction, TransactionStatus
-                existing_tx = db.query(Transaction).filter(
-                    Transaction.tenant_id == task.tenant_id,
-                    Transaction.transaction_date == tgl,
-                    Transaction.total_amount == total,
-                    Transaction.status == TransactionStatus.POSTED
-                ).first()
-                if existing_tx:
-                    parsed_data["is_duplicate"] = True
-                    parsed_data["duplicate_warning"] = f"⚠️ DUPLIKASI AI DETECTED: Struk dari '{merchant or 'Supplier'}' (Tanggal: {tgl}, Total: Rp {total:,.0f}) SUDAH PERNAH DICATAT pada Transaksi Ref: {existing_tx.reference_no}."
-                    logger.warning(f"Semantic AI Duplicate match found for task {task.id}: {parsed_data['duplicate_warning']}")
-
-        # Fast-Path Entity Semantic Normalization (Learned Alias Memory)
+        # Fast-Path Entity Semantic Normalization & Math Reconciler (Learned Alias Memory)
         from app.services.ocr_normalizer import apply_ocr_entity_aliases
         parsed_data = apply_ocr_entity_aliases(db, task.tenant_id, parsed_data)
+
+        # Check Semantic AI Transaction Signature using Universal Multi-Vector Semantic Basket Matcher
+        if isinstance(parsed_data, dict):
+            from app.services.ocr_normalizer import find_semantic_basket_duplicate
+            dup_check = find_semantic_basket_duplicate(
+                db=db,
+                tenant_id=task.tenant_id,
+                parsed_data=parsed_data,
+                current_task_id=task.id
+            )
+            if dup_check.get("is_duplicate", False):
+                parsed_data["is_duplicate"] = True
+                parsed_data["duplicate_warning"] = dup_check.get("duplicate_warning")
+                logger.warning(f"Semantic AI Duplicate match found for task {task.id}: {parsed_data['duplicate_warning']}")
+            else:
+                parsed_data["is_duplicate"] = False
 
         task.extracted_data = parsed_data
         task.status = OCRStatus.COMPLETED

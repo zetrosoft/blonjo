@@ -167,7 +167,7 @@ export function ManualEntryTab({
                         <SelectContent>
                           {accounts.map((acc) => (
                             <SelectItem key={acc.id} value={acc.id.toString()}>
-                              <span className="font-mono text-xs mr-2 opacity-60">[{acc.code}]</span> {acc.name}
+                              <span className="font-mono text-xs mr-2 opacity-60">[{acc.code}]</span> {t(acc.name)}
                             </SelectItem>
                           ))}
                         </SelectContent>

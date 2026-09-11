@@ -180,32 +180,66 @@ def _map_rich_schema_to_frontend(extracted_data: dict) -> dict:
         if not isinstance(item, dict):
             continue
         
-        # Cari diskon secara dinamis menggunakan regex/fuzzy key match
-        discount_val = 0.0
-        for k, v in item.items():
-            if any(x in k.lower() for x in ["discount", "diskon", "potongan"]):
-                try:
-                    discount_val = float(v)
-                    break
-                except:
-                    pass
+        raw_product_name = item.get("product_name") or item.get("nama_barang") or item.get("item_name") or item.get("name") or ""
+        item_qty = item.get("quantity") or item.get("kuantitas") or item.get("qty") or 1
+        try:
+            item_qty = float(item_qty)
+        except (ValueError, TypeError):
+            item_qty = 1.0
 
-        # Jika item sudah dalam format lama dan punya diskon, pertahankan format
+        item_subtotal = item.get("subtotal") or item.get("jumlah") or item.get("total") or item.get("Jumlah") or item.get("neto") or 0.0
+        try:
+            item_subtotal = float(item_subtotal)
+        except (ValueError, TypeError):
+            item_subtotal = 0.0
+
+        item_price = item.get("unit_price") or item.get("harga_satuan") or item.get("price") or item.get("Harga @") or 0.0
+        try:
+            item_price = float(item_price)
+        except (ValueError, TypeError):
+            item_price = 0.0
+
+        # Cari diskon secara dinamis (termasuk kolom terpisah discount_product + discount_customer pada faktur distributor)
+        discount_val = 0.0
+        disc_prod = item.get("discount_product") or 0.0
+        disc_cust = item.get("discount_customer") or 0.0
+        try:
+            total_distro_disc = float(disc_prod) + float(disc_cust)
+        except (ValueError, TypeError):
+            total_distro_disc = 0.0
+
+        if total_distro_disc > 0:
+            discount_val = total_distro_disc
+        else:
+            for k, v in item.items():
+                if any(x in k.lower() for x in ["discount", "diskon", "potongan", "disc"]):
+                    try:
+                        parsed_val = float(v)
+                        if parsed_val > 0:
+                            discount_val = parsed_val
+                            break
+                    except:
+                        pass
+
+        # Self-Healing: Jika diskon 0 namun (qty * price) > subtotal, selisihnya adalah diskon tersirat
+        if discount_val == 0.0 and item_qty > 0 and item_price > 0 and item_subtotal > 0:
+            gross = item_qty * item_price
+            if gross > item_subtotal and (gross - item_subtotal) >= 1.0:
+                discount_val = round(gross - item_subtotal, 2)
+
+        # Jika item_price 0 / kosong tapi subtotal ada:
+        if (not item_price or item_price == 0.0) and item_subtotal > 0 and item_qty > 0:
+            item_price = round((item_subtotal + discount_val) / item_qty, 2)
+
+        # Jika item sudah dalam format lama, pertahankan dan perbarui discount
         if "name" in item and "product_name" not in item and "nama_barang" not in item and "item_name" not in item:
             item_mapped = {**item}
             item_mapped["discount"] = discount_val
             item_mapped["ocr_name"] = item.get("name", "")
+            item_mapped["price"] = item_price
+            item_mapped["total"] = item_subtotal
             mapped_data["items"].append(item_mapped)
             continue
-            
-        raw_product_name = item.get("product_name") or item.get("nama_barang") or item.get("item_name") or item.get("name") or ""
-        item_qty = item.get("quantity") or item.get("kuantitas") or item.get("qty") or 1
-        item_subtotal = item.get("subtotal") or item.get("jumlah") or item.get("total") or item.get("Jumlah") or 0.0
-        item_price = item.get("unit_price") or item.get("harga_satuan") or item.get("price") or item.get("Harga @") or 0.0
-        
-        # Jika item_price 0 / kosong tapi subtotal ada, hitung item_price = subtotal / qty
-        if (not item_price or item_price == 0.0) and item_subtotal > 0 and item_qty > 0:
-            item_price = item_subtotal / item_qty
 
         mapped_data["items"].append({
             "name": raw_product_name,
@@ -243,98 +277,29 @@ async def upload_receipt(
         raise HTTPException(status_code=400, detail="Invalid file extension.")
 
     file_bytes = await file.read()
-    from app.services.vision_matcher import compute_image_signature, hamming_distance
-    img_phash = compute_image_signature(file_bytes)
-
-    # Check if duplicate file task exists for this tenant (by Visual pHash or filename/file size match)
-    existing_tasks = session.query(OCRTask).filter(
-        OCRTask.tenant_id == current_user.tenant_id,
-        OCRTask.status.in_([OCRStatus.COMPLETED, OCRStatus.CORRECTED])
-    ).order_by(OCRTask.id.desc()).limit(50).all()
-
-    existing_task = None
-    if img_phash:
-        for t in existing_tasks:
-            if t.image_hash:
-                dist = hamming_distance(t.image_hash, img_phash)
-                if dist <= 10:  # <= 10 bits difference out of 64 bits (>= 85% visual similarity)
-                    existing_task = t
-                    print(f"[OCR Upload] Visual pHash match found! Task ID {t.id} (Hamming Distance: {dist})")
-                    break
-
-    if not existing_task:
-        file_size = len(file_bytes)
-        for t in existing_tasks:
-            if t.file_name == file.filename:
-                existing_task = t
-                break
-            if t.file_path and os.path.exists(t.file_path):
-                try:
-                    if os.path.getsize(t.file_path) == file_size:
-                        existing_task = t
-                        break
-                except Exception:
-                    pass
-
-    if existing_task and existing_task.extracted_data:
-        from app.models.accounting import Transaction
-        d = existing_task.corrected_data or existing_task.extracted_data
-        tx_total = d.get("total_amount") or d.get("total") or d.get("grand_total")
-        
-        has_active_tx = False
-        if tx_total:
-            try:
-                tot_val = float(tx_total)
-                active_tx = session.query(Transaction).filter(
-                    Transaction.tenant_id == current_user.tenant_id,
-                    Transaction.total_amount == tot_val
-                ).first()
-                if active_tx:
-                    has_active_tx = True
-            except Exception as e:
-                print(f"[OCR Upload] Transaction check exception: {e}")
-        
-        if has_active_tx:
-            # Transaksi aktif masih ada di buku besar -> tandai sebagai duplikat
-            setattr(existing_task, "is_duplicate", True)
-            return existing_task
-        elif existing_task.corrected_data:
-            # Transaksi dihapus di buku besar, TETAPI user pernah mengoreksi/mengedit nota ini.
-            # REUSE data koreksi tersimpan agar hasil editan user tidak hilang!
-            print(f"[OCR Upload] Task ID {existing_task.id} memiliki data koreksi tersimpan. Memuat ulang corrected_data untuk user!")
-            setattr(existing_task, "is_duplicate", False)
-            setattr(existing_task, "is_reused_correction", True)
-            return existing_task
-        else:
-            print(f"[OCR Upload] Task ID {existing_task.id} matched pHash/filename, BUT its transaction was DELETED and no corrections exist. Running fresh scan!")
-            existing_task = None
-
-    if existing_task and existing_task.extracted_data:
-        # Mark as duplicate and return existing completed OCR task directly
-        setattr(existing_task, "is_duplicate", True)
-        return existing_task
+    from app.services.vision_matcher import compute_image_signature
+    img_phash_val = compute_image_signature(file_bytes)
 
     safe_filename = f"{current_user.id}_{uuid.uuid4()}{ext}"
     file_path = os.path.join(UPLOAD_DIR, safe_filename)
     with open(file_path, "wb") as buffer:
         buffer.write(file_bytes)
 
-    # Create DB Record
-    new_task = OCRTask(
+    task = OCRTask(
         tenant_id=current_user.tenant_id,
         user_id=current_user.id,
         file_name=file.filename,
         file_path=file_path,
-        image_hash=img_phash
+        status=OCRStatus.PENDING,
+        image_hash=img_phash_val,
     )
-    session.add(new_task)
+    session.add(task)
     session.commit()
-    session.refresh(new_task)
+    session.refresh(task)
 
-    # Dispatch to Celery Worker
-    process_receipt_ocr.delay(new_task.id)
+    process_receipt_ocr.delay(task.id)
 
-    return new_task
+    return task
 
 @router.get("/tasks", response_model=List[OCRTaskResponse])
 def get_ocr_tasks(
@@ -361,48 +326,45 @@ def get_ocr_tasks(
 def get_ocr_task_detail(
     task_id: int,
     session: SessionDep,
-    current_user: CurrentUser
+    current_user: CurrentUser,
 ):
     """
-    Get the status and results of a specific OCR task.
+    Get detailed result of an OCR task by ID.
+    Supports smart continuous polling:
+    - If status == PENDING/PROCESSING, returns instantly.
+    - If completed, returns extracted_data.
+    - Uses Universal Multi-Vector Semantic Basket Duplicate Matcher to detect actual active transactions.
     """
-    task = session.query(OCRTask).filter(OCRTask.id == task_id, OCRTask.user_id == current_user.id, OCRTask.tenant_id == current_user.tenant_id).first()
+    task = session.query(OCRTask).filter(
+        OCRTask.id == task_id,
+        OCRTask.tenant_id == current_user.tenant_id,
+    ).first()
+
     if not task:
-        raise HTTPException(status_code=404, detail="OCR Task not found")
-    
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="OCR task tidak ditemukan",
+        )
+
+    if task.extracted_data or task.corrected_data:
+        from app.services.ocr_normalizer import find_semantic_basket_duplicate
+        
+        dup_check = find_semantic_basket_duplicate(
+            db=session,
+            tenant_id=current_user.tenant_id,
+            parsed_data=task.corrected_data or task.extracted_data,
+            current_task_id=task.id
+        )
+        if dup_check.get("is_duplicate", False):
+            setattr(task, "is_duplicate", True)
+            setattr(task, "duplicate_warning", dup_check.get("duplicate_warning"))
+        else:
+            setattr(task, "is_duplicate", False)
+
     if task.extracted_data:
         from app.services.ocr_normalizer import apply_ocr_entity_aliases
         task.extracted_data = apply_ocr_entity_aliases(session, task.tenant_id, task.extracted_data)
         task.extracted_data = _map_rich_schema_to_frontend(task.extracted_data)
-        if isinstance(task.extracted_data, dict) and task.extracted_data.get("is_duplicate"):
-            setattr(task, "is_duplicate", True)
-            
-    if task.image_hash and not getattr(task, "is_duplicate", False):
-        from app.services.vision_matcher import hamming_distance
-        from app.models.accounting import Transaction
-        
-        older_dup = session.query(OCRTask).filter(
-            OCRTask.tenant_id == current_user.tenant_id,
-            OCRTask.id < task.id,
-            OCRTask.image_hash.isnot(None),
-            OCRTask.status.in_([OCRStatus.COMPLETED, OCRStatus.CORRECTED])
-        ).order_by(OCRTask.id.desc()).first()
-        
-        if older_dup and older_dup.image_hash:
-            if hamming_distance(task.image_hash, older_dup.image_hash) <= 10:
-                d = older_dup.corrected_data or older_dup.extracted_data or {}
-                tot_val = float(d.get("total_amount") or d.get("total") or 0)
-                
-                active_tx = None
-                if tot_val > 0:
-                    active_tx = session.query(Transaction).filter(
-                        Transaction.tenant_id == current_user.tenant_id,
-                        Transaction.total_amount == tot_val
-                    ).first()
-                
-                if active_tx:
-                    setattr(task, "is_duplicate", True)
-
     if task.corrected_data:
         task.corrected_data = _map_rich_schema_to_frontend(task.corrected_data)
     return task
@@ -546,21 +508,48 @@ def correct_ocr_task(
     from app.services.ocr_normalizer import record_ocr_entity_aliases
     record_ocr_entity_aliases(session, task.tenant_id, original, corrected)
     
+    # 3.6 Compute Universal Deep JSON Delta
+    from app.services.ocr_distiller import compute_deep_json_delta, distill_supplier_rules, upsert_supplier_rules
+    delta_summary = compute_deep_json_delta(original, corrected)
+    
     session.commit()
     session.refresh(task)
     
-    # 4. Auto-ingest ke RAG MCP (background thread — tidak blokir response)
-    #    Setiap koreksi dari pengguna = pembelajaran baru untuk nota serupa di masa depan
+    # 4. Background Async Distillation & RAG Ingest (Non-blocking)
+    #    Menyintesis aturan supplier baru dan menyimpannya ke database
     import threading, requests as _req, json as _json
     from app.core.config import settings as _settings
+    from app.core.database import SessionLocal
 
-    def _ingest_to_rag():
+    def _ingest_and_distill():
+        # A. Distilasi Aturan Supplier
+        try:
+            supplier_name = (
+                corrected.get("contact_name")
+                or corrected.get("supplier_name")
+                or corrected.get("toko")
+                or (corrected.get("merchant") or {}).get("name")
+                or original.get("contact_name")
+                or original.get("toko")
+                or ""
+            )
+            raw_text = task.raw_ocr_text or ""
+            if supplier_name and delta_summary:
+                distill_db = SessionLocal()
+                try:
+                    rules = distill_supplier_rules(distill_db, task.tenant_id, supplier_name, raw_text, delta_summary)
+                    if rules:
+                        upsert_supplier_rules(distill_db, task.tenant_id, supplier_name, rules, delta_summary)
+                finally:
+                    distill_db.close()
+        except Exception as _de:
+            print(f"[Rule Distiller] ❌ Background distillation error task {task.id}: {_de}")
+
+        # B. Auto-ingest ke RAG MCP
         try:
             raw_text = task.raw_ocr_text or ""
             if not raw_text or not task.corrected_data:
                 return
-            # Gunakan corrected_data (bukan extracted_data) sebagai expected_output
-            # agar model belajar dari versi yang sudah divalidasi pengguna
             payload = {
                 "raw_ocr_text": raw_text,
                 "expected_output": _json.dumps(task.corrected_data, ensure_ascii=False),
@@ -574,10 +563,9 @@ def correct_ocr_task(
             else:
                 print(f"[RAG Auto-Ingest] ⚠️ Task {task.id} gagal ingest: HTTP {resp.status_code} — {resp.text[:200]}")
         except Exception as _e:
-            # Jangan gagalkan koreksi hanya karena RAG ingest error
             print(f"[RAG Auto-Ingest] ❌ Error background ingest task {task.id}: {_e}")
 
-    threading.Thread(target=_ingest_to_rag, daemon=True).start()
+    threading.Thread(target=_ingest_and_distill, daemon=True).start()
 
     # Map back for response format compatibility
     if task.extracted_data:

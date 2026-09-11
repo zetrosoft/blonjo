@@ -367,14 +367,25 @@ def _extract_date(text: str) -> str:
 
 
 def _extract_payment_method(text: str) -> str:
-    """Ekstrak metode pembayaran dari teks."""
+    """Ekstrak metode pembayaran dari teks dengan boundary matching dan prioritas eksplisit."""
     lower = text.lower()
-    if any(kw in lower for kw in ["qris", "qr"]):
-        return "qris"
-    if any(kw in lower for kw in ["transfer", "tf", "bank", "bca", "mandiri", "bri", "bni", "cimb", "gopay", "ovo", "dana", "shopeepay"]):
+
+    # 1. Prioritas Utama: Cek tag eksplisit (contoh: 'metode pembayaran : cash', 'cara bayar : tunai')
+    if re.search(r'(?:metode\s+pembayaran|cara\s+bayar)\s*[:=]\s*(?:cash|tunai)', lower):
+        return "cash"
+    if re.search(r'(?:metode\s+pembayaran|cara\s+bayar)\s*[:=]\s*(?:transfer|tf|bank)', lower):
         return "transfer"
-    # Jangan tandai 'tempo' jika ada frasa 'hutang modal' / 'utang modal' / 'modal'
-    if any(kw in lower for kw in ["tempo", "kredit", "bon"]) or (any(kw in lower for kw in ["hutang", "utang"]) and "modal" not in lower):
+    if re.search(r'(?:metode\s+pembayaran|cara\s+bayar)\s*[:=]\s*(?:qris|qr)', lower):
+        return "qris"
+    if re.search(r'(?:metode\s+pembayaran|cara\s+bayar)\s*[:=]\s*(?:tempo|kredit|bon|utang|hutang)', lower):
+        return "tempo"
+
+    # 2. Cek keyword dengan word boundary (\b) agar tidak salah mencocokkan kata dalam nama produk (seperti 'brilian' mengandung 'bri', 'pembacaan' mengandung 'bca', 'perdana' mengandung 'dana')
+    if re.search(r'\b(qris|qr)\b', lower):
+        return "qris"
+    if re.search(r'\b(transfer|tf|bank|bca|mandiri|bri|bni|cimb|gopay|ovo|dana|shopeepay)\b', lower):
+        return "transfer"
+    if re.search(r'\b(tempo|kredit|bon)\b', lower) or (re.search(r'\b(hutang|utang)\b', lower) and "modal" not in lower):
         return "tempo"
     return "cash"
 
@@ -403,8 +414,10 @@ KEYWORDS_CAPITAL = [
 ]
 
 KEYWORDS_CUSTOMER_DEPOSIT = [
-    "tabungan customer", "tabungan pelanggan", "setor tabungan", "simpanan",
-    "paket lebaran", "angsuran lebaran", "cicilan lebaran", "setor paket", "titipan pelanggan",
+    "tabungan customer", "tabungan pelanggan", "setor tabungan", "setoran tabungan", "simpanan",
+    "paket lebaran", "angsuran lebaran", "cicilan lebaran", "setor paket", "setoran paket",
+    "paket sembako", "tabungan sembako", "tabungan paket", "titipan pelanggan", "titipan dana",
+    "dp customer", "dp pelanggan", "uang muka", "down payment", "panjar", "titipan", "tabungan",
 ]
 
 KEYWORDS_CUSTOMER_WITHDRAWAL = [
@@ -520,8 +533,8 @@ def _detect_type(text_lower: str) -> Optional[str]:
             return "capital_withdrawal"
         return "capital"
 
-    # Deteksi utilitas & BBM operasional spesifik terlebih dahulu
-    if any(kw in text_lower for kw in ["listrik", "pln", "token", "pdam", "internet", "wifi", "indihome", "speedy", "telepon", "pulsa", "bensin", "bbm", "pertalite", "pertamax", "solar", "spbu"]):
+    # Deteksi utilitas, BBM & biaya operasional spesifik terlebih dahulu
+    if any(kw in text_lower for kw in ["listrik", "pln", "token", "pdam", "internet", "wifi", "indihome", "speedy", "telepon", "pulsa", "bensin", "bbm", "pertalite", "pertamax", "solar", "spbu", "biaya operasional", "operasional", "pengeluaran toko", "biaya toko", "biaya kantor"]):
         return "operational"
 
     is_sales    = any(kw in text_lower for kw in KEYWORDS_SALES)
@@ -716,8 +729,9 @@ def build_minimal_prompt(normalized_text: str, today_date: str, coa_context: str
         "   PANDUAN PENTING: Angka/satuan yang berada paling belakang atau berdekatan dengan lambang harga ('@', 'x', 'Rp') adalah QTY transaksi Anda. Angka yang mendahuluinya adalah bagian dari NAMA BARANG.\n"
         "10. METODE PEMBAYARAN: Jika terdapat kata 'QRIS', 'QR', 'Transfer', 'TF', 'Bank', 'Gopay', 'Ovo', 'Dana', 'ShopeePay', Anda WAJIB mengeset payment_method: 'qris' atau 'transfer'. Ini penting agar sistem secara otomatis mendebit akun Bank (1-1102 / Non-Tunai) bukan Kas Tunai (1-1101).\n"
         "11. DETEKSI UANG MUKA / DP CUSTOMER (PENTING & WAJIB):\n"
-        "   - Jika teks mengandung kata 'DP', 'Uang Muka', 'Down Payment', 'Deposit', atau 'Panjar' dari pembeli/pelanggan (contoh: 'Pendapatan DP Uang Muka dari Bu Hariyani', 'Terima DP 500rb dari Pak Budi'), Anda WAJIB mengeset payment_method: 'customer_deposit'.\n"
-        "   - JANGAN PERNAH mengeset payment_method menjadi 'cash' biasa jika ada penyebutan 'DP' atau 'Uang Muka'. Ini mutlak agar sistem mendebit Kas dan mengkreditkan Uang Muka Penjualan (Kewajiban 2-1402) bukan Pendapatan Penjualan."
+        "   - HANYA BERLAKU UNTUK PENJUALAN (SALES): Aturan ini HANYA berlaku jika transaksi adalah PENJUALAN dari pembeli/pelanggan ke kita (contoh: 'Pendapatan DP Uang Muka dari Bu Hariyani', 'Terima DP 500rb dari Pak Budi'). Anda WAJIB mengeset payment_method: 'customer_deposit'.\n"
+        "   - DILARANG KERAS PADA PEMBELIAN (PURCHASE): Jika teks adalah nota/faktur pembelian dari supplier (contoh: 'Pembelian di PT. BAHAGIA SUMBER ABADI'), payment_method WAJIB mengikuti cara bayar faktur (contoh: 'cash' atau 'tempo').\n"
+        "   - ANTI-SALAH DETEKSI NAMA PRODUK: Singkatan nama varian produk seperti 'EDP' (contoh: 'SOKLIN POWDET DET EDP') BUKAN penanda Down Payment. Jangan terkecoh!"
     )
 
     coa_section = f"\n{coa_context.strip()}\n" if coa_context.strip() else ""

@@ -4,10 +4,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/ca
 import { Button } from '../../components/ui/button';
 import { SmartTextarea } from '../../components/SmartTextarea';
 import { VoiceRecorder } from '../../components/VoiceRecorder';
-import { ParsePreview, CONFIDENCE_MAP } from '../../components/ParsePreview';
+import { ParsePreview } from '../../components/ParsePreview';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../../components/ui/tooltip';
 import {
-  Sparkles, RotateCcw, Wand2, Send, FileText, ChevronRight, Loader2, Plus, AlertCircle, Camera
+  Sparkles, RotateCcw, Wand2, Send, FileText, ChevronRight, Loader2, Plus, AlertCircle, Camera, CheckCircle2
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { SmartNoteProps } from './types';
@@ -15,14 +15,15 @@ import { CameraModal } from '../../components/CameraModal';
 import { toast } from 'sonner';
 
 function DynamicOcrStatus() {
+  const { t } = useTranslation();
   const [phase, setPhase] = React.useState(0);
   const phases = React.useMemo(() => [
-    { text: "Mengunggah gambar terenkripsi...", icon: "📤" },
-    { text: "AI Vision memindai pola nota...", icon: "👁️" },
-    { text: "Mengekstrak teks mentah (OCR)...", icon: "🔍" },
-    { text: "Mencocokkan Golden Templates...", icon: "🧠" },
-    { text: "Penyelesaian akhir (Formatting JSON)...", icon: "⚡" },
-  ], []);
+    { text: t('tx_ocr_phase_1'), icon: "📤" },
+    { text: t('tx_ocr_phase_2'), icon: "👁️" },
+    { text: t('tx_ocr_phase_3'), icon: "🔍" },
+    { text: t('tx_ocr_phase_4'), icon: "🧠" },
+    { text: t('tx_ocr_phase_5'), icon: "⚡" },
+  ], [t]);
 
   React.useEffect(() => {
     const interval = setInterval(() => {
@@ -32,10 +33,10 @@ function DynamicOcrStatus() {
   }, [phases.length]);
 
   return (
-    <div className="flex flex-col items-center justify-center space-y-4 z-20 w-full h-full p-4 pointer-events-none">
-      <Loader2 className="w-10 h-10 text-primary animate-spin" />
-      <div className="flex items-center gap-3 text-sm font-medium text-foreground bg-background/90 px-5 py-2.5 rounded-full shadow-2xl border border-primary/30 ring-1 ring-primary/20">
-        <span className="text-xl">{phases[phase].icon}</span>
+    <div className="absolute bottom-2 left-2 z-20 pointer-events-none">
+      <div className="flex items-center gap-2 text-xs font-semibold text-foreground bg-background/95 px-3 py-1.5 rounded-full shadow-lg border border-primary/40 ring-1 ring-primary/20 animate-in fade-in">
+        <Loader2 className="w-3.5 h-3.5 text-primary animate-spin" />
+        <span className="text-sm">{phases[phase].icon}</span>
         <span className="animate-pulse whitespace-nowrap">{phases[phase].text}</span>
       </div>
     </div>
@@ -43,13 +44,14 @@ function DynamicOcrStatus() {
 }
 
 function DynamicParseStatus() {
+  const { t } = useTranslation();
   const [phase, setPhase] = React.useState(0);
   const phases = React.useMemo(() => [
-    { text: "Menganalisa konteks transaksi...", icon: "🧠" },
-    { text: "Mengekstrak entitas dan harga...", icon: "🔍" },
-    { text: "Memvalidasi perhitungan...", icon: "🧮" },
-    { text: "Menyusun jurnal otomatis...", icon: "⚡" },
-  ], []);
+    { text: t('tx_parse_phase_1'), icon: "🧠" },
+    { text: t('tx_parse_phase_2'), icon: "🔍" },
+    { text: t('tx_parse_phase_3'), icon: "🧮" },
+    { text: t('tx_parse_phase_4'), icon: "⚡" },
+  ], [t]);
 
   React.useEffect(() => {
     const interval = setInterval(() => {
@@ -59,10 +61,10 @@ function DynamicParseStatus() {
   }, [phases.length]);
 
   return (
-    <div className="flex flex-col items-center justify-center space-y-4 z-20 w-full h-full p-4 pointer-events-none">
-      <Wand2 className="w-10 h-10 text-primary animate-bounce" />
-      <div className="flex items-center gap-3 text-sm font-medium text-foreground bg-background/90 px-5 py-2.5 rounded-full shadow-2xl border border-primary/30 ring-1 ring-primary/20">
-        <span className="text-xl">{phases[phase].icon}</span>
+    <div className="absolute bottom-2 left-2 z-20 pointer-events-none">
+      <div className="flex items-center gap-2 text-xs font-semibold text-foreground bg-background/95 px-3 py-1.5 rounded-full shadow-lg border border-primary/40 ring-1 ring-primary/20 animate-in fade-in">
+        <Wand2 className="w-3.5 h-3.5 text-primary animate-bounce" />
+        <span className="text-sm">{phases[phase].icon}</span>
         <span className="animate-pulse whitespace-nowrap">{phases[phase].text}</span>
       </div>
     </div>
@@ -119,10 +121,10 @@ export function SmartNoteTab({
                 />
 
                 {(isUploading || isParsing) && (
-                  <div className="absolute inset-0 z-10 bg-background/60 backdrop-blur-sm rounded-md overflow-hidden border border-primary/20 cursor-wait flex items-center justify-center pointer-events-auto">
+                  <div className="absolute inset-0 z-10 bg-transparent rounded-md overflow-hidden border border-primary/30 cursor-wait pointer-events-none">
                     {/* Laser scan animation overlay */}
                     <div className="absolute left-0 w-full h-[2px] bg-primary shadow-[0_0_15px_rgba(34,197,94,1)] animate-scan pointer-events-none" />
-                    {/* Dynamic Status Component */}
+                    {/* Dynamic Status Component positioned at bottom-left */}
                     {isUploading ? <DynamicOcrStatus /> : <DynamicParseStatus />}
                   </div>
                 )}
@@ -147,8 +149,8 @@ export function SmartNoteTab({
                       </div>
                     </TooltipTrigger>
                     <TooltipContent side="left" className="bg-zinc-900 text-white border-zinc-800">
-                      <p className="font-bold">Kamera (Foto / Scan)</p>
-                      <p className="text-[10px] opacity-70">Ambil foto struk atau scan QR/barcode</p>
+                      <p className="font-bold">{t('tx_tooltip_camera_title')}</p>
+                      <p className="text-[10px] opacity-70">{t('tx_tooltip_camera_desc')}</p>
                     </TooltipContent>
                   </Tooltip>
 
@@ -176,8 +178,8 @@ export function SmartNoteTab({
                       </div>
                     </TooltipTrigger>
                     <TooltipContent side="left" className="bg-zinc-900 text-white border-zinc-800">
-                      <p className="font-bold">Upload Nota / File</p>
-                      <p className="text-[10px] opacity-70">Mendukung Gambar, PDF, Excel & Doc</p>
+                      <p className="font-bold">{t('tx_tooltip_upload_title')}</p>
+                      <p className="text-[10px] opacity-70">{t('tx_tooltip_upload_desc')}</p>
                     </TooltipContent>
                   </Tooltip>
 
@@ -193,8 +195,8 @@ export function SmartNoteTab({
                       </div>
                     </TooltipTrigger>
                     <TooltipContent side="left" className="bg-zinc-900 text-white border-zinc-800">
-                      <p className="font-bold">Voice Input</p>
-                      <p className="text-[10px] opacity-70">Rekam suara & konversi ke teks otomatis</p>
+                      <p className="font-bold">{t('tx_tooltip_voice_title')}</p>
+                      <p className="text-[10px] opacity-70">{t('tx_tooltip_voice_desc')}</p>
                     </TooltipContent>
                   </Tooltip>
                 </TooltipProvider>
@@ -277,7 +279,12 @@ export function SmartNoteTab({
                 {t('tx_preview_title')}
               </div>
               {parsedResult && (() => {
-                const conf = CONFIDENCE_MAP[parsedResult.confidence];
+                const confMap: Record<string, { label: string; icon: any; cls: string }> = {
+                  high:   { label: t('tx_accuracy_high'),  icon: CheckCircle2, cls: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30' },
+                  medium: { label: t('tx_accuracy_medium'),  icon: AlertCircle,  cls: 'text-amber-400 bg-amber-500/10 border-amber-500/30' },
+                  low:    { label: t('tx_accuracy_low'),  icon: AlertCircle,  cls: 'text-rose-400 bg-rose-500/10 border-rose-500/30' },
+                };
+                const conf = confMap[parsedResult.confidence] || confMap.medium;
                 const ConfIcon = conf.icon;
                 return (
                   <span className={cn(

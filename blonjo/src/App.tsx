@@ -115,8 +115,9 @@ export default function App() {
             </Route>
 
             
-            <Route path="/insights" element={<Navigate to="/insights/vibes-chat" replace />} />
-            <Route path="/insights/vibes-chat" element={<VibesChat />} />
+            <Route path="/insights" element={<Navigate to="/insights/sajen-intelligence" replace />} />
+            <Route path="/insights/sajen-intelligence" element={<VibesChat />} />
+            <Route path="/insights/vibes-chat" element={<Navigate to="/insights/sajen-intelligence" replace />} />
             <Route path="/insights/analytics" element={<VisualAnalyticsPage />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/settings/:tab" element={<Settings />} />

@@ -39,8 +39,7 @@ export function ConfirmJournalDialog({
         <DialogHeader>
           <DialogTitle>{t('tx_confirm_title')}</DialogTitle>
           <DialogDescription className="text-xs text-muted-foreground mt-1">
-            Periksa rincian jurnal otomatis di bawah ini sebelum disimpan ke dalam buku besar. 
-            Sistem telah menghitung HPP secara proporsional sesuai standar Perpetual PSAK EMKM.
+            {t('tx_confirm_desc')}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4">
@@ -69,7 +68,7 @@ export function ConfirmJournalDialog({
                                 return (
                                   <div className="flex items-center">
                                     <span className="font-mono text-xs mr-2 opacity-60">[{entry.account.code}]</span>
-                                    <span className="font-medium">{entry.account.name}</span>
+                                    <span className="font-medium">{t(entry.account.name)}</span>
                                   </div>
                                 );
                               }
@@ -78,18 +77,18 @@ export function ConfirmJournalDialog({
                                 return (
                                   <div className="flex items-center">
                                     <span className="font-mono text-xs mr-2 opacity-60">[{acc.code}]</span>
-                                    <span className="font-medium">{acc.name}</span>
+                                    <span className="font-medium">{t(acc.name)}</span>
                                   </div>
                                 );
                               }
-                              return <span className="text-muted-foreground italic">Pilih akun...</span>;
+                              return <span className="text-muted-foreground italic">{t('tx_select_account')}</span>;
                             })()}
                           </SelectValue>
                         </SelectTrigger>
                         <SelectContent>
                           {accounts.map((acc) => (
                             <SelectItem key={acc.id} value={acc.id.toString()}>
-                              <span className="font-mono text-xs mr-2 opacity-60">[{acc.code}]</span> {acc.name}
+                              <span className="font-mono text-xs mr-2 opacity-60">[{acc.code}]</span> {t(acc.name)}
                             </SelectItem>
                           ))}
                         </SelectContent>

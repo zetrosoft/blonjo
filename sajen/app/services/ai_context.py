@@ -130,16 +130,19 @@ def get_rag_context(db: Session, tenant_id: int = None, query_text: str = "", is
         except Exception as e:
             print(f"[RAG] MCP Vector search failed: {e}")
 
-    # MASTER DATA: Produk & kontak terdaftar sebagai referensi nama (Only for OCR)
-    is_complex_input = len(query_text) > 60
-    if is_complex_input and is_ocr:
-        products = db.query(Product.name).distinct().limit(5).all()
-        contacts = db.query(Contact.name).distinct().limit(3).all()
-        if products or contacts:
-            context += "\n--- MASTER DATA ---\n"
-            if products:
-                context += "ITEM: " + ", ".join([p[0] for p in products]) + "\n"
-            if contacts:
-                context += "KONTAK: " + ", ".join([c[0] for c in contacts]) + "\n"
+    # ATURAN DISTILASI KHUSUS SUPPLIER (Learned Business & Layout Rules)
+    if query_text and is_ocr:
+        try:
+            from app.services.ocr_distiller import get_supplier_rules_prompt
+            # Deteksi nama supplier potensial dari 5 baris pertama teks nota
+            lines = [l.strip() for l in query_text.splitlines() if l.strip()][:5]
+            for line in lines:
+                if len(line) >= 3 and not any(kw in line.lower() for kw in ["nota", "faktur", "invoice", "tanggal", "kepada", "alamat", "telp"]):
+                    sup_rules = get_supplier_rules_prompt(db, tenant_id, line)
+                    if sup_rules:
+                        context += sup_rules + "\n"
+                        break
+        except Exception as _re:
+            print(f"[RAG] Failed to inject supplier rules: {_re}")
 
     return context

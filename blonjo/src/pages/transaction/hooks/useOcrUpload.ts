@@ -117,14 +117,27 @@ export function useOcrUpload(
             }
 
             let hasInlineDiscount = false;
+            let sumItemSubtotals = 0;
             if (d.items && d.items.length > 0) {
               // Cek dulu apakah ada diskon per-item
               d.items.forEach((item: any) => {
+                const discProd = parseFloat(item.discount_product) || 0;
+                const discCust = parseFloat(item.discount_customer) || 0;
+                if (discProd > 0 || discCust > 0) {
+                  hasInlineDiscount = true;
+                  return;
+                }
                 for (const key of Object.keys(item)) {
-                  if (/discount|diskon|potongan/i.test(key)) {
+                  if (/discount|diskon|potongan|disc/i.test(key)) {
                     const val = parseFloat(item[key]);
                     if (!isNaN(val) && val > 0) { hasInlineDiscount = true; break; }
                   }
+                }
+                const itQty = parseFloat(item.quantity || item.qty || 1);
+                const itPrice = parseFloat(item.unit_price || item.price || 0);
+                const itSub = parseFloat(item.subtotal || item.total || item.neto || 0);
+                if (itQty > 0 && itPrice > 0 && itSub > 0 && (itQty * itPrice) > itSub && (itQty * itPrice - itSub) >= 1) {
+                  hasInlineDiscount = true;
                 }
               });
 
@@ -143,20 +156,41 @@ export function useOcrUpload(
                 // Ambil subtotal / neto
                 const subtotal = item.subtotal || item.total || item.jumlah || item.neto || 0;
 
-                let price = item.unit_price || item.price || item.harga_satuan || item.rate || 0;
-                // Jika unit_price 0 / kosong tapi subtotal ada, hitung unit_price = subtotal / qty
-                if ((!price || price === 0) && subtotal > 0 && qty > 0) {
-                  price = subtotal / qty;
-                }
-
                 let discount = 0;
-                // Hanya ambil jika key secara spesifik merujuk ke discount_amount / discount per item
-                if (item.discount_amount !== undefined && item.discount_amount !== null) {
+                // Dukung kolom spesifik distributor: discount_product + discount_customer
+                const discProd = parseFloat(item.discount_product) || 0;
+                const discCust = parseFloat(item.discount_customer) || 0;
+                if (discProd > 0 || discCust > 0) {
+                  discount = discProd + discCust;
+                } else if (item.discount_amount !== undefined && item.discount_amount !== null) {
                   discount = parseFloat(item.discount_amount) || 0;
                 } else if (item.discount_value !== undefined && item.discount_value !== null) {
                   discount = parseFloat(item.discount_value) || 0;
                 } else if (item.discount !== undefined && item.discount !== null) {
                   discount = parseFloat(item.discount) || 0;
+                } else if (item.potongan !== undefined && item.potongan !== null) {
+                  discount = parseFloat(item.potongan) || 0;
+                }
+
+                let price = item.unit_price || item.price || item.harga_satuan || item.rate || 0;
+                
+                // Self-Healing: Jika diskon 0 namun (qty * price) > subtotal, selisihnya adalah diskon tersirat
+                if (discount === 0 && price > 0 && subtotal > 0 && qty > 0 && (qty * price) > subtotal) {
+                  const impliedDisc = (qty * price) - subtotal;
+                  if (impliedDisc >= 1.0) {
+                    discount = Math.round(impliedDisc * 100) / 100;
+                  }
+                }
+
+                if (discount > 0 && subtotal > 0 && qty > 0) {
+                  // Standar Asli: Jika ada diskon, @ harga ditulis harga kotor agar (qty * price - diskon) = subtotal
+                  price = Math.round(((subtotal + discount) / qty) * 100) / 100;
+                } else if ((!price || price === 0) && subtotal > 0 && qty > 0) {
+                  price = Math.round((subtotal / qty) * 100) / 100;
+                }
+
+                if (subtotal > 0) {
+                  sumItemSubtotals += subtotal;
                 }
 
                 const qtyStr = qty ? `${qty} ${unit} @ ` : '';
@@ -171,7 +205,11 @@ export function useOcrUpload(
               text += `\n`;
             }
 
-            const total = d.total_amount || d.total || d.total_amount_idr || d.summary?.total_amount || d.summary?.total_amount_idr || d.summary?.total || d.summary?.grand_total || 0;
+            let total = d.total_amount || d.total || d.total_amount_idr || d.summary?.total_amount || d.summary?.total_amount_idr || d.summary?.total || d.summary?.grand_total || 0;
+            // Rekonsiliasi typo OCR dot-matrix (misal 204158 vs 204153 hasil sum item)
+            if (sumItemSubtotals > 0 && (!total || Math.abs(total - sumItemSubtotals) <= 10)) {
+              total = sumItemSubtotals;
+            }
             if (total) {
               text += (d.items && d.items.length > 0) ? `Total: ${total}` : `Total Belanja: ${total}`;
             }
@@ -187,8 +225,8 @@ export function useOcrUpload(
           const autoCorrected = d?._auto_corrected_entities;
 
           if (isDup) {
-            toast.warning('⚠️ DUPLIKASI BERKAS TERDETEKSI', {
-              description: `File '${task.file_name}' terdeteksi duplikat di database. Menampilkan foto nota asli tersimpan.`,
+            toast.warning('⚠️ DUPLIKASI NOTA TERDETEKSI', {
+              description: task.duplicate_warning || (task.extracted_data && task.extracted_data.duplicate_warning) || `Transaksi serupa untuk berkas '${task.file_name}' sudah pernah tercatat sebelumnya.`,
               duration: 8000
             });
           } else if (hasCorrection) {
@@ -299,8 +337,8 @@ export function useOcrUpload(
     setNoteText(text);
     const isDup = Boolean(task.is_duplicate || (task.extracted_data && task.extracted_data.is_duplicate));
     if (isDup) {
-      toast.warning('⚠️ DUPLIKASI BERKAS TERDETEKSI', {
-        description: `File '${task.file_name}' terdeteksi duplikat di database. Menampilkan foto nota asli tersimpan.`,
+      toast.warning('⚠️ DUPLIKASI NOTA TERDETEKSI', {
+        description: task.duplicate_warning || (task.extracted_data && task.extracted_data.duplicate_warning) || `Transaksi serupa untuk berkas '${task.file_name}' sudah pernah tercatat sebelumnya.`,
         duration: 8000
       });
     } else {

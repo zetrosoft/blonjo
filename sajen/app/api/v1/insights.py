@@ -398,6 +398,22 @@ def delete_chat_session(
     db.commit()
     return {"status": "deleted", "id": session_id}
 
+@router.delete("/sessions")
+def clear_all_chat_sessions(
+    db: Session = Depends(deps.get_db),
+    current_user: deps.CurrentUser = None
+):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    from app.models.chat import VibeChatSession
+    deleted_count = db.query(VibeChatSession).filter(
+        VibeChatSession.tenant_id == current_user.tenant_id,
+        VibeChatSession.user_id == current_user.id
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"status": "cleared", "deleted_sessions": deleted_count}
+
 @router.post("/chat")
 async def vibes_chat_endpoint(
     payload: ChatMessage,
@@ -455,29 +471,80 @@ async def vibes_chat_endpoint(
         db.commit()
     except Exception as e_db:
         logger.warning(f"[VibesChat] Session DB operation warning: {e_db}")
-        db.rollback()
+    # 0.5 LOAD PENGATURAN TOKO DARI DB
+    settings_dict = {}
+    try:
+        settings_rows = db.query(AppSetting).filter(
+            or_(AppSetting.tenant_id == current_user.tenant_id, AppSetting.tenant_id.is_(None))
+        ).all()
+        for s in settings_rows:
+            settings_dict[s.key] = s.value
+    except Exception as e_st:
+        logger.warning(f"[SajenIntelligence] Load settings warning: {e_st}")
 
     mcp = MCPClient()
-    answer_text = ""
-    sources = []
+    execution_time_ms = None
+    prompt_used = None
 
     # 1. UTAMAKAN PEMANGGILAN KE MCP SERVER TOOL "vibe_copilot"
     # Seluruh Autonomous Grounding, Item-Level Queries & Semantic Reasoning dieksekusi terpusat di MCP Server
     try:
+        user_role_str = str(current_user.role.value) if hasattr(current_user.role, 'value') else str(current_user.role or 'Owner')
+        store_setting_name = settings_dict.get("store_name")
+        tenant_name_str = store_setting_name or (current_user.tenant.name if current_user.tenant else "Toko Sembako")
         mcp_res = await mcp.call_tool("vibe_copilot", {
             "query": payload.message,
             "tenant_id": str(current_user.tenant_id),
+            "user_id": str(current_user.id),
+            "user_name": current_user.full_name or current_user.email or "Owner",
+            "user_role": user_role_str,
+            "tenant_name": tenant_name_str,
+            "settings": settings_dict,
             "history": payload.history or []
         })
         if mcp_res and "content" in mcp_res and len(mcp_res["content"]) > 0:
             answer_text = mcp_res["content"][0].get("text", "")
-            sources = ['Database Finansial Riil', 'Buku Besar Akuntansi (PSAK/SAK EMKM)', 'Item-Level Ledger', 'MCP Knowledge Engine']
+            sources = mcp_res.get("sources") or ['Database Finansial Riil', 'Buku Besar Akuntansi (PSAK/SAK EMKM)', 'Item-Level Ledger', 'MCP Knowledge Engine']
+            execution_time_ms = mcp_res.get("execution_time_ms")
+            prompt_used = mcp_res.get("prompt_used")
     except Exception as emcp:
-        logger.warning(f"[VibesChat] MCP Call vibe_copilot failed ({emcp}), fallback ke local AI Engine.")
+        logger.warning(f"[SajenIntelligence] MCP Call vibe_copilot failed ({emcp}), fallback ke local AI Engine.")
         
         # 2. LOCAL FALLBACK GROUNDING (Jika MCP Server Offline)
         try:
             today = date.today()
+            
+            # Deteksi tanggal spesifik dari pertanyaan pengguna
+            msg_lower = payload.message.lower()
+            month_map = {
+                'januari': 1, 'jan': 1, 'februari': 2, 'feb': 2, 'maret': 3, 'mar': 3,
+                'april': 4, 'apr': 4, 'mei': 5, 'juni': 6, 'jun': 6, 'juli': 7, 'jul': 7,
+                'agustus': 8, 'ags': 8, 'agt': 8, 'september': 9, 'sep': 9, 'oktober': 10,
+                'okt': 10, 'november': 11, 'nov': 11, 'desember': 12, 'des': 12
+            }
+            
+            target_date = None
+            date_filter_applied = False
+            
+            import re
+            m_date = re.search(r'(?:tanggal|tgl)?\s*(\d{1,2})\s+([a-z]+)(?:\s+(\d{4}))?', msg_lower)
+            if m_date and m_date.group(2) in month_map:
+                d_day = int(m_date.group(1))
+                d_month = month_map[m_date.group(2)]
+                d_year = int(m_date.group(3)) if m_date.group(3) else today.year
+                try:
+                    target_date = date(d_year, d_month, d_day)
+                    date_filter_applied = True
+                except ValueError:
+                    pass
+            elif 'kemarin' in msg_lower:
+                from datetime import timedelta
+                target_date = today - timedelta(days=1)
+                date_filter_applied = True
+            elif 'hari ini' in msg_lower:
+                target_date = today
+                date_filter_applied = True
+
             cash_accounts_query = db.query(Account.id).filter(
                 or_(Account.tenant_id == current_user.tenant_id, Account.tenant_id.is_(None)),
                 Account.account_type == AccountType.ASSET,
@@ -505,19 +572,55 @@ async def vibes_chat_endpoint(
                 Account.code.startswith("2-1")
             ).scalar() or Decimal("0.00")
 
-            recent_txs = db.query(Transaction).filter(
+            # Agregasi Penjualan vs Belanja pada periode
+            sales_purchases_summary = db.query(
+                Transaction.transaction_type,
+                func.sum(Transaction.total_amount).label('total_amount'),
+                func.count(Transaction.id).label('tx_count')
+            ).filter(
                 Transaction.tenant_id == current_user.tenant_id,
                 Transaction.status == TransactionStatus.POSTED
-            ).order_by(Transaction.transaction_date.desc(), Transaction.id.desc()).limit(10).all()
-            tx_lines = [f"- [{tx.transaction_date}] [{tx.transaction_type}] {tx.reference_no or 'TX'}: {tx.description} = Rp {float(tx.total_amount):,.0f}" for tx in recent_txs]
+            ).group_by(Transaction.transaction_type).all()
 
-            tenant_name = current_user.tenant.name if current_user.tenant else 'Toko Blonjo'
+            sales_total = Decimal("0.00")
+            purchases_total = Decimal("0.00")
+            for sp in sales_purchases_summary:
+                if sp.transaction_type == TransactionType.SALES:
+                    sales_total = sp.total_amount or Decimal("0.00")
+                elif sp.transaction_type == TransactionType.PURCHASE:
+                    purchases_total = sp.total_amount or Decimal("0.00")
+
+            tx_query = db.query(Transaction).filter(
+                Transaction.tenant_id == current_user.tenant_id,
+                Transaction.status == TransactionStatus.POSTED
+            )
+            if date_filter_applied and target_date:
+                recent_txs = tx_query.filter(Transaction.transaction_date == target_date).order_by(Transaction.id.asc()).limit(40).all()
+                period_header = f"Daftar Transaksi Tanggal {target_date.strftime('%d-%m-%Y')} ({len(recent_txs)} transaksi)"
+            else:
+                recent_txs = tx_query.order_by(Transaction.transaction_date.desc(), Transaction.id.desc()).limit(20).all()
+                period_header = "Transaksi Terkini di Database"
+
+            if recent_txs:
+                tx_lines = [f"- [{tx.transaction_date}] [{tx.transaction_type.value if hasattr(tx.transaction_type, 'value') else tx.transaction_type}] {tx.reference_no or 'TX'}: {tx.description} = Rp {float(tx.total_amount):,.0f}" for tx in recent_txs]
+            else:
+                tx_lines = ["- Tidak ada transaksi yang tercatat pada tanggal/periode ini di database."]
+
+            tenant_name = settings_dict.get("store_name") or (current_user.tenant.name if current_user.tenant else 'Toko Sembako')
             fallback_prompt = (
-                f"Anda adalah Co-Pilot Keuangan Toko '{tenant_name}'. Waktu Server: {today.strftime('%Y-%m-%d')}.\n"
-                f"- Saldo Kas: Rp {float(cash_summary):,.2f}\n"
-                f"- Utang Usaha: Rp {float(ap_total):,.2f}\n"
-                f"- Transaksi Terkini:\n" + "\n".join(tx_lines) + "\n\n"
-                f"Jawablah pertanyaan pengguna dengan nalar cerdas dan sopan: {payload.message}"
+                f"Anda adalah Sajen Intelligence — Rekan Diskusi & Co-Pilot Bisnis Toko '{tenant_name}'. Waktu Server: {today.strftime('%Y-%m-%d')}.\n"
+                f"DATA FAKTUAL TOKO:\n"
+                f"- Saldo Kas & Bank: Rp {float(cash_summary):,.2f}\n"
+                f"- Total Utang Usaha (AP): Rp {float(ap_total):,.2f}\n"
+                f"- Total Akumulasi Penjualan (Omset): Rp {float(sales_total):,.2f}\n"
+                f"- Total Akumulasi Belanja Stok (Kulakan): Rp {float(purchases_total):,.2f}\n"
+                f"- {period_header} (Sampel):\n" + "\n".join(tx_lines) + "\n\n"
+                f"Panduan Komunikasi:\n"
+                f"1. Gunakan Bahasa Indonesia yang natural, to the point, bernalar praktis layaknya partner bisnis toko kelontong/sembako.\n"
+                f"2. Jangan gunakan pembukaan klise atau kalimat defensif template.\n"
+                f"3. Jika diminta grafik/tren perbandingan, gunakan format kode: ```chart:bar atau ```chart:line dengan JSON {{\\\"title\\\": \\\"...\\\", \\\"labels\\\": [...], \\\"datasets\\\": [{{\\\"label\\\": \\\"...\\\", \\\"data\\\": [...]}}]}}.\n"
+                f"4. Di akhir respons, berikan persis 3 saran obrolan lanjutan dalam blok <!-- SUGGESTIONS -->.\n"
+                f"Pertanyaan Pengguna: {payload.message}"
             )
             response = call_ai_freetext(
                 db=db,
@@ -526,7 +629,7 @@ async def vibes_chat_endpoint(
                 temperature=0.7
             )
             answer_text = response.get("raw_output") if isinstance(response, dict) else ""
-            sources = ['Local DB Fallback']
+            sources = ['Sajen Local DB Grounding']
         except Exception as e:
             logger.error(f"Error in Vibes Chat local fallback: {e}")
             answer_text = f"Terjadi kesalahan saat memproses pertanyaan Anda: {str(e)}"
@@ -556,35 +659,90 @@ async def vibes_chat_endpoint(
     return {
         "answer": final_answer,
         "sources": sources,
-        "session_id": active_session.id
+        "session_id": active_session.id,
+        "execution_time_ms": execution_time_ms,
+        "prompt_used": prompt_used
+    }
+
+
+class FeedbackPayload(BaseModel):
+    session_id: int | None = None
+    message_index: int | None = None
+    vote: str # 'up' | 'down'
+    comment: str | None = None
+    user_query: str | None = None
+    assistant_response: str | None = None
+
+
+@router.post("/chat/feedback")
+async def chat_feedback_endpoint(
+    payload: FeedbackPayload,
+    db: Session = Depends(deps.get_db),
+    current_user: deps.CurrentUser = None
+):
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    from app.models.chat import VibesMemory
+    from app.services.mcp_client import MCPClient
+
+    # Simpan feedback ke vibes_memory jika ada komentar atau vote down untuk koreksi fakta
+    try:
+        user_name = current_user.full_name or current_user.email or "Owner"
+        if payload.comment and payload.comment.strip():
+            mem_content = f"Koreksi/Preferensi Pemilik ({user_name}): {payload.comment.strip()}"
+            if payload.user_query:
+                mem_content += f" | Konteks Topik: '{payload.user_query}'"
+            
+            memory_entry = VibesMemory(
+                tenant_id=current_user.tenant_id,
+                memory_type="owner_correction",
+                content=mem_content,
+                importance_score=5
+            )
+            db.add(memory_entry)
+            db.commit()
+    except Exception as e_mem:
+        logger.warning(f"[ChatFeedback] Save memory warning: {e_mem}")
+
+    return {
+        "status": "success",
+        "message": "Feedback dan pembelajaran toko berhasil disimpan.",
+        "vote": payload.vote
     }
 
 
 
+
 # ──────────────────────────────────────────────────────────────────────────────
-# HEURISTIK KATEGORISASI OTOMATIS (AI CATEGORIZATION ENGINE)
+# HEURISTIK KATEGORISASI OTOMATIS BERBASIS KATEGORI RESMI DATABASE
 # ──────────────────────────────────────────────────────────────────────────────
-AI_CATEGORY_PATTERNS = [
-    ("BERAS", [r"\bberas\b", r"\bc4\b", r"\bmentik\b", r"\brojolele\b", r"\bpandan wangi\b", r"\bsiip\b", r"\bobor\b"]),
-    ("MINYAK", [r"\bminyak\b", r"\bgoreng\b", r"\brisky\b", r"\bsunco\b", r"\btro Pico\b", r"\bfilm\b", r"\bsovia\b", r"\bfortune\b"]),
-    ("GULA", [r"\bgula\b", r"\bgulaku\b", r"\bpasir\b", r"\bmerah\b", r"\bjawa\b"]),
-    ("GANDUM & TEPUNG", [r"\btepung\b", r"\bterigu\b", r"\bsegitiga\b", r"\bcakra\b", r"\bkunci\b", r"\btpg\b", r"\btapioka\b", r"\bmaizena\b"]),
-    ("MINUMAN", [r"\bminuman\b", r"\byakult\b", r"\baqua\b", r"\ble minerale\b", r"\bteh\b", r"\bsusu\b", r"\bskm\b", r"\bkopi\b", r"\bsprite\b", r"\bcoca\b", r"\bfanta\b", r"\bfloridina\b"]),
-    ("TEH & KOPI", [r"\bteh\b", r"\btong tji\b", r"\bhead\b", r"\bkapal api\b", r"\bnescafe\b", r"\bgood day\b", r"\bluwak\b"]),
-    ("BUMBU & DAPUR", [r"\bbumbu\b", r"\bketumbar\b", r"\bgaram\b", r"\bmoto\b", r"\bsasa\b", r"\broyco\b", r"\bmasako\b", r"\bkecap\b", r"\bbango\b", r"\bdelima\b", r"\bsantan\b", r"\bbawang\b", r"\bkemiri\b", r"\bmerica\b", r"\blada\b"]),
-    ("PLASTIK & PEMBUNGKUS", [r"\bplastik\b", r"\bplasrik\b", r"\bboyo\b", r"\btomat\b", r"\bkresek\b", r"\bmika\b", r"\bhdpe\b", r"\bpe\b"]),
-    ("SNACK & BISKUIT", [r"\bsnack\b", r"\bkerupuk\b", r"\bkripik\b", r"\bwafer\b", r"\btango\b", r"\broma\b", r"\bkhong guan\b", r"\bchitato\b"]),
-    ("ROKOK", [r"\brokok\b", r"\bmagnum\b", r"\bbhumi\b", r"\bsampoerna\b", r"\bgudang garam\b", r"\bjarum\b", r"\brefil\b", r"\bskt\b"]),
-    ("KEBUTUHAN RUMAH TANGGA", [r"\bsabun\b", r"\bwipol\b", r"\bpepsodent\b", r"\bsikat\b", r"\brinso\b", r"\bso klin\b", r"\bsunlight\b", r"\blpg\b", r"\bgas\b"])
+DB_CATEGORY_KEYWORDS = [
+    ("BERAS", [r"\bberas\b", r"\bc4\b", r"\bmentik\b", r"\brojolele\b", r"\bpandan wangi\b", r"\bsiip\b", r"\bobor\b", r"\bketan\b", r"\bputih\b"]),
+    ("MINYAK", [r"\bminyak\b", r"\bgoreng\b", r"\brisky\b", r"\bsunco\b", r"\btro pico\b", r"\bfilm\b", r"\bsovia\b", r"\bfortune\b", r"\bhemart\b", r"\bkita\b", r"\bcurah\b"]),
+    ("GULA", [r"\bgula\b", r"\bgulaku\b", r"\bpasir\b", r"\bmerah\b", r"\bjawa\b", r"\bmadu\b"]),
+    ("TELUR", [r"\btelur\b", r"\btlr\b", r"\btelor\b", r"\bpuyuh\b", r"\bayam\b", r"\bbebek\b", r"\bras\b"]),
+    ("GANDUM", [r"\btepung\b", r"\bterigu\b", r"\bsegitiga\b", r"\bcakra\b", r"\bkunci\b", r"\btpg\b", r"\btapioka\b", r"\bmaizena\b", r"\bketan\b", r"\bgandum\b", r"\broti\b"]),
+    ("MIE INSTANT", [r"\bmie\b", r"\bmi\b", r"\bindomie\b", r"\bsedap\b", r"\bsedaap\b", r"\bsarimi\b", r"\bsupermi\b", r"\bbihun\b", r"\bsohun\b", r"\bpop mie\b", r"\bintermi\b"]),
+    ("TEH & KOPI", [r"\bteh\b", r"\btong tji\b", r"\bhead\b", r"\bkapal api\b", r"\bnescafe\b", r"\bgood day\b", r"\bluwak\b", r"\btora bika\b", r"\btorabika\b", r"\bkopi\b", r"\bwhite koffie\b", r"\bmatcha\b"]),
+    ("MINUMAN", [r"\bminuman\b", r"\byakult\b", r"\baqua\b", r"\ble minerale\b", r"\bsusu\b", r"\bskm\b", r"\bsprite\b", r"\bcoca\b", r"\bfanta\b", r"\bfloridina\b", r"\bteh pucuk\b", r"\bjus\b", r"\bcleo\b", r"\bclub\b", r"\bmarjan\b", r"\bsirup\b"]),
+    ("BUMBU", [r"\bbumbu\b", r"\bketumbar\b", r"\bgaram\b", r"\bmoto\b", r"\bajinomoto\b", r"\bsasa\b", r"\broyco\b", r"\bmasako\b", r"\bkecap\b", r"\bbango\b", r"\bdelima\b", r"\bsantan\b", r"\bkara\b", r"\bbawang\b", r"\bkemiri\b", r"\bmerica\b", r"\blada\b", r"\bterasi\b", r"\bkunyit\b", r"\bjahe\b", r"\bsaus\b", r"\bsambal\b"]),
+    ("PLASTIK", [r"\bplastik\b", r"\bplasrik\b", r"\bboyo\b", r"\btomat\b", r"\bkresek\b", r"\bmika\b", r"\bhdpe\b", r"\bpe\b", r"\bkaret\b", r"\btali\b", r"\bcup\b", r"\bsedotan\b", r"\bkemasan\b"]),
+    ("SNACK", [r"\bsnack\b", r"\bkerupuk\b", r"\bkripik\b", r"\bwafer\b", r"\btango\b", r"\broma\b", r"\bkhong guan\b", r"\bchitato\b", r"\bbiskuit\b", r"\bkacang\b", r"\bchoki\b", r"\bgery\b", r"\bnabati\b", r"\boreo\b"]),
+    ("ROKOK", [r"\brokok\b", r"\bmagnum\b", r"\bbhumi\b", r"\bsampoerna\b", r"\bgudang garam\b", r"\bjarum\b", r"\bdjarum\b", r"\brefil\b", r"\bskt\b", r"\bsurya\b", r"\bmarlboro\b", r"\bclove\b", r"\bcamel\b", r"\bwin\b"]),
+    ("SABUN CUCI", [r"\bsabun\b", r"\bwipol\b", r"\bpepsodent\b", r"\bsikat\b", r"\brinso\b", r"\bso klin\b", r"\bsunlight\b", r"\beconomy\b", r"\bdia\b", r"\bdaia\b", r"\bshampoo\b", r"\bsampo\b", r"\bpasta gigi\b", r"\bdeterjen\b", r"\bmolto\b", r"\bdowny\b"]),
+    ("OBAT", [r"\bobat\b", r"\bparacetamol\b", r"\bbodrex\b", r"\bpanadol\b", r"\bpromag\b", r"\bmixer\b", r"\bbetadine\b", r"\bhansaplast\b", r"\btolak angin\b", r"\bminyak kayu putih\b", r"\bfreshcare\b", r"\bvicks\b"])
 ]
 
-def auto_classify_item_name(item_name: str) -> str:
+def auto_classify_item_name(item_name: str, valid_db_categories: set[str] | None = None) -> str:
     lower_name = item_name.lower()
-    for cat_name, patterns in AI_CATEGORY_PATTERNS:
+    for cat_name, patterns in DB_CATEGORY_KEYWORDS:
         for p in patterns:
             if re.search(p, lower_name):
+                if valid_db_categories and cat_name not in valid_db_categories:
+                    return "GENERAL"
                 return cat_name
-    return "LAIN-LAIN / LAINNYA"
+    return "GENERAL"
 
 
 @router.get("/purchase-matrix")
@@ -598,6 +756,13 @@ def get_purchase_matrix_analytics(
 
     try:
         tenant_id = current_user.tenant_id
+        from app.models.inventory import ProductCategory
+
+        # 0. Ambil seluruh nama kategori resmi dari database
+        db_categories = db.query(ProductCategory.name).filter(ProductCategory.is_active == True).all()
+        valid_cat_names = set(c[0].upper() for c in db_categories if c[0])
+        if not valid_cat_names:
+            valid_cat_names = {"GENERAL"}
 
         # 1. Ambil data log pembelian dari inventory_logs (log_type = 'in') terisolasi per tenant_id
         all_logs = db.query(InventoryLog).join(
@@ -646,12 +811,12 @@ def get_purchase_matrix_analytics(
 
             prod_name = log.product.name if (log.product and log.product.name) else "Item Tanpa Nama"
             
-            cat_name = "LAIN-LAIN"
+            cat_name = "GENERAL"
             is_ai_category = False
             if log.product and log.product.category and log.product.category.name:
                 cat_name = log.product.category.name.upper()
             else:
-                cat_name = auto_classify_item_name(prod_name)
+                cat_name = auto_classify_item_name(prod_name, valid_cat_names)
                 is_ai_category = True
 
             if prod_name not in raw_matrix:
@@ -684,7 +849,7 @@ def get_purchase_matrix_analytics(
             month_keys_set.add(m_str)
 
             item_label = tx.description.strip() if tx.description else "Pembelian Barang Dagang"
-            cat_name = auto_classify_item_name(item_label)
+            cat_name = auto_classify_item_name(item_label, valid_cat_names)
 
             if item_label not in raw_matrix:
                 raw_matrix[item_label] = {

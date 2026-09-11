@@ -269,15 +269,22 @@ async def parse_transaction_note(
                 except Exception as e:
                     print(f"Error setting yesterday date: {e}")
 
-            # 2d. Force Payment Method berdasarkan kata kunci di input teks
-            if any(kw in low_text for kw in ["dp ", " dp", "uang muka", "down payment", "deposit", "panjar"]):
+            # 2d. Ekstrak Payment Method dengan regex presisi & boundary matching
+            from app.services.smart_parser import _extract_payment_method
+            extracted_pm = _extract_payment_method(normalized_text)
+            
+            # Customer deposit HANYA berlaku untuk konteks penjualan / penerimaan dari pelanggan (BUKAN pembelian/kulakan dari supplier)
+            t_type_candidate = (final_parsed_data.get("transaction_type") or "").lower()
+            is_purchase_context = t_type_candidate in ["purchase", "pembelian", "beli"] or any(kw in low_text for kw in ["pembelian", "beli", "purchase", "belanja"])
+            is_dp_kw = bool(re.search(r'\b(dp|down\s*payment|uang\s*muka|panjar)\b', low_text))
+            
+            # Jika ada metode pembayaran eksplisit (contoh '(Metode Pembayaran: cash)'), selalu prioritaskan itu
+            if extracted_pm and extracted_pm != "customer_deposit":
+                final_parsed_data["payment_method"] = extracted_pm
+            elif not is_purchase_context and is_dp_kw:
                 final_parsed_data["payment_method"] = "customer_deposit"
-            elif any(kw in low_text for kw in ["qris", "qr"]):
-                final_parsed_data["payment_method"] = "qris"
-            elif any(kw in low_text for kw in ["transfer", "tf", "bank", "bca", "mandiri", "bri", "bni", "cimb", "gopay", "ovo", "dana", "shopeepay"]):
-                final_parsed_data["payment_method"] = "transfer"
-            elif any(kw in low_text for kw in ["tempo", "kredit", "hutang", "utang", "bon"]):
-                final_parsed_data["payment_method"] = "tempo"
+            elif extracted_pm:
+                final_parsed_data["payment_method"] = extracted_pm
             elif not final_parsed_data.get("payment_method"):
                 final_parsed_data["payment_method"] = "cash"
 
@@ -324,14 +331,19 @@ async def parse_transaction_note(
                     it["unit_price"] = price
                     it["discount"] = discount
                     
-                    # Jika price dan qty valid, hitung ulang total per item
-                    if price > 0:
-                        item_total = (qty * price) - discount
+                    # Standar PSAK / Anti Double-Counting:
+                    # Nilai it['total'] atau unit_price dari AI/Parser sudah berupa nilai bersih (netto).
+                    if item_total > 0:
+                        it["total"] = item_total
+                        if price == 0 and qty > 0:
+                            it["unit_price"] = item_total / qty
+                    elif price > 0:
+                        item_total = qty * price
                         it["total"] = item_total
                     elif item_total > 0 and price == 0:
                         it["unit_price"] = item_total
                         
-                    calculated_total += item_total
+                    calculated_total += (it.get("total") or item_total)
                 
                 # Jika ada item dan calculated_total > 0, prioritaskan hasil kalkulasi matematis item
                 # daripada halusinasi/kesalahan teks total nota (misal selisih antara total_amount dengan calculated_total).
@@ -449,26 +461,70 @@ async def parse_transaction_note(
     # ── Check Duplicate Transaction Signature in Postgres DB ──────────────────
     tgl_parsed = final_parsed_data.get("transaction_date")
     total_parsed = final_parsed_data.get("total_amount", 0)
+    tx_type_str = str(final_parsed_data.get("transaction_type", "")).upper()
+    parsed_ref = (final_parsed_data.get("reference_no") or "").strip()
+    contact_name = (final_parsed_data.get("contact_name") or "").strip()
+
     try:
         total_parsed_val = float(total_parsed)
     except (ValueError, TypeError):
         total_parsed_val = 0.0
 
     if tgl_parsed and total_parsed_val > 0:
-        existing_tx = session.query(Transaction).filter(
-            Transaction.tenant_id == current_user.tenant_id,
-            Transaction.transaction_date == tgl_parsed,
-            Transaction.total_amount == total_parsed_val,
-            Transaction.status == TransactionStatus.POSTED
-        ).first()
-        if existing_tx:
-            supplier_name = final_parsed_data.get("contact_name") or "Supplier"
-            final_parsed_data["is_duplicate"] = True
-            final_parsed_data["duplicate_warning"] = (
-                f"⚠️ DUPLIKASI AI TERDETEKSI: Transaksi dari '{supplier_name}' "
-                f"(Tanggal: {tgl_parsed}, Total: Rp {total_parsed_val:,.0f}) "
-                f"SUDAH PERNAH DICATAT sebelumnya (Ref #{existing_tx.id})."
+        # Map string to TransactionType enum
+        target_tx_type = None
+        if "PURCHASE" in tx_type_str or "BELANJA" in tx_type_str or "BELI" in tx_type_str:
+            target_tx_type = TransactionType.PURCHASE
+        elif "SALES" in tx_type_str or "PENJUALAN" in tx_type_str or "PENDAPATAN" in tx_type_str or "OMSET" in tx_type_str:
+            target_tx_type = TransactionType.SALES
+        elif "EXPENSE" in tx_type_str or "BIAYA" in tx_type_str or "BEBAN" in tx_type_str:
+            target_tx_type = TransactionType.EXPENSE
+        elif "CAPITAL" in tx_type_str or "MODAL" in tx_type_str:
+            target_tx_type = TransactionType.CAPITAL
+        elif "OPERATIONAL" in tx_type_str or "OPERASIONAL" in tx_type_str:
+            target_tx_type = TransactionType.OPERATIONAL
+
+        # SALES: Retail shops naturally record identical amounts multiple times a day.
+        # Only flag SALES as duplicate if exact identical reference_no is supplied and exists.
+        if target_tx_type == TransactionType.SALES:
+            if parsed_ref:
+                existing_tx = session.query(Transaction).filter(
+                    Transaction.tenant_id == current_user.tenant_id,
+                    Transaction.transaction_type == TransactionType.SALES,
+                    Transaction.reference_no == parsed_ref,
+                    Transaction.status == TransactionStatus.POSTED
+                ).first()
+                if existing_tx:
+                    final_parsed_data["is_duplicate"] = True
+                    final_parsed_data["duplicate_warning"] = (
+                        f"⚠️ DUPLIKASI PENJUALAN TERDETEKSI: Penjualan dengan No. Ref '{parsed_ref}' "
+                        f"(Total: Rp {total_parsed_val:,.0f}) sudah pernah dicatat sebelumnya."
+                    )
+        elif target_tx_type in [TransactionType.PURCHASE, TransactionType.EXPENSE, TransactionType.OPERATIONAL]:
+            # PURCHASE/EXPENSE: Verify active POSTED transaction with SAME transaction_type
+            query = session.query(Transaction).filter(
+                Transaction.tenant_id == current_user.tenant_id,
+                Transaction.transaction_type == target_tx_type,
+                Transaction.transaction_date == tgl_parsed,
+                Transaction.total_amount == total_parsed_val,
+                Transaction.status == TransactionStatus.POSTED
             )
+            
+            # If reference number is provided, match by reference_no or contact/description
+            if parsed_ref:
+                query = query.filter(Transaction.reference_no == parsed_ref)
+            elif contact_name:
+                query = query.filter(Transaction.description.ilike(f"%{contact_name}%"))
+
+            existing_tx = query.first()
+            if existing_tx:
+                display_supplier = contact_name or "Supplier Terkait"
+                final_parsed_data["is_duplicate"] = True
+                final_parsed_data["duplicate_warning"] = (
+                    f"⚠️ DUPLIKASI PEMBELIAN TERDETEKSI: Pembelian dari '{display_supplier}' "
+                    f"(Tanggal: {tgl_parsed}, Total: Rp {total_parsed_val:,.0f}) "
+                    f"SUDAH PERNAH DICATAT pada Nota #{existing_tx.reference_no}."
+                )
 
     # Combine complete dynamic system prompt and user prompt for full transparency logging
     full_logged_prompt = f"[SYSTEM INSTRUCTION]\n{system_instruction}\n\n[USER PROMPT]\n{prompt}"
@@ -586,6 +642,22 @@ def get_deposit_liquidity_metrics(
         for e in entries:
             total_deposits += (e.credit or Decimal("0.00")) - (e.debit or Decimal("0.00"))
 
+    # Accounts Payable (Utang Usaha): 2-1101, 2-1100, etc.
+    payable_accounts = session.query(Account).filter(
+        Account.code.like("2-11%"),
+        or_(Account.tenant_id == tenant_id, Account.tenant_id == None)
+    ).all()
+    payable_account_ids = [a.id for a in payable_accounts]
+
+    # Compute Total Accounts Payable
+    total_accounts_payable = Decimal("0.00")
+    if payable_account_ids:
+        entries = session.query(JournalEntry).filter(
+            JournalEntry.account_id.in_(payable_account_ids)
+        ).all()
+        for e in entries:
+            total_accounts_payable += (e.credit or Decimal("0.00")) - (e.debit or Decimal("0.00"))
+
     reserve_ratio = float((cash_reserve / total_deposits * 100)) if total_deposits > Decimal("0.00") else 100.0
     
     status = "healthy"
@@ -598,6 +670,7 @@ def get_deposit_liquidity_metrics(
     return {
         "total_customer_deposits": float(total_deposits),
         "cash_reserve": float(cash_reserve),
+        "total_accounts_payable": float(total_accounts_payable),
         "reserve_ratio": round(reserve_ratio, 2),
         "liquidity_status": status,
         "recommended_allocations": {

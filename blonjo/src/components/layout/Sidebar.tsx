@@ -117,9 +117,9 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
       label: 'menu_insights',
       path: '/insights',
       subItems: [
-        { label: '💬 Vibes Chat', path: '/insights/vibes-chat', icon: Wand2 },
-        { label: '📊 Analitik Visual', path: '/insights/analytics', icon: BarChart2 },
-        { label: '🌐 Market Intelligence', path: '/insights/market-intelligence', icon: Compass }
+        { label: 'menu_sajen_intelligence', path: '/insights/sajen-intelligence', icon: Compass },
+        { label: 'menu_purchase_matrix', path: '/insights/analytics', icon: BarChart2 },
+        { label: 'menu_market_intelligence', path: '/insights/market-intelligence', icon: Compass }
       ]
     },
     {

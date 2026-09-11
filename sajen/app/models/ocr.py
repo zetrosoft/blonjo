@@ -78,3 +78,21 @@ class OCRAliasMapping(Base):
     corrected_value = Column(String(255), nullable=False)
     confidence_count = Column(Integer, default=1, nullable=False)
 
+
+class SupplierParsingRule(Base):
+    """
+    Distilled Business, Calculation, & Layout Rules per Supplier.
+    Menyimpan instruksi penafsiran nota hasil sintesis AI dari koreksi pengguna.
+    Otomatis disuntikkan saat memproses nota baru dari supplier terkait.
+    """
+    __tablename__ = "supplier_parsing_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True)
+    supplier_pattern = Column(String(255), nullable=False, index=True)
+    rule_category = Column(String(50), nullable=False, default="general")  # 'calculation', 'multi_column', 'tax_discount', 'item_structure', 'general'
+    rule_instruction = Column(Text, nullable=False)
+    sample_diff = Column(JSON, nullable=True)
+    confidence_count = Column(Integer, default=1, nullable=False)
+
+

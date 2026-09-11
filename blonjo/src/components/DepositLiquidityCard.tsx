@@ -6,6 +6,7 @@ import { formatRp } from '../lib/utils';
 interface DepositLiquidityMetrics {
   total_customer_deposits: number;
   cash_reserve: number;
+  total_accounts_payable?: number;
   reserve_ratio: number;
   liquidity_status: 'healthy' | 'warning' | 'critical';
   recommended_allocations: {
@@ -79,10 +80,10 @@ export function DepositLiquidityCard() {
       </div>
 
       {/* Main Metrics Comparison */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 my-1">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 my-1">
         <div className="p-3.5 rounded-xl bg-muted/40 border border-border/40">
           <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-            Total Titipan & Uang Muka Pelanggan
+            Total Titipan Pelanggan
           </span>
           <p className="text-lg font-bold text-foreground mt-1">
             {formatRp(metrics.total_customer_deposits)}
@@ -94,6 +95,14 @@ export function DepositLiquidityCard() {
           </span>
           <p className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mt-1">
             {formatRp(metrics.cash_reserve)}
+          </p>
+        </div>
+        <div className="p-3.5 rounded-xl bg-muted/40 border border-border/40">
+          <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+            Total Utang Usaha
+          </span>
+          <p className="text-lg font-bold text-rose-600 dark:text-rose-400 mt-1">
+            {formatRp(metrics.total_accounts_payable || 0)}
           </p>
         </div>
       </div>

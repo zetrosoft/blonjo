@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
 import { toast } from 'sonner';
 import { fetchClient } from '../../../api/client';
-import { parseNoteText, type ParsedTransaction } from '../../../lib/smartParser';
+import { parseNoteText, type ParsedTransaction, TYPE_RULES } from '../../../lib/smartParser';
 
 const SMART_NOTE_EXAMPLES = [
   'Beli beras 5kg @ 15000, minyak 2L @ 28000 bayar tunai',
@@ -32,10 +32,29 @@ export function useSmartNote() {
       const parsedData = res.parsed_data || {};
       const baseParsed = extraData ? { ...parsedData, ...extraData } : parsedData;
 
+      const rawType = (baseParsed.transaction_type || 'expense').toLowerCase();
+      const matchedRule = TYPE_RULES.find(r => r.type.toLowerCase() === rawType) ||
+                          TYPE_RULES.find(r => rawType.includes(r.type.toLowerCase()));
+
+      const resolvedLabel = baseParsed.type_label || matchedRule?.label || (
+        rawType === 'sales' ? 'Penjualan Barang / Toko' :
+        rawType === 'income' ? 'Pendapatan Non-Usaha / Jasa' :
+        rawType === 'purchase' ? 'Pengeluaran (Belanja)' :
+        rawType === 'operational' ? 'Pengeluaran Operasional' :
+        rawType === 'capital' ? 'Modal / Saldo Awal' : 'Pengeluaran'
+      );
+
+      const resolvedColor = baseParsed.type_color || matchedRule?.color || (
+        rawType === 'sales' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' :
+        rawType === 'income' ? 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30' :
+        rawType === 'operational' ? 'bg-orange-500/15 text-orange-400 border-orange-500/30' :
+        'bg-rose-500/15 text-rose-400 border-rose-500/30'
+      );
+
       setParsedResult({
-        transaction_type: baseParsed.transaction_type || 'expense',
-        type_label: baseParsed.type_label || 'Pengeluaran',
-        type_color: baseParsed.type_color || 'rose',
+        transaction_type: (baseParsed.transaction_type || 'expense') as any,
+        type_label: resolvedLabel,
+        type_color: resolvedColor,
         description: baseParsed.description || text,
         total_amount: Number(baseParsed.total_amount) || 0,
         transaction_date: baseParsed.transaction_date || new Date().toISOString().split('T')[0],

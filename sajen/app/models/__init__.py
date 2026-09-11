@@ -6,7 +6,7 @@ from app.models.permission import Permission
 from app.models.setting import AppSetting
 from app.models.accounting import Account, Transaction, JournalEntry
 from app.models.inventory import Product, Contact, InventoryLog, Uom, PurchasePlan, PurchasePlanItem, StockDiscard
-from app.models.ocr import OCRTask, OCRFeedback, OCRAliasMapping
+from app.models.ocr import OCRTask, OCRFeedback, OCRAliasMapping, SupplierParsingRule
 from app.models.log import AIParsingLog, AIModelQuota
 from app.models.cashflow import CashflowProjectionSnapshot
 from app.models.chat import VibeChatSession, VibeChatMessage

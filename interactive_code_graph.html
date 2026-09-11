@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>Blonjo & Sajen Interactive Code Graph</title>
+  <script src="https://unpkg.com/cytoscape@3.28.1/dist/cytoscape.min.js"></script>
+  <script src="https://unpkg.com/dagre@0.8.5/dist/dagre.js"></script>
+  <script src="https://unpkg.com/cytoscape-dagre@2.5.0/cytoscape-dagre.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
+    body { background: #090d16; color: #f8fafc; overflow: hidden; height: 100vh; display: flex; }
+    
+    #cy { flex: 1; height: 100vh; background: radial-gradient(circle at 50% 50%, #0f172a 0%, #060911 100%); }
+    
+    #sidebar {
+      width: 380px;
+      height: 100vh;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(20px);
+      border-left: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      z-index: 10;
+      box-shadow: -10px 0 30px rgba(0,0,0,0.5);
+    }
+    
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .badge-primary { background: rgba(99, 102, 241, 0.2); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.4); }
+    
+    .panel-card {
+      background: rgba(30, 41, 59, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      padding: 16px;
+    }
+    
+    .code-pill {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      background: rgba(0, 0, 0, 0.3);
+      padding: 6px 10px;
+      border-radius: 8px;
+      color: #38bdf8;
+      word-break: break-all;
+      margin-top: 4px;
+    }
+    
+    .rel-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 220px;
+      overflow-y: auto;
+      margin-top: 8px;
+    }
+    .rel-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 10px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .rel-item:hover {
+      background: rgba(99, 102, 241, 0.2);
+      border-color: rgba(99, 102, 241, 0.4);
+      transform: translateX(4px);
+    }
+    
+    #controls {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      display: flex;
+      gap: 8px;
+      z-index: 10;
+    }
+    
+    .btn {
+      background: rgba(15, 23, 42, 0.8);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #e2e8f0;
+      padding: 8px 14px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn:hover {
+      background: #4f46e5;
+      color: #fff;
+      box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4);
+    }
+    .btn.active {
+      background: #6366f1;
+      color: #fff;
+      border-color: #818cf8;
+    }
+    
+    #searchBox {
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #fff;
+      padding: 8px 14px;
+      border-radius: 12px;
+      font-size: 12px;
+      outline: none;
+      width: 240px;
+    }
+    #searchBox:focus { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3); }
+  </style>
+</head>
+<body>
+
+  <div id="controls">
+    <input type="text" id="searchBox" placeholder="Cari fungsi / simbol...">
+    <button class="btn active" onclick="setLayout('dagre')">Hierarki (Dagre)</button>
+    <button class="btn" onclick="setLayout('cose')">Force-Directed</button>
+    <button class="btn" onclick="setLayout('circle')">Lingkaran</button>
+    <button class="btn" onclick="cy.fit()">Reset View</button>
+  </div>
+
+  <div id="cy"></div>
+
+  <div id="sidebar">
+    <div style="display: flex; align-items: center; justify-content: space-between;">
+      <span class="badge badge-primary" id="nodeType">Simbol AST</span>
+      <span style="font-size: 11px; color: #64748b;" id="nodeCentrality">Centrality: -</span>
+    </div>
+    
+    <div>
+      <h2 style="font-size: 18px; font-weight: 800; color: #fff;" id="nodeName">Pilih Simbol</h2>
+      <p style="font-size: 12px; color: #94a3b8; margin-top: 2px;" id="nodeSubtitle">Klik pada node untuk melihat relasi fungsi</p>
+    </div>
+
+    <div class="panel-card">
+      <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase;">Lokasi File</div>
+      <div class="code-pill" id="nodePath">-</div>
+    </div>
+
+    <div class="panel-card" style="flex: 1; display: flex; flex-direction: column; overflow: hidden;">
+      <div style="font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; display: flex; justify-content: space-between;">
+        <span>Relasi Pemanggilan (Edges)</span>
+        <span id="edgeCountBadge" style="color: #6366f1; font-weight: 800;">0</span>
+      </div>
+      <div class="rel-list" id="relList">
+        <div style="color: #64748b; font-size: 12px; text-align: center; padding: 20px 0;">
+          Klik simbol pada grafik untuk menyorot pemanggil & target.
+        </div>
+      </div>
+    </div>
+    
+    <div style="font-size: 11px; color: #475569; text-align: center;">
+      Basemind Core-AST Graph Explorer • Blonjo & Sajen
+    </div>
+  </div>
+
+  <script>
+    const elements = [
+      // Core Frontend UI
+      { data: { id: 'VibesChat', label: 'VibesChat.tsx', group: 'frontend', path: 'blonjo/src/pages/insights/VibesChat.tsx', kind: 'Page' } },
+      { data: { id: 'InteractiveVisualChart', label: 'InteractiveVisualChart', group: 'frontend', path: 'blonjo/src/pages/insights/VibesChat.tsx:119', kind: 'Component' } },
+      { data: { id: 'GraphCodeBlock', label: 'GraphCodeBlock', group: 'frontend', path: 'blonjo/src/pages/insights/VibesChat.tsx:342', kind: 'Component' } },
+      { data: { id: 'DashboardLayout', label: 'DashboardLayout.tsx', group: 'frontend', path: 'blonjo/src/components/layout/DashboardLayout.tsx', kind: 'Layout' } },
+      { data: { id: 'AppRouter', label: 'App.tsx (Router)', group: 'frontend', path: 'blonjo/src/App.tsx', kind: 'Router' } },
+      
+      // Frontend Handlers
+      { data: { id: 'handleSend', label: 'handleSend()', group: 'frontend_fn', path: 'blonjo/src/pages/insights/VibesChat.tsx:914', kind: 'Handler' } },
+      { data: { id: 'fetchSessions', label: 'fetchSessions()', group: 'frontend_fn', path: 'blonjo/src/pages/insights/VibesChat.tsx:820', kind: 'Handler' } },
+      { data: { id: 'loadSession', label: 'loadSession()', group: 'frontend_fn', path: 'blonjo/src/pages/insights/VibesChat.tsx:833', kind: 'Handler' } },
+      { data: { id: 'confirmDeleteSession', label: 'confirmDeleteSession()', group: 'frontend_fn', path: 'blonjo/src/pages/insights/VibesChat.tsx:890', kind: 'Handler' } },
+      { data: { id: 'handleVote', label: 'handleVote()', group: 'frontend_fn', path: 'blonjo/src/pages/insights/VibesChat.tsx:980', kind: 'Handler' } },
+      { data: { id: 'extractActions', label: 'extractActions()', group: 'frontend_fn', path: 'blonjo/src/pages/insights/VibesChat.tsx:1005', kind: 'Utility' } },
+      { data: { id: 'extractSuggestions', label: 'extractSuggestions()', group: 'frontend_fn', path: 'blonjo/src/pages/insights/VibesChat.tsx:1023', kind: 'Utility' } },
+
+      // Backend API Endpoints
+      { data: { id: 'API_Chat', label: 'POST /insights/chat', group: 'backend', path: 'sajen/app/api/v1/insights.py:470', kind: 'API Endpoint' } },
+      { data: { id: 'API_Sessions', label: 'GET /insights/sessions', group: 'backend', path: 'sajen/app/api/v1/insights.py:800', kind: 'API Endpoint' } },
+      { data: { id: 'API_Messages', label: 'GET /sessions/:id/messages', group: 'backend', path: 'sajen/app/api/v1/insights.py:825', kind: 'API Endpoint' } },
+      { data: { id: 'API_DeleteSession', label: 'DELETE /sessions/:id', group: 'backend', path: 'sajen/app/api/v1/insights.py:850', kind: 'API Endpoint' } },
+      { data: { id: 'API_Feedback', label: 'POST /chat/feedback', group: 'backend', path: 'sajen/app/api/v1/insights.py:636', kind: 'API Endpoint' } },
+      { data: { id: 'AccountingCore', label: 'accounting.py (Duplication Check)', group: 'backend', path: 'sajen/app/api/v1/accounting.py', kind: 'Accounting Core' } },
+      { data: { id: 'OCRWorker', label: 'ocr_worker.py (Celery)', group: 'backend', path: 'sajen/app/workers/ocr_worker.py', kind: 'Worker' } },
+
+      // MCP Server
+      { data: { id: 'MCPClient', label: 'MCPClient (HTTP Gateway)', group: 'mcp', path: 'sajen/app/services/mcp_client.py', kind: 'MCP Client' } },
+      { data: { id: 'vibeCopilot', label: 'vibe_copilot (Tool Engine)', group: 'mcp', path: 'mcp-server/src/tools/vibeCopilot.ts', kind: 'MCP Tool' } },
+      { data: { id: 'SupplierHarvester', label: 'Supplier Harvester (Scoring)', group: 'mcp', path: 'mcp-server/src/tools/vibeCopilot.ts:310', kind: 'Harvester' } },
+      { data: { id: 'VibesMemory', label: 'vibes_memory (Semantic Memory)', group: 'db', path: 'sajen/app/models/chat.py', kind: 'Database Table' } },
+      { data: { id: 'BlonjoDB', label: 'PostgreSQL (blonjo_db)', group: 'db', path: 'PostgreSQL VPS 76.13.19.28:5432', kind: 'Database' } },
+
+      // Edges (Relationships)
+      { data: { source: 'AppRouter', target: 'VibesChat', label: 'routes_to' } },
+      { data: { source: 'DashboardLayout', target: 'VibesChat', label: 'renders' } },
+      { data: { source: 'VibesChat', target: 'InteractiveVisualChart', label: 'renders' } },
+      { data: { source: 'VibesChat', target: 'GraphCodeBlock', label: 'renders' } },
+      { data: { source: 'VibesChat', target: 'handleSend', label: 'contains' } },
+      { data: { source: 'VibesChat', target: 'fetchSessions', label: 'contains' } },
+      { data: { source: 'VibesChat', target: 'loadSession', label: 'contains' } },
+      { data: { source: 'VibesChat', target: 'confirmDeleteSession', label: 'contains' } },
+      { data: { source: 'VibesChat', target: 'handleVote', label: 'contains' } },
+      { data: { source: 'VibesChat', target: 'extractActions', label: 'calls' } },
+      { data: { source: 'VibesChat', target: 'extractSuggestions', label: 'calls' } },
+
+      { data: { source: 'handleSend', target: 'API_Chat', label: 'HTTP POST' } },
+      { data: { source: 'fetchSessions', target: 'API_Sessions', label: 'HTTP GET' } },
+      { data: { source: 'loadSession', target: 'API_Messages', label: 'HTTP GET' } },
+      { data: { source: 'confirmDeleteSession', target: 'API_DeleteSession', label: 'HTTP DELETE' } },
+      { data: { source: 'handleVote', target: 'API_Feedback', label: 'HTTP POST' } },
+
+      { data: { source: 'API_Chat', target: 'MCPClient', label: 'delegates' } },
+      { data: { source: 'MCPClient', target: 'vibeCopilot', label: 'JSON-RPC Tool Call' } },
+      { data: { source: 'vibeCopilot', target: 'SupplierHarvester', label: 'invokes' } },
+      { data: { source: 'vibeCopilot', target: 'VibesMemory', label: 'queries_memory' } },
+      { data: { source: 'vibeCopilot', target: 'BlonjoDB', label: 'SQL Pool' } },
+      { data: { source: 'API_Feedback', target: 'VibesMemory', label: 'writes_feedback' } },
+      { data: { source: 'AccountingCore', target: 'BlonjoDB', label: 'ORM' } },
+      { data: { source: 'OCRWorker', target: 'AccountingCore', label: 'verifies_duplicate' } }
+    ];
+
+    const cy = cytoscape({
+      container: document.getElementById('cy'),
+      elements: elements,
+      style: [
+        {
+          selector: 'node',
+          style: {
+            'label': 'data(label)',
+            'font-family': 'Plus Jakarta Sans',
+            'font-size': '11px',
+            'font-weight': '600',
+            'color': '#cbd5e1',
+            'text-valign': 'bottom',
+            'text-margin-y': '6px',
+            'background-color': '#475569',
+            'width': '36px',
+            'height': '36px',
+            'border-width': '2px',
+            'border-color': 'rgba(255,255,255,0.2)',
+            'transition-property': 'background-color, border-color, width, height',
+            'transition-duration': '0.2s'
+          }
+        },
+        {
+          selector: 'node[group="frontend"]',
+          style: { 'background-color': '#6366f1', 'border-color': '#a5b4fc' }
+        },
+        {
+          selector: 'node[group="frontend_fn"]',
+          style: { 'background-color': '#3b82f6', 'border-color': '#93c5fd' }
+        },
+        {
+          selector: 'node[group="backend"]',
+          style: { 'background-color': '#10b981', 'border-color': '#6ee7b7' }
+        },
+        {
+          selector: 'node[group="mcp"]',
+          style: { 'background-color': '#8b5cf6', 'border-color': '#c4b5fd' }
+        },
+        {
+          selector: 'node[group="db"]',
+          style: { 'background-color': '#f59e0b', 'border-color': '#fde68a' }
+        },
+        {
+          selector: 'edge',
+          style: {
+            'width': 2,
+            'line-color': 'rgba(255,255,255,0.15)',
+            'target-arrow-color': 'rgba(255,255,255,0.3)',
+            'target-arrow-shape': 'triangle',
+            'curve-style': 'bezier',
+            'arrow-scale': 0.8
+          }
+        },
+        {
+          selector: '.highlighted',
+          style: {
+            'background-color': '#ec4899',
+            'border-color': '#f472b6',
+            'border-width': '4px',
+            'width': '46px',
+            'height': '46px',
+            'color': '#fff'
+          }
+        },
+        {
+          selector: '.connected-edge',
+          style: {
+            'line-color': '#ec4899',
+            'target-arrow-color': '#ec4899',
+            'width': 3,
+            'z-index': 99
+          }
+        },
+        {
+          selector: '.dimmed',
+          style: {
+            'opacity': 0.2
+          }
+        }
+      ],
+      layout: {
+        name: 'dagre',
+        rankDir: 'LR',
+        nodeSep: 60,
+        rankSep: 100
+      }
+    });
+
+    function selectNode(node) {
+      cy.elements().removeClass('highlighted connected-edge dimmed');
+      
+      const connectedEdges = node.connectedEdges();
+      const connectedNodes = connectedEdges.connectedNodes();
+      
+      cy.elements().addClass('dimmed');
+      node.removeClass('dimmed').addClass('highlighted');
+      connectedNodes.removeClass('dimmed');
+      connectedEdges.removeClass('dimmed').addClass('connected-edge');
+
+      // Update sidebar
+      const d = node.data();
+      document.getElementById('nodeName').innerText = d.label;
+      document.getElementById('nodeSubtitle').innerText = `${d.kind} (${d.group.toUpperCase()})`;
+      document.getElementById('nodeType').innerText = d.kind;
+      document.getElementById('nodePath').innerText = d.path;
+      document.getElementById('nodeCentrality').innerText = `ID: ${d.id}`;
+
+      const relList = document.getElementById('relList');
+      relList.innerHTML = '';
+      
+      const outgoing = node.outgoers('edge');
+      const incoming = node.incomers('edge');
+      
+      document.getElementById('edgeCountBadge').innerText = `${incoming.length} In / ${outgoing.length} Out`;
+
+      incoming.forEach(edge => {
+        const src = edge.source();
+        const item = document.createElement('div');
+        item.className = 'rel-item';
+        item.innerHTML = `<span>⬅️ ${src.data('label')}</span> <span style="color: #64748b; font-size: 10px;">${edge.data('label') || 'calls'}</span>`;
+        item.onclick = () => selectNode(src);
+        relList.appendChild(item);
+      });
+
+      outgoing.forEach(edge => {
+        const tgt = edge.target();
+        const item = document.createElement('div');
+        item.className = 'rel-item';
+        item.innerHTML = `<span>➡️ ${tgt.data('label')}</span> <span style="color: #64748b; font-size: 10px;">${edge.data('label') || 'calls'}</span>`;
+        item.onclick = () => selectNode(tgt);
+        relList.appendChild(item);
+      });
+    }
+
+    cy.on('tap', 'node', function(evt) {
+      selectNode(evt.target);
+    });
+
+    cy.on('tap', function(evt) {
+      if (evt.target === cy) {
+        cy.elements().removeClass('highlighted connected-edge dimmed');
+        document.getElementById('nodeName').innerText = 'Pilih Simbol';
+        document.getElementById('nodeSubtitle').innerText = 'Klik pada node untuk melihat relasi fungsi';
+        document.getElementById('nodePath').innerText = '-';
+        document.getElementById('relList').innerHTML = '<div style="color: #64748b; font-size: 12px; text-align: center; padding: 20px 0;">Klik simbol pada grafik untuk menyorot pemanggil & target.</div>';
+      }
+    });
+
+    function setLayout(name) {
+      document.querySelectorAll('#controls .btn').forEach(b => b.classList.remove('active'));
+      event.target.classList.add('active');
+      cy.layout({ name: name, rankDir: 'LR', animate: true, animationDuration: 500 }).run();
+    }
+
+    document.getElementById('searchBox').addEventListener('input', function(e) {
+      const q = e.target.value.toLowerCase().trim();
+      if (!q) {
+        cy.elements().removeClass('dimmed highlighted');
+        return;
+      }
+      cy.elements().addClass('dimmed');
+      const matches = cy.nodes().filter(n => n.data('label').toLowerCase().includes(q) || n.data('id').toLowerCase().includes(q));
+      matches.removeClass('dimmed').addClass('highlighted');
+    });
+  </script>
+</body>
+</html>

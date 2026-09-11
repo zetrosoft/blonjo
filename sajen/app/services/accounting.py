@@ -1,3 +1,4 @@
+import re
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from fastapi import HTTPException, status
@@ -76,10 +77,13 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
 
     # 0. SPECIAL HANDLING: Customer Deposit (DP Penjualan)
     is_dp_customer = (
-        (payment_method and payment_method.lower() in ["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
-        or any(kw in (description or "").lower() for kw in ["dp ", "uang muka", "down payment", "panjar"])
+        trans_type == TransactionType.SALES
+        and (
+            (payment_method and payment_method.lower() in ["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
+            or bool(re.search(r'\b(dp|down\s*payment|uang\s*muka|panjar)\b', (description or "").lower()))
+        )
     )
-    if is_dp_customer and trans_type == TransactionType.SALES:
+    if is_dp_customer:
         # 1. Cari atau buat akun 2-1402 (Uang Muka Penjualan)
         dp_acc = db.query(Account).filter(
             Account.code == "2-1402",
@@ -266,10 +270,13 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
             
             # 1b. Redirect Customer Deposit (Uang Muka Penjualan) -> Akun 2-1402 / 2-1101
             is_dp_customer = (
-                (payment_method and payment_method.lower() in ["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
-                or any(kw in (description or "").lower() for kw in ["dp ", "uang muka", "down payment", "panjar"])
+                trans_type == TransactionType.SALES
+                and (
+                    (payment_method and payment_method.lower() in ["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
+                    or bool(re.search(r'\b(dp|down\s*payment|uang\s*muka|panjar)\b', (description or "").lower()))
+                )
             )
-            if is_dp_customer and trans_type == TransactionType.SALES and line.side == "credit":
+            if is_dp_customer and line.side == "credit":
                 dp_acc = db.query(Account).filter(
                     Account.code == "2-1402",
                     or_(Account.tenant_id == t_id, Account.tenant_id == None)
@@ -302,12 +309,28 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
                     target_account_id = bank_acc.id
                     target_account = bank_acc
 
-            # 3. Redirect Beban Operasional Spesifik (6-1301 Utilitas / 6-1302 BBM)
+            # 3. Dynamic Operational & Expense Sub-account Resolution
+            is_payroll_expense = any(kw in desc_lower for kw in ["gaji", "upah", "honor", "payroll", "thr", "bonus karyawan", "gaji karyawan"])
             is_bbm_expense = any(kw in desc_lower for kw in ["bbm", "bensin", "pertalite", "pertamax", "solar", "spbu", "parkir", "tol"])
-            is_utility_expense = any(kw in desc_lower for kw in ["listrik", "pln", "air", "pdam", "internet", "wifi", "telkom"])
-            
+            is_utility_expense = any(kw in desc_lower for kw in ["listrik", "pln", "air", "pdam", "internet", "wifi", "telkom", "pulsa"])
+            is_rent_expense = any(kw in desc_lower for kw in ["sewa", "kontrak ruko", "sewa toko", "sewa gedung"])
+            is_marketing_expense = any(kw in desc_lower for kw in ["iklan", "pemasaran", "marketing", "brosur", "banner", "spanduk", "ads"])
+
+            # Jika tipe EXPENSE tetapi BUKAN payroll, jangan masukkan baris Utang Gaji (2-1201) / Hutang PPh 21 (2-1202)
+            if trans_type in [TransactionType.OPERATIONAL, TransactionType.EXPENSE] and not is_payroll_expense:
+                if account and account.code in ["2-1201", "2-1202"]:
+                    continue  # Lewati baris utang gaji & pajak akrual jika bukan transaksi gaji eksplisit
+
             if trans_type in [TransactionType.OPERATIONAL, TransactionType.EXPENSE] and account and account.code.startswith("6-"):
-                if is_bbm_expense:
+                if is_payroll_expense:
+                    payroll_acc = db.query(Account).filter(
+                        Account.code == "6-1101",
+                        or_(Account.tenant_id == t_id, Account.tenant_id == None)
+                    ).first()
+                    if payroll_acc:
+                        target_account_id = payroll_acc.id
+                        target_account = payroll_acc
+                elif is_bbm_expense:
                     bbm_acc = db.query(Account).filter(
                         Account.code == "6-1302",
                         or_(Account.tenant_id == t_id, Account.tenant_id == None)
@@ -323,6 +346,31 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
                     if util_acc:
                         target_account_id = util_acc.id
                         target_account = util_acc
+                elif is_rent_expense:
+                    rent_acc = db.query(Account).filter(
+                        Account.code == "6-1201",
+                        or_(Account.tenant_id == t_id, Account.tenant_id == None)
+                    ).first()
+                    if rent_acc:
+                        target_account_id = rent_acc.id
+                        target_account = rent_acc
+                elif is_marketing_expense:
+                    mkt_acc = db.query(Account).filter(
+                        Account.code == "6-1401",
+                        or_(Account.tenant_id == t_id, Account.tenant_id == None)
+                    ).first()
+                    if mkt_acc:
+                        target_account_id = mkt_acc.id
+                        target_account = mkt_acc
+                else:
+                    # Default: Beban Operasional Lainnya (6-9000)
+                    ops_acc = db.query(Account).filter(
+                        Account.code == "6-9000",
+                        or_(Account.tenant_id == t_id, Account.tenant_id == None)
+                    ).first()
+                    if ops_acc:
+                        target_account_id = ops_acc.id
+                        target_account = ops_acc
             
             entries.append({
                 "account_id": target_account_id,
@@ -337,8 +385,11 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
 
         # 4. Pastikan transaksi SALES selalu memiliki pasangan Jurnal Perpetual (HPP & Persediaan) jika bukan DP Customer
         is_dp_transaction = (
-            (payment_method and payment_method.lower() in ["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
-            or any(kw in (description or "").lower() for kw in ["dp ", "uang muka", "down payment", "panjar"])
+            trans_type == TransactionType.SALES
+            and (
+                (payment_method and payment_method.lower() in ["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
+                or bool(re.search(r'\b(dp|down\s*payment|uang\s*muka|panjar)\b', (description or "").lower()))
+            )
         )
         if trans_type == TransactionType.SALES and not is_dp_transaction and not any(e.get("account") and e["account"]["code"].startswith("5-") for e in entries):
             from app.models.setting import AppSetting
@@ -363,7 +414,7 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
                     "credit": cogs_val
                 })
 
-        if is_dp_transaction:
+        if is_dp_transaction and trans_type == TransactionType.SALES:
             # Saring hanya entri Kas/Bank dan Uang Muka Penjualan (Hapus baris HPP 5-* dan Persediaan 1-13*)
             entries = [e for e in entries if not (e.get("account") and (e["account"]["code"].startswith("5-") or e["account"]["code"].startswith("1-13")))]
 
@@ -869,8 +920,11 @@ def create_transaction_with_journal(db: Session, trans_in: TransactionCreate, us
                 else:
                     # Stock OUT logic & HPP Calculation (Bypass jika transaksi adalah DP / Customer Deposit karena barang belum diserahkan)
                     is_dp_payment = (
-                        (trans_in.payment_method and trans_in.payment_method.lower() in ["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
-                        or any(kw in (trans_in.description or "").lower() for kw in ["dp ", "uang muka", "down payment", "panjar"])
+                        trans_in.transaction_type.value in ["sales", "income"]
+                        and (
+                            (trans_in.payment_method and trans_in.payment_method.lower() in ["customer_deposit", "dp", "uang_muka", "uang muka", "deposit", "panjar"])
+                            or bool(re.search(r'\b(dp|down\s*payment|uang\s*muka|panjar)\b', (trans_in.description or "").lower()))
+                        )
                     )
                     
                     if not is_dp_payment:
