@@ -505,15 +505,32 @@ export default function VibesChat() {
   const [inspectingPrompt, setInspectingPrompt] = useState<string | null>(null);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   
-  // ⚡ Streaming & Scroll Anchoring States
+  // ⚡ Streaming & Dynamic Scroll States
   const [streamingMsgIndex, setStreamingMsgIndex] = useState<number | null>(null);
   const [streamingText, setStreamingText] = useState<string>('');
   const streamingTimerRef = useRef<any>(null);
   const latestAssistantRef = useRef<HTMLDivElement>(null);
+  const isUserScrolledUpRef = useRef(false);
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+
+  // Helper untuk scroll instan ke paling bawah tanpa animasi geser
+  const scrollToInstantBottom = () => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
+  };
+
+  // Deteksi interaksi scroll pengguna di container pesan
+  const handleContainerScroll = () => {
+    if (!messagesContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+    const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
+    // Jika user scroll ke atas lebih dari 80px, user dianggap sedang membaca pesan sebelumnya
+    isUserScrolledUpRef.current = distanceFromBottom > 80;
+  };
 
   // Close context menu when clicking outside
   useEffect(() => {
@@ -566,10 +583,25 @@ export default function VibesChat() {
   }, [input]);
 
   // 🎯 Scroll Management:
-  // - Saat user kirim pesan, scroll ke bawah agar loading terlihat
-  // - Saat asisten mulai merespons, anchor scroll ke AWAL (atas) pesan asisten agar langsung terbaca tanpa scroll back
+  // 1. Saat awal dibuka / ganti sesi: otomatis muncul chat terakhir secara instan tanpa terlihat efek geser
+  useEffect(() => {
+    if (!initialLoading && messages.length > 0) {
+      scrollToInstantBottom();
+      const r1 = requestAnimationFrame(scrollToInstantBottom);
+      const t1 = setTimeout(scrollToInstantBottom, 30);
+      const t2 = setTimeout(scrollToInstantBottom, 100);
+      return () => {
+        cancelAnimationFrame(r1);
+        clearTimeout(t1);
+        clearTimeout(t2);
+      };
+    }
+  }, [initialLoading, currentSessionId]);
+
+  // 2. Saat user kirim pesan, scroll ke bawah agar loading indikator terlihat
   useEffect(() => {
     if (sending && messagesContainerRef.current) {
+      isUserScrolledUpRef.current = false;
       messagesContainerRef.current.scrollTo({
         top: messagesContainerRef.current.scrollHeight,
         behavior: 'smooth'
@@ -577,11 +609,12 @@ export default function VibesChat() {
     }
   }, [sending]);
 
+  // 3. Dynamic Stream Follow-Scroll: Mengikuti kalimat yang sedang diketik secara real-time ke bawah
   useEffect(() => {
-    if (streamingMsgIndex !== null && latestAssistantRef.current) {
-      latestAssistantRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (streamingMsgIndex !== null && !isUserScrolledUpRef.current && messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
     }
-  }, [streamingMsgIndex]);
+  }, [streamingText, streamingMsgIndex]);
 
   // 1. Fetch Sessions List on Mount
   const fetchSessions = async () => {
@@ -620,6 +653,8 @@ export default function VibesChat() {
           }
         ]);
       }
+      isUserScrolledUpRef.current = false;
+      requestAnimationFrame(() => scrollToInstantBottom());
     } catch (err) {
       console.error(`Gagal memuat pesan sesi ${sessionId}:`, err);
     } finally {
@@ -757,6 +792,7 @@ export default function VibesChat() {
         }
       ]);
       setSending(false);
+      isUserScrolledUpRef.current = false;
       setStreamingMsgIndex(assistantIndex);
       setStreamingText('');
 
@@ -1043,7 +1079,11 @@ export default function VibesChat() {
         </div>
 
         {/* Area Messages List */}
-        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 md:px-8 py-6 space-y-6 scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-800">
+        <div 
+          ref={messagesContainerRef} 
+          onScroll={handleContainerScroll}
+          className="flex-1 overflow-y-auto px-4 md:px-8 py-6 space-y-6 scrollbar-thin scrollbar-thumb-slate-200 dark:scrollbar-thumb-slate-800"
+        >
           
           {/* Initial Loading Skeleton */}
           {initialLoading ? (
