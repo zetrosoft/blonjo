@@ -505,6 +505,12 @@ export default function VibesChat() {
   const [inspectingPrompt, setInspectingPrompt] = useState<string | null>(null);
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   
+  // ⚡ Streaming & Scroll Anchoring States
+  const [streamingMsgIndex, setStreamingMsgIndex] = useState<number | null>(null);
+  const [streamingText, setStreamingText] = useState<string>('');
+  const streamingTimerRef = useRef<any>(null);
+  const latestAssistantRef = useRef<HTMLDivElement>(null);
+  
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -514,6 +520,15 @@ export default function VibesChat() {
     const handleClickOutside = () => setActiveMenuSessionId(null);
     window.addEventListener('click', handleClickOutside);
     return () => window.removeEventListener('click', handleClickOutside);
+  }, []);
+
+  // Cleanup streaming timer on unmount
+  useEffect(() => {
+    return () => {
+      if (streamingTimerRef.current) {
+        clearInterval(streamingTimerRef.current);
+      }
+    };
   }, []);
 
   // Load pinned insights for active session from localStorage
@@ -550,15 +565,23 @@ export default function VibesChat() {
     }
   }, [input]);
 
-  // Scroll to bottom strictly inside messages container (no body bouncing)
+  // 🎯 Scroll Management:
+  // - Saat user kirim pesan, scroll ke bawah agar loading terlihat
+  // - Saat asisten mulai merespons, anchor scroll ke AWAL (atas) pesan asisten agar langsung terbaca tanpa scroll back
   useEffect(() => {
-    if (messagesContainerRef.current) {
+    if (sending && messagesContainerRef.current) {
       messagesContainerRef.current.scrollTo({
         top: messagesContainerRef.current.scrollHeight,
         behavior: 'smooth'
       });
     }
-  }, [messages, sending]);
+  }, [sending]);
+
+  useEffect(() => {
+    if (streamingMsgIndex !== null && latestAssistantRef.current) {
+      latestAssistantRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [streamingMsgIndex]);
 
   // 1. Fetch Sessions List on Mount
   const fetchSessions = async () => {
@@ -575,6 +598,12 @@ export default function VibesChat() {
 
   // 2. Load Messages for a Specific Session
   const loadSession = async (sessionId: number) => {
+    if (streamingTimerRef.current) {
+      clearInterval(streamingTimerRef.current);
+      streamingTimerRef.current = null;
+    }
+    setStreamingMsgIndex(null);
+    setStreamingText('');
     setCurrentSessionId(sessionId);
     setActiveMenuSessionId(null);
     try {
@@ -600,6 +629,12 @@ export default function VibesChat() {
 
   // 3. Start New Fresh Session
   const handleNewChat = () => {
+    if (streamingTimerRef.current) {
+      clearInterval(streamingTimerRef.current);
+      streamingTimerRef.current = null;
+    }
+    setStreamingMsgIndex(null);
+    setStreamingText('');
     setCurrentSessionId(null);
     setActiveMenuSessionId(null);
     setMessages([
@@ -672,7 +707,12 @@ export default function VibesChat() {
   const handleSend = async (queryText?: string, e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const query = (queryText || input).trim();
-    if (!query || sending) return;
+    if (!query || sending || streamingMsgIndex !== null) return;
+
+    if (streamingTimerRef.current) {
+      clearInterval(streamingTimerRef.current);
+      streamingTimerRef.current = null;
+    }
 
     const userMsg: Message = { role: 'user', content: query };
     const updatedMessages = [...messages, userMsg];
@@ -691,7 +731,7 @@ export default function VibesChat() {
         history: historyPayload
       });
 
-      const ans = res?.answer || res?.data?.answer;
+      const ans = res?.answer || res?.data?.answer || "Maaf, saya tidak dapat merumuskan jawaban saat ini.";
       const sources = res?.sources || res?.data?.sources;
       const sessId = res?.session_id || res?.data?.session_id;
       const execTime = res?.execution_time_ms ?? res?.data?.execution_time_ms;
@@ -702,18 +742,57 @@ export default function VibesChat() {
       }
       fetchSessions();
 
+      // ⚡ Mulai mode streaming (Typing / Stream effect seperti ChatGPT)
+      const assistantIndex = updatedMessages.length;
+      const targetText = ans;
+
       setMessages(prev => [
         ...prev,
         {
           role: 'assistant',
-          content: ans || "Maaf, saya tidak dapat merumuskan jawaban saat ini.",
+          content: '',
           sources: sources,
           execution_time_ms: execTime,
           prompt_used: promptUsed
         }
       ]);
+      setSending(false);
+      setStreamingMsgIndex(assistantIndex);
+      setStreamingText('');
+
+      let charIndex = 0;
+      const totalLen = targetText.length;
+      // Adaptive chunking: 4-12 karakter per tick 16ms
+      const chunkSize = totalLen > 1200 ? 12 : (totalLen > 600 ? 7 : 4);
+
+      if (streamingTimerRef.current) clearInterval(streamingTimerRef.current);
+
+      streamingTimerRef.current = setInterval(() => {
+        charIndex += chunkSize;
+        if (charIndex >= totalLen) {
+          clearInterval(streamingTimerRef.current);
+          streamingTimerRef.current = null;
+          setMessages(prev => {
+            const next = [...prev];
+            if (next[assistantIndex]) {
+              next[assistantIndex] = {
+                ...next[assistantIndex],
+                content: targetText
+              };
+            }
+            return next;
+          });
+          setStreamingMsgIndex(null);
+          setStreamingText('');
+        } else {
+          setStreamingText(targetText.slice(0, charIndex));
+        }
+      }, 16);
     } catch (err: any) {
       console.error('Error vibes chat:', err);
+      setSending(false);
+      setStreamingMsgIndex(null);
+      setStreamingText('');
       setMessages(prev => [
         ...prev,
         {
@@ -1050,13 +1129,16 @@ export default function VibesChat() {
                 }
 
                 const isUser = msg.role === 'user';
-                const { cleanContent: contentNoSug, suggestions } = !isUser ? extractSuggestions(msg.content) : { cleanContent: msg.content, suggestions: [] };
+                const isStreamingActive = idx === streamingMsgIndex;
+                const displayRaw = isStreamingActive ? streamingText : msg.content;
+                const { cleanContent: contentNoSug, suggestions } = !isUser ? extractSuggestions(displayRaw) : { cleanContent: displayRaw, suggestions: [] };
                 const { cleanContent, actions } = !isUser ? extractActions(contentNoSug) : { cleanContent: contentNoSug, actions: [] };
                 const isPinned = pinnedIndices.includes(idx);
 
                 return (
                   <div
                     key={idx}
+                    ref={(!isUser && idx === messages.length - 1) ? latestAssistantRef : undefined}
                     className={`flex flex-col gap-2 max-w-4xl mx-auto ${isUser ? 'items-end' : 'items-start'}`}
                   >
                     <div className={`flex gap-3 w-full ${isUser ? 'justify-end' : 'justify-start'}`}>
@@ -1139,6 +1221,9 @@ export default function VibesChat() {
                               >
                                 {cleanContent}
                               </ReactMarkdown>
+                              {isStreamingActive && (
+                                <span className="inline-block w-2 h-4 bg-indigo-600 dark:bg-indigo-400 ml-1 translate-y-0.5 animate-pulse rounded-xs" />
+                              )}
                             </div>
                           )}
                         </div>
@@ -1174,8 +1259,8 @@ export default function VibesChat() {
                         )}
 
                         {/* Actions Toolbar & Grounding Source Chips */}
-                        {!isUser && (
-                          <div className="flex flex-wrap items-center justify-between w-full pt-1.5 px-1 gap-2">
+                        {!isUser && !isStreamingActive && (
+                          <div className="flex flex-wrap items-center justify-between w-full pt-1.5 px-1 gap-2 animate-in fade-in duration-300">
                             {/* Quick Actions (Execution Time, Prompt Inspector, Pin, Copy & Vote) */}
                             <div className="flex items-center gap-1.5 ml-auto">
                               {/* Response Time Badge */}
@@ -1245,8 +1330,8 @@ export default function VibesChat() {
                     </div>
 
                     {/* 🎯 CLICKABLE ACTION DEEP-LINKS (Aksi Langsung ke Modul Blonjo) */}
-                    {!isUser && actions.length > 0 && (
-                      <div className="pl-11 pr-2 w-full pt-1">
+                    {!isUser && !isStreamingActive && actions.length > 0 && (
+                      <div className="pl-11 pr-2 w-full pt-1 animate-in fade-in duration-300">
                         <div className="flex flex-wrap gap-2 items-center">
                           {actions.map((act, aIdx) => (
                             <button
@@ -1264,14 +1349,14 @@ export default function VibesChat() {
                     )}
 
                     {/* 🎯 CLICKABLE SUGGESTION CHIPS (Langkah / Pertanyaan Selanjutnya) */}
-                    {!isUser && suggestions.length > 0 && (
-                      <div className="pl-11 pr-2 w-full pt-1">
+                    {!isUser && !isStreamingActive && suggestions.length > 0 && (
+                      <div className="pl-11 pr-2 w-full pt-1 animate-in fade-in slide-in-from-bottom-1 duration-300">
                         <div className="flex flex-wrap gap-1.5 items-center">
                           {suggestions.map((sug, sIdx) => (
                             <button
                               key={sIdx}
                               onClick={() => handleSend(sug)}
-                              disabled={sending}
+                              disabled={sending || streamingMsgIndex !== null}
                               className="group flex items-center gap-1 text-[11px] font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50/80 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200/70 dark:border-indigo-800/70 px-3 py-1.5 rounded-full transition-all text-left shadow-2xs hover:shadow-xs disabled:opacity-50"
                             >
                               <Sparkles className="w-3 h-3 text-indigo-500 shrink-0 group-hover:rotate-12 transition-transform" />
@@ -1321,7 +1406,7 @@ export default function VibesChat() {
               <Button
                 type="submit"
                 size="icon"
-                disabled={sending || !input.trim()}
+                disabled={sending || streamingMsgIndex !== null || !input.trim()}
                 className="h-9 w-9 bg-indigo-600 hover:bg-indigo-700 rounded-xl text-white shadow-md shadow-indigo-500/20 disabled:opacity-50 transition-all shrink-0 mb-0.5"
               >
                 <Send className="h-4 w-4" />
