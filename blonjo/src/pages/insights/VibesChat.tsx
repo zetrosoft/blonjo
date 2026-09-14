@@ -1088,7 +1088,7 @@ export default function VibesChat() {
                           {isUser ? (
                             msg.content
                           ) : (
-                            <div className="prose prose-sm dark:prose-invert max-w-none prose-p:leading-relaxed prose-p:my-2.5 prose-headings:font-bold prose-headings:tracking-tight prose-headings:text-slate-900 dark:prose-headings:text-slate-100 prose-h2:text-base prose-h2:mt-4 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1.5 prose-strong:font-bold prose-strong:text-indigo-950 dark:prose-strong:text-indigo-200 prose-ul:my-2 prose-ul:list-disc prose-ul:pl-5 prose-li:my-1 prose-li:leading-relaxed prose-pre:p-0 prose-pre:bg-transparent">
+                            <div className="prose prose-sm dark:prose-invert max-w-none prose-pre:p-0 prose-pre:bg-transparent">
                               <ReactMarkdown
                                 remarkPlugins={[remarkGfm]}
                                 components={{
@@ -1114,7 +1114,7 @@ export default function VibesChat() {
                                   },
                                   table({ children }) {
                                     return (
-                                      <div className="my-3 overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white/50 dark:bg-slate-950/50 shadow-sm">
+                                      <div className="my-3 overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white/50 dark:bg-slate-950/40 shadow-xs">
                                         <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-left text-xs">
                                           {children}
                                         </table>
@@ -1123,7 +1123,7 @@ export default function VibesChat() {
                                   },
                                   th({ children }) {
                                     return (
-                                      <th className="bg-slate-100/90 dark:bg-slate-800/90 px-3.5 py-2.5 font-bold text-slate-700 dark:text-slate-200 border-b border-slate-200 dark:border-slate-700">
+                                      <th className="bg-slate-100/90 dark:bg-slate-800/90 px-3.5 py-2.5 font-bold text-slate-800 dark:text-slate-100 border-b border-slate-200 dark:border-slate-700">
                                         {children}
                                       </th>
                                     );

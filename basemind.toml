@@ -30,7 +30,8 @@
 # followed for these regardless of scan.follow_symlinks.
 extra_roots = [
   "/Users/user/kerjaan/mcp-server",
-  "/Users/user/kerjaan/logbook"
+  "/Users/user/kerjaan/logbook",
+  "/Users/user/kerjaan/bizeto-pos"
 ]
 
 [code_intel]

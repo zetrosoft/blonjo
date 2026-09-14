@@ -1,16 +1,16 @@
 # BLONJO & SAJEN - Retail Accounting & AI Ecosystem for SMEs
 
-**BLONJO & SAJEN** is a modern financial and retail management ecosystem for SMEs with high industry standards. The platform combines real-world retail transaction activities at the front-end (**BLONJO**) with sophisticated asynchronous backend automation engines behind the scenes (**SAJEN**). It integrates standardized bookkeeping based on **PSAK UMKM**, local **AI OCR** technology using **Ollama**, semantic search with **pgvector**, and interactive AI assistants via **WhatsApp (Bizeto)**.
+**BLONJO & SAJEN** is a modern financial and retail management ecosystem for SMEs with high industry standards. The platform combines real-world retail transaction activities at the front-end (**BLONJO**) with sophisticated asynchronous backend automation engines behind the scenes (**SAJEN**). It integrates standardized bookkeeping based on **PSAK UMKM**, **Vision AI OCR** via MCP Server (Google Gemini), semantic search with **pgvector**, and interactive AI assistants via **WhatsApp (Bizeto)**.
 
 ---
 
 ## 🚀 Key Features
 
 *   **Double-Entry Accounting (PSAK UMKM):** Automated recording for Chart of Accounts (COA), General Journal, General Ledger, Balance Sheet, and accurate Profit & Loss Statements (managed by **BLONJO**).
-*   **AI OCR & Few-Shot Learning:** Data extraction from shopping receipts locally using Ollama. The system intelligently learns from every user input correction to improve future OCR accuracy (silently managed by **SAJEN**).
+*   **AI OCR & Few-Shot Learning:** Vision extraction from shopping receipts via MCP Server vision LLM (Google Gemini). The system intelligently learns from user input corrections to improve future OCR accuracy (silently managed by **SAJEN**).
 *   **Vector Search & Semantic Search:** Intelligent product search based on semantic meaning using the `pgvector` extension in PostgreSQL.
 *   **WhatsApp AI Assistant (Bizeto):** Automated sales agent and FAQ that can reply to customer chats professionally in both Indonesian and English.
-*   **Sovereign & Local-First Storage:** All sensitive data, documents, and AI models are stored independently and securely on local infrastructure without dependence on third-party SaaS.
+*   **Sovereign & Local-First Storage:** All sensitive accounting data, transactions, and documents are stored securely on private server infrastructure.
 
 ---
 
@@ -21,7 +21,7 @@
 | **Frontend (BLONJO)** | React, TypeScript, Vite, Tailwind CSS, shadcn/ui, Zustand, react-i18next | Modern UI with responsive design, smooth transitions, dual-language (ID/EN) support, and Dark/Light mode. |
 | **Backend & Workers (SAJEN)** | Python, FastAPI, SQLAlchemy, Alembic, Celery, Uvicorn | High-performance REST API based on asynchronous programming with fast data parsing via Pydantic. |
 | **Database & Cache** | PostgreSQL (+ pgvector), Redis | Structured relational storage integrated with vector search and reliable asynchronous task queues. |
-| **Artificial Intelligence** | Ollama (Local AI & Embeddings) | Sovereign AI inference without external API keys for receipt OCR and semantic search. |
+| **Artificial Intelligence** | MCP Server + Google Gemini API | High-speed, multi-key rotating Google Gemini 2.5 models (Flash / Flash Lite) for ReAct agent, text-embedding-004, and Vision OCR. *(Ollama local is deprecated)*. |
 
 ---
 
@@ -61,7 +61,7 @@ Copy the `.env.example` file to `.env` in both the frontend (`blonjo`) and backe
 | `DATABASE_URL` | `postgresql://<DB_USER>:<SECURE_PASSWORD>@sajen-db:5432/blonjo_db` | PostgreSQL connection URL (Replace placeholders with secure credentials). |
 | `REDIS_URL` | `redis://sajen-redis:6379/0` | Redis connection URL for internal cache. |
 | `CELERY_BROKER_URL` | `redis://sajen-redis:6379/0` | Celery Broker for background task queues. |
-| `OLLAMA_HOST` | `http://sajen-ollama:11434` | Ollama endpoint (Recommended to be isolated within a private Docker network). |
+| `MCP_SERVER_URL` | `http://mcp-server:3000` | MCP Server Hub URL for AI reasoning, OCR, and vector embeddings. *(Ollama is deprecated)*. |
 
 ### Frontend Configuration (`blonjo/.env`)
 | Variable | Default Value | Description |
@@ -94,7 +94,7 @@ If you wish to debug or develop code in real-time, run each service manually:
 *   **Python 3.11+** with **uv** (For super-fast backend dependencies)
 *   **PostgreSQL** (Must have the `pgvector` module installed)
 *   **Redis** running on port `6380` (Or adjust according to `.env`)
-*   **Ollama** installed locally and the server is active.
+*   **MCP Server** running on port `3000` with valid `GOOGLE_API_KEY`.
 
 #### 2. PostgreSQL Setup (+ pgvector)
 Ensure your database has the pgvector module installed globally or enabled on the target database:
@@ -167,9 +167,9 @@ Sistem AI di dalam SAJEN (RAG, Embedding, Semantic Search, Pricing Rules Parsing
 
 ### Alasan Arsitektural (Mengapa Menggunakan MCP?)
 1. **Stateless Backend:** SAJEN (FastAPI) tidak perlu menyimpan memori model AI atau menahan load GPU, menjadikannya cepat dan *stateless*.
-2. **Skalabilitas Terisolasi:** Proses *semantic search*, OCR, dan NLP bisa dialihkan ke server/node khusus AI, tanpa mengganggu kinerja transaksi API retail.
-3. **Standarisasi Koneksi AI:** Memungkinkan perpindahan model AI secara dinamis (seperti Ollama lokal ke Claude/OpenAI) tanpa mengubah ribuan baris *logic* di FastAPI.
-4. **Pemrosesan Vektor Eksternal:** Tugas berat seperti memecah dokumen (*chunking*), membuat *embedding*, dan melakukan *similarity search* dieksekusi secara independen oleh `mcp-server`.
+2. **Skalabilitas Terisolasi:** Proses *semantic search*, Vision OCR, dan NLP dialihkan ke `mcp-server` mandiri, tanpa mengganggu kinerja transaksi API retail.
+3. **Standarisasi Koneksi AI:** Koneksi AI terpusat di `mcp-server` yang terhubung ke **Google Gemini API** (multi-key pool) dengan performa tinggi. *(Catatan: Ollama lokal telah didepresiasi/dihentikan demi kecepatan dan akurasi tinggi)*.
+4. **Pemrosesan Vektor Eksternal:** Tugas seperti memecah dokumen (*chunking*), membuat *embedding* (`text-embedding-004`), dan melakukan *similarity search* dieksekusi secara independen oleh `mcp-server`.
 
 ### Diagram Arsitektur
 
@@ -178,9 +178,9 @@ flowchart TD
     User([User / Browser])
     Blonjo[Blonjo Frontend\n(React/Vite)]
     Sajen[Sajen Backend\n(FastAPI)]
-    MCP[MCP Server\n(Node.js)]
+    MCP[MCP Server Hub\n(Node.js / Express)]
     DB[(PostgreSQL\n+ pgvector)]
-    Ollama([Ollama\n(Local Model)])
+    Gemini([Google Gemini API\n(Flash / Flash Lite)])
     
     User -->|UI Interaction| Blonjo
     Blonjo -->|REST API| Sajen
@@ -189,7 +189,7 @@ flowchart TD
     Sajen -->|Transaksi/CRUD| DB
     
     %% AI Integration
-    Sajen -.->|Call MCP Tool| MCP
-    MCP -.->|Generate Text/Embeddings| Ollama
+    Sajen -.->|Call MCP Tool (vibe_copilot, ocr)| MCP
+    MCP -.->|Generate Text/Embeddings/Vision| Gemini
     MCP -->|Query/Ingest Vectors| DB
 ```
