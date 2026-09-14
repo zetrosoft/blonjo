@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useId } from 'react';
+import React, { useState, useEffect, useRef, useId, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
@@ -38,6 +38,8 @@ interface Message {
   created_at?: string;
   execution_time_ms?: number;
   prompt_used?: string;
+  actions?: Array<{ label: string; path: string }>;
+  suggestions?: string[];
 }
 
 interface ChatSession {
@@ -58,14 +60,14 @@ interface ChartData {
 }
 
 /**
- * Komponen Visual Chart Universal & Interaktif (Plotly Engine)
+ * Komponen Visual Chart Universal & Interaktif (Plotly Engine) - Memoized
  */
-const InteractiveVisualChart: React.FC<{ type: string; rawJson: string }> = ({ type, rawJson }) => {
+const InteractiveVisualChart = React.memo<{ type: string; rawJson: string }>(({ type, rawJson }) => {
   return <UniversalPlotlyChart rawContent={rawJson} chartType={type} />;
-};
+});
 
 
-const GraphCodeBlock: React.FC<{ language: string; code: string }> = ({ language, code }) => {
+const GraphCodeBlock = React.memo<{ language: string; code: string }>(({ language, code }) => {
   const { theme } = useTheme();
   const reactId = useId().replace(/[^a-zA-Z0-9]/g, '');
   const elementId = `mermaid-chart-${reactId}`;
@@ -448,7 +450,7 @@ const GraphCodeBlock: React.FC<{ language: string; code: string }> = ({ language
       )}
     </>
   );
-};
+});
 
 const QUICK_STARTERS = [
   {
@@ -484,6 +486,325 @@ const QUICK_STARTERS = [
     bgLight: 'bg-purple-500/10 text-purple-600 dark:text-purple-400 border-purple-200/60 dark:border-purple-800/60'
   }
 ];
+
+// Helper: Extract actions from message content
+const extractActions = (content: string): { cleanContent: string; actions: Array<{ label: string; path: string }> } => {
+  const match = /<!--\s*ACTIONS\s*-->([\s\S]*?)<!--\s*\/ACTIONS\s*-->/i.exec(content);
+  if (!match) {
+    return { cleanContent: content, actions: [] };
+  }
+  const cleanContent = content.replace(match[0], '').trim();
+  const actionsRaw = match[1].trim().split('\n');
+  const actions: Array<{ label: string; path: string }> = [];
+  for (const line of actionsRaw) {
+    const linkMatch = /\[(.*?)\]\((.*?)\)/.exec(line);
+    if (linkMatch) {
+      actions.push({ label: linkMatch[1].trim(), path: linkMatch[2].trim() });
+    }
+  }
+  return { cleanContent, actions };
+};
+
+// Helper: Extract suggestions from message content
+const extractSuggestions = (content: string): { cleanContent: string; suggestions: string[] } => {
+  const match = /<!--\s*SUGGESTIONS\s*-->([\s\S]*?)<!--\s*\/SUGGESTIONS\s*-->/i.exec(content);
+  if (!match) {
+    return { cleanContent: content, suggestions: [] };
+  }
+  const cleanContent = content.replace(match[0], '').trim();
+  const suggestionsRaw = match[1].trim().split('\n');
+  const suggestions = suggestionsRaw
+    .map(s => s.replace(/^[-*•\d.]+\s*/, '').trim())
+    .filter(s => s.length > 0)
+    .slice(0, 3);
+
+  return { cleanContent, suggestions };
+};
+
+interface ChatMessageItemProps {
+  msg: Message;
+  idx: number;
+  isStreamingActive: boolean;
+  displayContent: string;
+  isPinned: boolean;
+  copiedIndex: number | null;
+  feedbackVote?: 'up' | 'down';
+  onCopy: (text: string, idx: number) => void;
+  onVote: (idx: number, vote: 'up' | 'down') => void;
+  onTogglePin: (idx: number) => void;
+  onInspectPrompt: (prompt: string | null) => void;
+  onEditQuery: (text: string) => void;
+  onNavigate: (path: string) => void;
+  onSendSuggestion: (sug: string) => void;
+  sending: boolean;
+  streamingMsgIndex: number | null;
+}
+
+/**
+ * ⚡ MEMOIZED CHAT MESSAGE BUBBLE
+ * Mencegah re-render gelembung chat masa lalu saat pengguna mengetik pesan di textarea
+ * atau saat pesan terakhir sedang di-stream secara bertahap.
+ */
+const ChatMessageItem = React.memo<ChatMessageItemProps>(({
+  msg,
+  idx,
+  isStreamingActive,
+  displayContent,
+  isPinned,
+  copiedIndex,
+  feedbackVote,
+  onCopy,
+  onVote,
+  onTogglePin,
+  onInspectPrompt,
+  onEditQuery,
+  onNavigate,
+  onSendSuggestion,
+  sending,
+  streamingMsgIndex
+}) => {
+  const isUser = msg.role === 'user';
+  const actions = !isUser ? (msg.actions && msg.actions.length > 0 ? msg.actions : extractActions(displayContent).actions) : [];
+  const suggestions = !isUser ? (msg.suggestions && msg.suggestions.length > 0 ? msg.suggestions : extractSuggestions(displayContent).suggestions) : [];
+  const cleanContent = !isUser ? extractActions(extractSuggestions(displayContent).cleanContent).cleanContent : displayContent;
+
+  return (
+    <div className={`flex flex-col gap-2 max-w-4xl mx-auto ${isUser ? 'items-end' : 'items-start'}`}>
+      <div className={`flex gap-3 w-full ${isUser ? 'justify-end' : 'justify-start'}`}>
+        {!isUser && (
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-indigo-500/20 mt-1">
+            <Bot className="h-4 w-4" />
+          </div>
+        )}
+
+        <div className={`flex flex-col space-y-1 max-w-[92%] md:max-w-[85%] ${isUser ? 'items-end' : 'items-start'}`}>
+          {/* Bubble Message */}
+          <div
+            className={`p-4 md:p-5 rounded-2xl text-xs md:text-sm leading-relaxed shadow-sm transition-all ${
+              isUser
+                ? 'bg-gradient-to-r from-indigo-600 to-indigo-700 text-white rounded-br-none whitespace-pre-wrap font-medium shadow-indigo-500/10'
+                : isPinned
+                  ? 'bg-amber-50/50 dark:bg-amber-950/20 backdrop-blur-xl border border-amber-400/40 dark:border-amber-500/30 text-slate-800 dark:text-slate-100 rounded-tl-none ring-1 ring-amber-400/30 shadow-md'
+                  : 'bg-white/95 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800/80 text-slate-800 dark:text-slate-100 rounded-tl-none shadow-sm'
+            }`}
+          >
+            {isPinned && !isUser && (
+              <div className="flex items-center gap-1 text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-2 pb-1.5 border-b border-amber-200/50 dark:border-amber-800/50">
+                <BookmarkCheck className="w-3 h-3 text-amber-500" />
+                <span>Insight Disematkan</span>
+              </div>
+            )}
+
+            {isUser ? (
+              msg.content
+            ) : (
+              <div className="prose prose-sm dark:prose-invert max-w-none prose-pre:p-0 prose-pre:bg-transparent">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  components={{
+                    code({ node, className, children, ...props }: any) {
+                      const match = /language-(\w+)(?::([\w-]+))?/.exec(className || '');
+                      const lang = match ? match[1] : '';
+                      const subType = match && match[2] ? match[2] : '';
+                      const codeContent = String(children).replace(/\n$/, '');
+
+                      if (lang === 'chart' || lang === 'plotly') {
+                        return <InteractiveVisualChart type={subType || 'plotly'} rawJson={codeContent} />;
+                      }
+
+                      if (['dot', 'graphml', 'cypher', 'mermaid'].includes(lang.toLowerCase())) {
+                        return <GraphCodeBlock language={lang} code={codeContent} />;
+                      }
+
+                      return (
+                        <code className={`${className} bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400 font-mono text-xs`} {...props}>
+                          {children}
+                        </code>
+                      );
+                    },
+                    table({ children }) {
+                      return (
+                        <div className="my-3 overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white/50 dark:bg-slate-950/40 shadow-xs">
+                          <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-left text-xs">
+                            {children}
+                          </table>
+                        </div>
+                      );
+                    },
+                    th({ children }) {
+                      return (
+                        <th className="bg-slate-100/90 dark:bg-slate-800/90 px-3.5 py-2.5 font-bold text-slate-800 dark:text-slate-100 border-b border-slate-200 dark:border-slate-700">
+                          {children}
+                        </th>
+                      );
+                    },
+                    td({ children }) {
+                      return (
+                        <td className="px-3.5 py-2 border-b border-slate-100 dark:border-slate-800/60 text-slate-700 dark:text-slate-300">
+                          {children}
+                        </td>
+                      );
+                    }
+                  }}
+                >
+                  {cleanContent}
+                </ReactMarkdown>
+                {isStreamingActive && (
+                  <span className="inline-block w-2 h-4 bg-indigo-600 dark:bg-indigo-400 ml-1 translate-y-0.5 animate-pulse rounded-xs" />
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* User Bubble Toolbar: Copy & Edit */}
+          {isUser && (
+            <div className="flex items-center gap-1.5 pt-1 px-1 opacity-70 hover:opacity-100 transition-opacity">
+              <button
+                onClick={() => onCopy(msg.content, idx)}
+                className="flex items-center gap-1 text-[11px] font-medium text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 px-1.5 py-0.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                title="Salin pertanyaan"
+              >
+                {copiedIndex === idx ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
+                <span>Salin</span>
+              </button>
+              <button
+                onClick={() => onEditQuery(msg.content)}
+                className="flex items-center gap-1 text-[11px] font-medium text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 px-1.5 py-0.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                title="Edit dan muat kembali ke input box"
+              >
+                <Pencil className="h-3 w-3" />
+                <span>Edit</span>
+              </button>
+            </div>
+          )}
+
+          {/* Actions Toolbar & Grounding Source Chips */}
+          {!isUser && !isStreamingActive && (
+            <div className="flex flex-wrap items-center justify-between w-full pt-1.5 px-1 gap-2 animate-in fade-in duration-300">
+              <div className="flex items-center gap-1.5 ml-auto">
+                {/* Response Time Badge */}
+                {msg.execution_time_ms !== undefined && (
+                  <span 
+                    className="inline-flex items-center gap-0.5 text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400 border border-slate-200/50 dark:border-slate-700/50"
+                    title={`Total waktu pemrosesan AI: ${msg.execution_time_ms} ms`}
+                  >
+                    <Zap className="w-3 h-3 text-amber-500" />
+                    <span>{(msg.execution_time_ms / 1000).toFixed(1)}s</span>
+                  </span>
+                )}
+
+                {/* Inspect Prompt Button */}
+                {msg.prompt_used && (
+                  <button
+                    onClick={() => onInspectPrompt(msg.prompt_used || null)}
+                    className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded transition-colors"
+                    title="Inspeksi Context & System Prompt Lengkap"
+                  >
+                    <Code className="h-3.5 w-3.5" />
+                  </button>
+                )}
+
+                <button
+                  onClick={() => onTogglePin(idx)}
+                  className={`p-1 rounded transition-colors ${
+                    isPinned 
+                      ? 'text-amber-500 bg-amber-500/10 font-bold' 
+                      : 'text-slate-400 hover:text-amber-500'
+                  }`}
+                  title={isPinned ? "Lepas sematan insight" : "Sematkan insight penting"}
+                >
+                  {isPinned ? <BookmarkCheck className="h-3.5 w-3.5 text-amber-500" /> : <Bookmark className="h-3.5 w-3.5" />}
+                </button>
+                <button
+                  onClick={() => onCopy(cleanContent, idx)}
+                  className="p-1 text-slate-400 hover:text-indigo-600 rounded transition-colors"
+                  title="Salin respon"
+                >
+                  {copiedIndex === idx ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                </button>
+                <button
+                  onClick={() => onVote(idx, 'up')}
+                  className={`p-1 rounded transition-colors ${feedbackVote === 'up' ? 'text-indigo-600 font-bold' : 'text-slate-400 hover:text-indigo-600'}`}
+                  title="Bermanfaat"
+                >
+                  <ThumbsUp className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => onVote(idx, 'down')}
+                  className={`p-1 rounded transition-colors ${feedbackVote === 'down' ? 'text-rose-600 font-bold' : 'text-slate-400 hover:text-rose-600'}`}
+                  title="Kurang akurat"
+                >
+                  <ThumbsDown className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {isUser && (
+          <div className="w-8 h-8 rounded-xl bg-slate-800 dark:bg-slate-700 text-white flex items-center justify-center shrink-0 shadow-sm mt-1">
+            <User className="h-4 w-4" />
+          </div>
+        )}
+      </div>
+
+      {/* 🎯 CLICKABLE ACTION DEEP-LINKS (Aksi Langsung ke Modul Blonjo - Muncul LANGSUNG tanpa menunggu streaming) */}
+      {!isUser && actions.length > 0 && (
+        <div className="pl-11 pr-2 w-full pt-1 animate-in fade-in duration-300">
+          <div className="flex flex-wrap gap-2 items-center">
+            {actions.map((act, aIdx) => (
+              <button
+                key={aIdx}
+                onClick={() => onNavigate(act.path)}
+                className="group flex items-center gap-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 px-3 py-1.5 rounded-xl transition-all shadow-xs shadow-indigo-500/20 hover:scale-102"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>{act.label}</span>
+                <ArrowRight className="w-3.5 h-3.5 opacity-80 group-hover:translate-x-0.5 transition-transform" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 🎯 CLICKABLE SUGGESTION CHIPS (Langkah / Pertanyaan Selanjutnya) */}
+      {!isUser && !isStreamingActive && suggestions.length > 0 && (
+        <div className="pl-11 pr-2 w-full pt-1 animate-in fade-in slide-in-from-bottom-1 duration-300">
+          <div className="flex flex-wrap gap-1.5 items-center">
+            {suggestions.map((sug, sIdx) => (
+              <button
+                key={sIdx}
+                onClick={() => onSendSuggestion(sug)}
+                disabled={sending || streamingMsgIndex !== null}
+                className="group flex items-center gap-1 text-[11px] font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50/80 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200/70 dark:border-indigo-800/70 px-3 py-1.5 rounded-full transition-all text-left shadow-2xs hover:shadow-xs disabled:opacity-50"
+              >
+                <Sparkles className="w-3 h-3 text-indigo-500 shrink-0 group-hover:rotate-12 transition-transform" />
+                <span>{sug}</span>
+                <ArrowRight className="w-3 h-3 text-indigo-400 opacity-0 group-hover:opacity-100 -translate-x-1 group-hover:translate-x-0 transition-all shrink-0 ml-0.5" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}, (prev, next) => {
+  if (!prev.isStreamingActive && !next.isStreamingActive) {
+    return (
+      prev.msg.content === next.msg.content &&
+      prev.isPinned === next.isPinned &&
+      (prev.copiedIndex === prev.idx) === (next.copiedIndex === next.idx) &&
+      prev.feedbackVote === next.feedbackVote &&
+      prev.sending === next.sending &&
+      prev.streamingMsgIndex === next.streamingMsgIndex
+    );
+  }
+  return (
+    prev.isStreamingActive === next.isStreamingActive &&
+    prev.displayContent === next.displayContent &&
+    prev.isPinned === next.isPinned
+  );
+});
 
 export default function VibesChat() {
   const { t } = useTranslation();
@@ -563,7 +884,7 @@ export default function VibesChat() {
     }
   }, [currentSessionId]);
 
-  const togglePin = (idx: number) => {
+  const togglePin = useCallback((idx: number) => {
     setPinnedIndices((prev) => {
       const next = prev.includes(idx) ? prev.filter((i) => i !== idx) : [...prev, idx];
       try {
@@ -572,7 +893,7 @@ export default function VibesChat() {
       } catch {}
       return next;
     });
-  };
+  }, [currentSessionId]);
 
   // Auto-resize textarea up to 5 lines
   useEffect(() => {
@@ -609,12 +930,31 @@ export default function VibesChat() {
     }
   }, [sending]);
 
-  // 3. Dynamic Stream Follow-Scroll: Mengikuti kalimat yang sedang diketik secara real-time ke bawah
+  // 3. Dynamic Stream Follow-Scroll: Mengikuti kalimat yang sedang diketik via RAF (Bebas Layout Thrashing)
+  const scrollRafRef = useRef<number | null>(null);
+
+  const scheduleFollowScroll = useCallback(() => {
+    if (isUserScrolledUpRef.current || !messagesContainerRef.current) return;
+    if (scrollRafRef.current) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      if (messagesContainerRef.current && !isUserScrolledUpRef.current) {
+        messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+      }
+    });
+  }, []);
+
   useEffect(() => {
-    if (streamingMsgIndex !== null && !isUserScrolledUpRef.current && messagesContainerRef.current) {
-      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    return () => {
+      if (scrollRafRef.current) cancelAnimationFrame(scrollRafRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (streamingMsgIndex !== null && !isUserScrolledUpRef.current) {
+      scheduleFollowScroll();
     }
-  }, [streamingText, streamingMsgIndex]);
+  }, [streamingText, streamingMsgIndex, scheduleFollowScroll]);
 
   // 1. Fetch Sessions List on Mount
   const fetchSessions = async () => {
@@ -777,15 +1117,20 @@ export default function VibesChat() {
       }
       fetchSessions();
 
-      // ⚡ Mulai mode streaming (Typing / Stream effect seperti ChatGPT)
+      // ⚡ Ekstrak ACTIONS di awal agar tombol aksi langsung tampil seketika tanpa menunggu streaming
+      const { cleanContent: contentNoAct, actions: parsedActions } = extractActions(ans);
+      const { cleanContent: textToStream, suggestions: parsedSuggestions } = extractSuggestions(contentNoAct);
+
       const assistantIndex = updatedMessages.length;
-      const targetText = ans;
+      const targetText = textToStream;
 
       setMessages(prev => [
         ...prev,
         {
           role: 'assistant',
           content: '',
+          actions: parsedActions,
+          suggestions: parsedSuggestions,
           sources: sources,
           execution_time_ms: execTime,
           prompt_used: promptUsed
@@ -798,8 +1143,8 @@ export default function VibesChat() {
 
       let charIndex = 0;
       const totalLen = targetText.length;
-      // Adaptive chunking: 4-12 karakter per tick 16ms
-      const chunkSize = totalLen > 1200 ? 12 : (totalLen > 600 ? 7 : 4);
+      // Adaptive chunking yang ergonomis & ramah CPU (28ms per tick)
+      const chunkSize = totalLen > 1500 ? 24 : (totalLen > 800 ? 14 : (totalLen > 300 ? 8 : 4));
 
       if (streamingTimerRef.current) clearInterval(streamingTimerRef.current);
 
@@ -823,7 +1168,7 @@ export default function VibesChat() {
         } else {
           setStreamingText(targetText.slice(0, charIndex));
         }
-      }, 16);
+      }, 28);
     } catch (err: any) {
       console.error('Error vibes chat:', err);
       setSending(false);
@@ -848,13 +1193,13 @@ export default function VibesChat() {
     }
   };
 
-  const handleCopy = (text: string, idx: number) => {
+  const handleCopy = useCallback((text: string, idx: number) => {
     navigator.clipboard.writeText(text);
     setCopiedIndex(idx);
     setTimeout(() => setCopiedIndex(null), 2000);
-  };
+  }, []);
 
-  const handleVote = async (idx: number, vote: 'up' | 'down') => {
+  const handleVote = useCallback(async (idx: number, vote: 'up' | 'down') => {
     const isTogglingOff = feedbackState[idx] === vote;
     setFeedbackState(prev => ({
       ...prev,
@@ -876,41 +1221,17 @@ export default function VibesChat() {
         console.warn('Feedback submission warning:', err);
       }
     }
-  };
+  }, [feedbackState, messages, currentSessionId]);
 
-  // Helper: Extract actions from message content
-  const extractActions = (content: string): { cleanContent: string; actions: Array<{ label: string; path: string }> } => {
-    const match = /<!--\s*ACTIONS\s*-->([\s\S]*?)<!--\s*\/ACTIONS\s*-->/i.exec(content);
-    if (!match) {
-      return { cleanContent: content, actions: [] };
+  const handleEditQuery = useCallback((text: string) => {
+    setInput(text);
+    if (textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
     }
-    const cleanContent = content.replace(match[0], '').trim();
-    const actionsRaw = match[1].trim().split('\n');
-    const actions: Array<{ label: string; path: string }> = [];
-    for (const line of actionsRaw) {
-      const linkMatch = /\[(.*?)\]\((.*?)\)/.exec(line);
-      if (linkMatch) {
-        actions.push({ label: linkMatch[1].trim(), path: linkMatch[2].trim() });
-      }
-    }
-    return { cleanContent, actions };
-  };
-
-  // Helper: Extract suggestions from message content
-  const extractSuggestions = (content: string): { cleanContent: string; suggestions: string[] } => {
-    const match = /<!--\s*SUGGESTIONS\s*-->([\s\S]*?)<!--\s*\/SUGGESTIONS\s*-->/i.exec(content);
-    if (!match) {
-      return { cleanContent: content, suggestions: [] };
-    }
-    const cleanContent = content.replace(match[0], '').trim();
-    const suggestionsRaw = match[1].trim().split('\n');
-    const suggestions = suggestionsRaw
-      .map(s => s.replace(/^[-*•\d.]+\s*/, '').trim())
-      .filter(s => s.length > 0)
-      .slice(0, 3);
-
-    return { cleanContent, suggestions };
-  };
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+  }, []);
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-slate-50/50 dark:bg-slate-950/50 rounded-2xl border border-slate-200/60 dark:border-slate-800/60 shadow-xs">
@@ -1168,247 +1489,30 @@ export default function VibesChat() {
                   return null;
                 }
 
-                const isUser = msg.role === 'user';
                 const isStreamingActive = idx === streamingMsgIndex;
-                const displayRaw = isStreamingActive ? streamingText : msg.content;
-                const { cleanContent: contentNoSug, suggestions } = !isUser ? extractSuggestions(displayRaw) : { cleanContent: displayRaw, suggestions: [] };
-                const { cleanContent, actions } = !isUser ? extractActions(contentNoSug) : { cleanContent: contentNoSug, actions: [] };
+                const displayContent = isStreamingActive ? streamingText : msg.content;
                 const isPinned = pinnedIndices.includes(idx);
 
                 return (
-                  <div
+                  <ChatMessageItem
                     key={idx}
-                    ref={(!isUser && idx === messages.length - 1) ? latestAssistantRef : undefined}
-                    className={`flex flex-col gap-2 max-w-4xl mx-auto ${isUser ? 'items-end' : 'items-start'}`}
-                  >
-                    <div className={`flex gap-3 w-full ${isUser ? 'justify-end' : 'justify-start'}`}>
-                      {!isUser && (
-                        <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-indigo-500/20 mt-1">
-                          <Bot className="h-4 w-4" />
-                        </div>
-                      )}
-
-                      <div className={`flex flex-col space-y-1 max-w-[92%] md:max-w-[85%] ${isUser ? 'items-end' : 'items-start'}`}>
-                        
-                        {/* Bubble Message */}
-                        <div
-                          className={`p-4 md:p-5 rounded-2xl text-xs md:text-sm leading-relaxed shadow-sm transition-all ${
-                            isUser
-                              ? 'bg-gradient-to-r from-indigo-600 to-indigo-700 text-white rounded-br-none whitespace-pre-wrap font-medium shadow-indigo-500/10'
-                              : isPinned
-                                ? 'bg-amber-50/50 dark:bg-amber-950/20 backdrop-blur-xl border border-amber-400/40 dark:border-amber-500/30 text-slate-800 dark:text-slate-100 rounded-tl-none ring-1 ring-amber-400/30 shadow-md'
-                                : 'bg-white/95 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200/80 dark:border-slate-800/80 text-slate-800 dark:text-slate-100 rounded-tl-none shadow-sm'
-                          }`}
-                        >
-                          {isPinned && !isUser && (
-                            <div className="flex items-center gap-1 text-[10px] font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-2 pb-1.5 border-b border-amber-200/50 dark:border-amber-800/50">
-                              <BookmarkCheck className="w-3 h-3 text-amber-500" />
-                              <span>Insight Disematkan</span>
-                            </div>
-                          )}
-
-                          {isUser ? (
-                            msg.content
-                          ) : (
-                            <div className="prose prose-sm dark:prose-invert max-w-none prose-pre:p-0 prose-pre:bg-transparent">
-                              <ReactMarkdown
-                                remarkPlugins={[remarkGfm]}
-                                components={{
-                                  code({ node, className, children, ...props }: any) {
-                                    const match = /language-(\w+)(?::([\w-]+))?/.exec(className || '');
-                                    const lang = match ? match[1] : '';
-                                    const subType = match && match[2] ? match[2] : '';
-                                    const codeContent = String(children).replace(/\n$/, '');
-
-                                    if (lang === 'chart' || lang === 'plotly') {
-                                      return <InteractiveVisualChart type={subType || 'plotly'} rawJson={codeContent} />;
-                                    }
-
-                                    if (['dot', 'graphml', 'cypher', 'mermaid'].includes(lang.toLowerCase())) {
-                                      return <GraphCodeBlock language={lang} code={codeContent} />;
-                                    }
-
-                                    return (
-                                      <code className={`${className} bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400 font-mono text-xs`} {...props}>
-                                        {children}
-                                      </code>
-                                    );
-                                  },
-                                  table({ children }) {
-                                    return (
-                                      <div className="my-3 overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800/80 bg-white/50 dark:bg-slate-950/40 shadow-xs">
-                                        <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800 text-left text-xs">
-                                          {children}
-                                        </table>
-                                      </div>
-                                    );
-                                  },
-                                  th({ children }) {
-                                    return (
-                                      <th className="bg-slate-100/90 dark:bg-slate-800/90 px-3.5 py-2.5 font-bold text-slate-800 dark:text-slate-100 border-b border-slate-200 dark:border-slate-700">
-                                        {children}
-                                      </th>
-                                    );
-                                  },
-                                  td({ children }) {
-                                    return (
-                                      <td className="px-3.5 py-2 border-b border-slate-100 dark:border-slate-800/60 text-slate-700 dark:text-slate-300">
-                                        {children}
-                                      </td>
-                                    );
-                                  }
-                                }}
-                              >
-                                {cleanContent}
-                              </ReactMarkdown>
-                              {isStreamingActive && (
-                                <span className="inline-block w-2 h-4 bg-indigo-600 dark:bg-indigo-400 ml-1 translate-y-0.5 animate-pulse rounded-xs" />
-                              )}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* User Bubble Toolbar: Copy & Edit */}
-                        {isUser && (
-                          <div className="flex items-center gap-1.5 pt-1 px-1 opacity-70 hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={() => handleCopy(msg.content, idx)}
-                              className="flex items-center gap-1 text-[11px] font-medium text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 px-1.5 py-0.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                              title="Salin pertanyaan"
-                            >
-                              {copiedIndex === idx ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
-                              <span>Salin</span>
-                            </button>
-                            <button
-                              onClick={() => {
-                                setInput(msg.content);
-                                if (textareaRef.current) {
-                                  textareaRef.current.focus();
-                                  textareaRef.current.style.height = 'auto';
-                                  textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
-                                }
-                                window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
-                              }}
-                              className="flex items-center gap-1 text-[11px] font-medium text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 px-1.5 py-0.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                              title="Edit dan muat kembali ke input box"
-                            >
-                              <Pencil className="h-3 w-3" />
-                              <span>Edit</span>
-                            </button>
-                          </div>
-                        )}
-
-                        {/* Actions Toolbar & Grounding Source Chips */}
-                        {!isUser && !isStreamingActive && (
-                          <div className="flex flex-wrap items-center justify-between w-full pt-1.5 px-1 gap-2 animate-in fade-in duration-300">
-                            {/* Quick Actions (Execution Time, Prompt Inspector, Pin, Copy & Vote) */}
-                            <div className="flex items-center gap-1.5 ml-auto">
-                              {/* Response Time Badge */}
-                              {msg.execution_time_ms !== undefined && (
-                                <span 
-                                  className="inline-flex items-center gap-0.5 text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400 border border-slate-200/50 dark:border-slate-700/50"
-                                  title={`Total waktu pemrosesan AI: ${msg.execution_time_ms} ms`}
-                                >
-                                  <Zap className="w-3 h-3 text-amber-500" />
-                                  <span>{(msg.execution_time_ms / 1000).toFixed(1)}s</span>
-                                </span>
-                              )}
-
-                              {/* Inspect Prompt Button */}
-                              {msg.prompt_used && (
-                                <button
-                                  onClick={() => setInspectingPrompt(msg.prompt_used || null)}
-                                  className="p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded transition-colors"
-                                  title="Inspeksi Context & System Prompt Lengkap"
-                                >
-                                  <Code className="h-3.5 w-3.5" />
-                                </button>
-                              )}
-
-                              <button
-                                onClick={() => togglePin(idx)}
-                                className={`p-1 rounded transition-colors ${
-                                  isPinned 
-                                    ? 'text-amber-500 bg-amber-500/10 font-bold' 
-                                    : 'text-slate-400 hover:text-amber-500'
-                                }`}
-                                title={isPinned ? "Lepas sematan insight" : "Sematkan insight penting"}
-                              >
-                                {isPinned ? <BookmarkCheck className="h-3.5 w-3.5 text-amber-500" /> : <Bookmark className="h-3.5 w-3.5" />}
-                              </button>
-                              <button
-                                onClick={() => handleCopy(cleanContent, idx)}
-                                className="p-1 text-slate-400 hover:text-indigo-600 rounded transition-colors"
-                                title="Salin respon"
-                              >
-                                {copiedIndex === idx ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                              </button>
-                              <button
-                                onClick={() => handleVote(idx, 'up')}
-                                className={`p-1 rounded transition-colors ${feedbackState[idx] === 'up' ? 'text-indigo-600 font-bold' : 'text-slate-400 hover:text-indigo-600'}`}
-                                title="Bermanfaat"
-                              >
-                                <ThumbsUp className="h-3.5 w-3.5" />
-                              </button>
-                              <button
-                                onClick={() => handleVote(idx, 'down')}
-                                className={`p-1 rounded transition-colors ${feedbackState[idx] === 'down' ? 'text-rose-600 font-bold' : 'text-slate-400 hover:text-rose-600'}`}
-                                title="Kurang akurat"
-                              >
-                                <ThumbsDown className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-
-                      {isUser && (
-                        <div className="w-8 h-8 rounded-xl bg-slate-800 dark:bg-slate-700 text-white flex items-center justify-center shrink-0 shadow-sm mt-1">
-                          <User className="h-4 w-4" />
-                        </div>
-                      )}
-                    </div>
-
-                    {/* 🎯 CLICKABLE ACTION DEEP-LINKS (Aksi Langsung ke Modul Blonjo) */}
-                    {!isUser && !isStreamingActive && actions.length > 0 && (
-                      <div className="pl-11 pr-2 w-full pt-1 animate-in fade-in duration-300">
-                        <div className="flex flex-wrap gap-2 items-center">
-                          {actions.map((act, aIdx) => (
-                            <button
-                              key={aIdx}
-                              onClick={() => navigate(act.path)}
-                              className="group flex items-center gap-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 px-3 py-1.5 rounded-xl transition-all shadow-xs shadow-indigo-500/20 hover:scale-102"
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                              <span>{act.label}</span>
-                              <ArrowRight className="w-3.5 h-3.5 opacity-80 group-hover:translate-x-0.5 transition-transform" />
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* 🎯 CLICKABLE SUGGESTION CHIPS (Langkah / Pertanyaan Selanjutnya) */}
-                    {!isUser && !isStreamingActive && suggestions.length > 0 && (
-                      <div className="pl-11 pr-2 w-full pt-1 animate-in fade-in slide-in-from-bottom-1 duration-300">
-                        <div className="flex flex-wrap gap-1.5 items-center">
-                          {suggestions.map((sug, sIdx) => (
-                            <button
-                              key={sIdx}
-                              onClick={() => handleSend(sug)}
-                              disabled={sending || streamingMsgIndex !== null}
-                              className="group flex items-center gap-1 text-[11px] font-medium text-indigo-700 dark:text-indigo-300 bg-indigo-50/80 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 border border-indigo-200/70 dark:border-indigo-800/70 px-3 py-1.5 rounded-full transition-all text-left shadow-2xs hover:shadow-xs disabled:opacity-50"
-                            >
-                              <Sparkles className="w-3 h-3 text-indigo-500 shrink-0 group-hover:rotate-12 transition-transform" />
-                              <span>{sug}</span>
-                              <ArrowRight className="w-3 h-3 text-indigo-400 opacity-0 group-hover:opacity-100 -translate-x-1 group-hover:translate-x-0 transition-all shrink-0 ml-0.5" />
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                  </div>
+                    msg={msg}
+                    idx={idx}
+                    isStreamingActive={isStreamingActive}
+                    displayContent={displayContent}
+                    isPinned={isPinned}
+                    copiedIndex={copiedIndex}
+                    feedbackVote={feedbackState[idx]}
+                    onCopy={handleCopy}
+                    onVote={handleVote}
+                    onTogglePin={togglePin}
+                    onInspectPrompt={setInspectingPrompt}
+                    onEditQuery={handleEditQuery}
+                    onNavigate={navigate}
+                    onSendSuggestion={handleSend}
+                    sending={sending}
+                    streamingMsgIndex={streamingMsgIndex}
+                  />
                 );
               })}
 
