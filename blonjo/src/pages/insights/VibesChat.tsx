@@ -15,7 +15,7 @@ import {
   Minimize2, ZoomIn, ZoomOut, RotateCcw, AlertTriangle, Image as ImageIcon,
   X, Pin, PinOff, Bookmark, BookmarkCheck, Lightbulb, Wallet, GitBranch,
   Layers, TrendingUp, Tag, Package, ExternalLink, Compass, Zap, MoreVertical,
-  Pencil
+  Pencil, Database
 } from 'lucide-react';
 import { UniversalPlotlyChart } from '../../components/UniversalPlotlyChart';
 import { Button } from '../../components/ui/button';
@@ -489,11 +489,13 @@ const QUICK_STARTERS = [
 
 // Helper: Extract actions from message content
 const extractActions = (content: string): { cleanContent: string; actions: Array<{ label: string; path: string }> } => {
-  const match = /<!--\s*ACTIONS\s*-->([\s\S]*?)<!--\s*\/ACTIONS\s*-->/i.exec(content);
+  if (!content) return { cleanContent: '', actions: [] };
+  const match = /<!--\s*ACTIONS\s*-->([\s\S]*?)(?:<!--\s*\/?ACTIONS\s*-->|$)/i.exec(content);
   if (!match) {
-    return { cleanContent: content, actions: [] };
+    const fallbackClean = content.replace(/<!--\s*\/?ACTIONS\s*-->/gi, '').trim();
+    return { cleanContent: fallbackClean, actions: [] };
   }
-  const cleanContent = content.replace(match[0], '').trim();
+  const cleanContent = content.replace(match[0], '').replace(/<!--\s*\/?ACTIONS\s*-->/gi, '').trim();
   const actionsRaw = match[1].trim().split('\n');
   const actions: Array<{ label: string; path: string }> = [];
   for (const line of actionsRaw) {
@@ -507,15 +509,18 @@ const extractActions = (content: string): { cleanContent: string; actions: Array
 
 // Helper: Extract suggestions from message content
 const extractSuggestions = (content: string): { cleanContent: string; suggestions: string[] } => {
-  const match = /<!--\s*SUGGESTIONS\s*-->([\s\S]*?)<!--\s*\/SUGGESTIONS\s*-->/i.exec(content);
+  if (!content) return { cleanContent: '', suggestions: [] };
+  // Toleran terhadap tag penutup <!-- /SUGGESTIONS --> maupun tag yang unclosed di akhir respon ($)
+  const match = /<!--\s*SUGGESTIONS\s*-->([\s\S]*?)(?:<!--\s*\/?SUGGESTIONS\s*-->|$)/i.exec(content);
   if (!match) {
-    return { cleanContent: content, suggestions: [] };
+    const fallbackClean = content.replace(/<!--\s*\/?SUGGESTIONS\s*-->/gi, '').trim();
+    return { cleanContent: fallbackClean, suggestions: [] };
   }
-  const cleanContent = content.replace(match[0], '').trim();
+  const cleanContent = content.replace(match[0], '').replace(/<!--\s*\/?SUGGESTIONS\s*-->/gi, '').trim();
   const suggestionsRaw = match[1].trim().split('\n');
   const suggestions = suggestionsRaw
-    .map(s => s.replace(/^[-*•\d.]+\s*/, '').trim())
-    .filter(s => s.length > 0)
+    .map(s => s.replace(/^[-*•\d.]+\s*/, '').replace(/<!--.*?-->/g, '').trim())
+    .filter(s => s.length > 0 && !s.toLowerCase().includes('suggestion'))
     .slice(0, 3);
 
   return { cleanContent, suggestions };
@@ -806,6 +811,14 @@ const ChatMessageItem = React.memo<ChatMessageItemProps>(({
   );
 });
 
+const PROCESSING_STEPS = [
+  "Memahami pertanyaan...",
+  "Mengecek kamus & data toko...",
+  "Mengambil data transaksi...",
+  "Menganalisis data...",
+  "Menyusun jawaban..."
+];
+
 export default function VibesChat() {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -815,6 +828,7 @@ export default function VibesChat() {
   const [input, setInput] = useState('');
   const [initialLoading, setInitialLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [stepIndex, setStepIndex] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const [feedbackState, setFeedbackState] = useState<Record<number, 'up' | 'down'>>({});
@@ -836,6 +850,25 @@ export default function VibesChat() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+
+  // ⚡ Dynamic Progressive 1-Line Status
+  useEffect(() => {
+    if (!sending) {
+      setStepIndex(0);
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setStepIndex(prev => {
+        if (prev < PROCESSING_STEPS.length - 1) {
+          return prev + 1;
+        }
+        return prev;
+      });
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [sending]);
 
   // Helper untuk scroll instan ke paling bawah tanpa animasi geser
   const scrollToInstantBottom = () => {
@@ -1516,15 +1549,17 @@ export default function VibesChat() {
                 );
               })}
 
-              {/* Sending Indicator */}
+              {/* ⚡ Simple 1-Line Progressive Status */}
               {sending && (
-                <div className="flex gap-3 max-w-4xl mx-auto justify-start">
-                  <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-indigo-500/20">
+                <div className="flex gap-3 max-w-4xl mx-auto justify-start animate-in fade-in duration-200">
+                  <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-indigo-500/20 mt-1">
                     <Bot className="h-4 w-4" />
                   </div>
-                  <div className="p-4 rounded-2xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border border-slate-200/60 dark:border-slate-800/60 rounded-tl-none flex items-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />
-                    <span className="text-xs text-slate-500 font-medium">Asisten sedang menyusun analisa dan data faktual toko...</span>
+                  <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-tl-none shadow-sm flex items-center gap-3">
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-600 dark:text-indigo-400 shrink-0" />
+                    <span className="text-sm text-slate-600 dark:text-slate-300 font-medium animate-pulse">
+                      {PROCESSING_STEPS[stepIndex]}
+                    </span>
                   </div>
                 </div>
               )}

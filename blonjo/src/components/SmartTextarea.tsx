@@ -115,12 +115,12 @@ export function SmartTextarea({
     
     const loadSettings = async () => {
       try {
-        const res: any = await apiClient.get('/finance/compass/summary');
+        const res: any = await apiClient.get('/settings/maintenance-stock');
         if (res && typeof res.maintenance_stock === 'boolean') {
           setMaintenanceStock(res.maintenance_stock);
         }
       } catch (err) {
-        console.error('Failed to load compass settings:', err);
+        console.error('Failed to load maintenance stock settings:', err);
       }
     };
 

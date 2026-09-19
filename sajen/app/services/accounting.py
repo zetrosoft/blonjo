@@ -1324,25 +1324,39 @@ def get_dashboard_summary(db: Session, tenant_id: int | None = None, days: int =
     # Chart Data: Dynamic timeframe based on days parameter (default 30, supports 7, 30, 60, 90)
     chart_data = []
     num_days = max(1, min(days, 365))
+    start_chart_date = today - timedelta(days=num_days - 1)
+
+    # 2 aggregate queries instead of 60 individual loop queries
+    rev_by_date = dict(
+        db.query(
+            Transaction.transaction_date,
+            func.sum(Transaction.total_amount)
+        ).filter(
+            Transaction.tenant_id == t_id,
+            Transaction.transaction_date >= start_chart_date,
+            Transaction.transaction_date <= today,
+            Transaction.transaction_type.in_(revenue_types)
+        ).group_by(Transaction.transaction_date).all()
+    )
+
+    exp_by_date = dict(
+        db.query(
+            Transaction.transaction_date,
+            func.sum(Transaction.total_amount)
+        ).filter(
+            Transaction.tenant_id == t_id,
+            Transaction.transaction_date >= start_chart_date,
+            Transaction.transaction_date <= today,
+            Transaction.transaction_type.in_(expense_types)
+        ).group_by(Transaction.transaction_date).all()
+    )
+
     for i in range(num_days - 1, -1, -1):
         day = today - timedelta(days=i)
-        
-        day_rev = db.query(func.sum(Transaction.total_amount)).filter(
-            Transaction.tenant_id == t_id,
-            Transaction.transaction_date == day,
-            Transaction.transaction_type.in_(revenue_types)
-        ).scalar() or Decimal('0.00')
-        
-        day_exp = db.query(func.sum(Transaction.total_amount)).filter(
-            Transaction.tenant_id == t_id,
-            Transaction.transaction_date == day,
-            Transaction.transaction_type.in_(expense_types)
-        ).scalar() or Decimal('0.00')
-        
         chart_data.append({
             "name": day.strftime("%d %b"),
-            "revenue": float(day_rev),
-            "expense": float(day_exp)
+            "revenue": float(rev_by_date.get(day) or 0.0),
+            "expense": float(exp_by_date.get(day) or 0.0)
         })
 
     # Fetch Upcoming Debts & Bills (Hutang Pembelian Supplier + DP Customer Penjualan)
@@ -1396,7 +1410,7 @@ def get_dashboard_summary(db: Session, tenant_id: int | None = None, days: int =
 
     total_inventory_value = purchase_val_mtd - sales_val_mtd
 
-    # Calculate low stock count for info
+    # Calculate low stock count for info (optimized single-pass query)
     from app.models.setting import AppSetting
     from app.models.inventory import TenantInventory, Product, InventoryLog
     
@@ -1405,29 +1419,39 @@ def get_dashboard_summary(db: Session, tenant_id: int | None = None, days: int =
         AppSetting.key == "stock_maintenance"
     ).first()
     is_static = setting.value.lower() == "true" if setting else False
-    low_stock_count = 0
-    products = db.query(Product).all()
-    for p in products:
-        ti = db.query(TenantInventory).filter(
+    
+    if is_static:
+        low_stock_count = db.query(func.count(TenantInventory.id)).filter(
             TenantInventory.tenant_id == t_id,
-            TenantInventory.product_id == p.id
-        ).first()
-        if is_static:
-            qty = ti.static_stock if ti else Decimal('0.00')
-        else:
-            in_qty = db.query(func.sum(InventoryLog.quantity)).join(Transaction).filter(
-                Transaction.tenant_id == t_id,
-                InventoryLog.product_id == p.id,
-                InventoryLog.log_type == "in"
-            ).scalar() or Decimal('0.00')
-            out_qty = db.query(func.sum(InventoryLog.quantity)).join(Transaction).filter(
-                Transaction.tenant_id == t_id,
-                InventoryLog.product_id == p.id,
-                InventoryLog.log_type == "out"
-            ).scalar() or Decimal('0.00')
-            qty = in_qty - out_qty
-        if qty < 10:
-            low_stock_count += 1
+            TenantInventory.static_stock < 10
+        ).scalar() or 0
+    else:
+        in_subq = db.query(
+            InventoryLog.product_id,
+            func.sum(InventoryLog.quantity).label("in_qty")
+        ).join(Transaction).filter(
+            Transaction.tenant_id == t_id,
+            InventoryLog.log_type == "in"
+        ).group_by(InventoryLog.product_id).subquery()
+
+        out_subq = db.query(
+            InventoryLog.product_id,
+            func.sum(InventoryLog.quantity).label("out_qty")
+        ).join(Transaction).filter(
+            Transaction.tenant_id == t_id,
+            InventoryLog.log_type == "out"
+        ).group_by(InventoryLog.product_id).subquery()
+
+        stock_subq = db.query(
+            Product.id,
+            (func.coalesce(in_subq.c.in_qty, 0) - func.coalesce(out_subq.c.out_qty, 0)).label("net_qty")
+        ).outerjoin(in_subq, Product.id == in_subq.c.product_id
+        ).outerjoin(out_subq, Product.id == out_subq.c.product_id
+        ).subquery()
+
+        low_stock_count = db.query(func.count(stock_subq.c.id)).filter(
+            stock_subq.c.net_qty < 10
+        ).scalar() or 0
 
     # ── Top 5 Purchased Products ──
     top_products = db.query(

@@ -626,7 +626,7 @@ async def vibes_chat_endpoint(
                 db=db,
                 prompt=payload.message,
                 system_instruction=fallback_prompt,
-                temperature=0.7
+                temperature=0.2
             )
             answer_text = response.get("raw_output") if isinstance(response, dict) else ""
             sources = ['Sajen Local DB Grounding']

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, JSON, Boolean
 from sqlalchemy.orm import relationship
 from app.models.base import Base
 
@@ -41,7 +41,11 @@ class VibesMemory(Base):
     id = Column(Integer, primary_key=True, index=True)
     tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     memory_type = Column(String(50), nullable=False, default="insight") # 'short_term', 'long_term', 'preference', 'insight'
+    scope = Column(String(30), nullable=False, default="GENERAL", index=True) # 'FORMAT', 'COMMODITY', 'SUPPLIER', 'FINANCIAL', 'GENERAL'
+    entity_key = Column(String(100), nullable=True, index=True)
     content = Column(Text, nullable=False)
     importance_score = Column(Integer, default=1, nullable=False) # 1 - 5
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    superseded_by = Column(Integer, nullable=True)
     
     tenant = relationship("Tenant")

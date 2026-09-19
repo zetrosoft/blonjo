@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
-from app.api.deps import SessionDep, check_role
+from app.api.deps import SessionDep, check_role, CurrentUser
 from app.models.user import User, UserRole
 from app.models.setting import AppSetting
 from app.schemas.setting import AppSettingCreate, AppSettingResponse
@@ -47,6 +47,17 @@ def upsert_tenant_setting(setting_in: AppSettingCreate, db: SessionDep, current_
     db.refresh(setting)
     return setting
 
+@router.get("/maintenance-stock")
+def get_maintenance_stock(db: SessionDep, current_user: CurrentUser):
+    """
+    Endpoint super ringan untuk mendapatkan status mode pelacakan stok tenant (maintenance_stock).
+    Dapat diakses oleh semua pengguna terautentikasi (Kasir, Manager, Admin).
+    """
+    from app.models.tenant import Tenant
+    tenant = db.query(Tenant).filter(Tenant.id == current_user.tenant_id).first()
+    maintenance_stock = tenant.maintenance_stock if tenant else False
+    return {"maintenance_stock": bool(maintenance_stock)}
+
 @router.get("/{key}", response_model=AppSettingResponse)
 def get_tenant_setting_by_key(key: str, db: SessionDep, current_user: User = Depends(check_role([UserRole.ADMIN, UserRole.MANAGER]))):
     """
@@ -73,3 +84,4 @@ def get_tenant_setting_by_key(key: str, db: SessionDep, current_user: User = Dep
         return global_setting
 
     return setting
+

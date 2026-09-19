@@ -40,7 +40,7 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
   useEffect(() => {
     const loadMaintenanceSetting = async () => {
       try {
-        const res = await fetchClient('/finance/compass/summary');
+        const res = await fetchClient('/settings/maintenance-stock');
         if (res && typeof res.maintenance_stock === 'boolean') {
           setMaintenanceStock(res.maintenance_stock);
         }

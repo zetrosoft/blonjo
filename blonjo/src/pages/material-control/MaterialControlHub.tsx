@@ -14,12 +14,12 @@ export default function MaterialControlHub() {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const res = await fetchClient('/finance/compass/summary');
+        const res = await fetchClient('/settings/maintenance-stock');
         if (res && typeof res.maintenance_stock === 'boolean') {
           setMaintenanceStock(res.maintenance_stock);
         }
       } catch (err) {
-        console.error('Failed to load compass settings in Hub:', err);
+        console.error('Failed to load maintenance stock settings in Hub:', err);
       }
     };
     loadSettings();
