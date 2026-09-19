@@ -32,6 +32,7 @@ const PurchasePlanForm = lazy(() => import('./pages/material-control/PurchasePla
 const BudgetingPage = lazy(() => import('./pages/material-control/BudgetingPage'));
 const WasteTracking = lazy(() => import('./pages/material-control/WasteTracking'));
 const ProjectionAccuracyPage = lazy(() => import('./pages/material-control/ProjectionAccuracyPage'));
+const StockOpnameHub = lazy(() => import('./pages/material-control/StockOpnameHub'));
 
 // Master data pages
 const ItemPage = lazy(() => import('./pages/master-data/ItemPage'));
@@ -92,6 +93,7 @@ export default function App() {
               <Route path="budgeting" element={<BudgetingPage />} />
               <Route path="waste" element={<WasteTracking />} />
               <Route path="projection-accuracy" element={<ProjectionAccuracyPage />} />
+              <Route path="stock-opname" element={<StockOpnameHub />} />
             </Route>
             
             <Route path="/reports" element={<ReportsHub />} />

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { LayoutDashboard, ReceiptText, ShoppingCart, TrendingUp, Settings, BookOpen, PieChart, ChevronLeft, ChevronRight, ChevronDown, ChartBar, Package, Users, User, Ruler, Plus, History, Store, Shield, Mic2, Wand2, ShieldCheck, FileText, Receipt, Scale, Landmark, Wallet, GitBranch, Boxes, Tag, DollarSign, AlertTriangle, BarChart2, Compass } from 'lucide-react';
+import { LayoutDashboard, ReceiptText, ShoppingCart, TrendingUp, Settings, BookOpen, PieChart, ChevronLeft, ChevronRight, ChevronDown, ChartBar, Package, Users, User, Ruler, Plus, History, Store, Shield, Mic2, Wand2, ShieldCheck, FileText, Receipt, Scale, Landmark, Wallet, GitBranch, Boxes, Tag, DollarSign, AlertTriangle, BarChart2, Compass, PackageCheck } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { useTheme } from '../theme-provider';
@@ -88,6 +88,7 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         }
         items.push(
           { label: 'menu_purchasing_history', path: '/material-control/purchases', icon: History },
+          { label: 'Stock Opname & Rekonsiliasi', path: '/material-control/stock-opname', icon: PackageCheck },
           { label: 'menu_recommended_purchase', path: '/material-control/recommended', icon: ShoppingCart },
           { label: 'menu_purchase_plan_form', path: '/material-control/purchase-plan', icon: FileText },
           { label: 'menu_budgeting', path: '/material-control/budgeting', icon: DollarSign },

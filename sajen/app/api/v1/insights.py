@@ -471,16 +471,31 @@ async def vibes_chat_endpoint(
         db.commit()
     except Exception as e_db:
         logger.warning(f"[VibesChat] Session DB operation warning: {e_db}")
-    # 0.5 LOAD PENGATURAN TOKO DARI DB
+    # 0.5 LOAD PENGATURAN TOKO & ACTIVE VIBES MEMORY DARI DB
     settings_dict = {}
+    active_memories_list = []
     try:
         settings_rows = db.query(AppSetting).filter(
             or_(AppSetting.tenant_id == current_user.tenant_id, AppSetting.tenant_id.is_(None))
         ).all()
         for s in settings_rows:
             settings_dict[s.key] = s.value
+
+        mem_rows = db.query(VibesMemory).filter(
+            VibesMemory.tenant_id == current_user.tenant_id,
+            VibesMemory.is_active == True
+        ).order_by(VibesMemory.importance_score.desc(), VibesMemory.id.desc()).limit(10).all()
+        for m in mem_rows:
+            active_memories_list.append({
+                "id": m.id,
+                "memory_type": m.memory_type,
+                "scope": m.scope,
+                "entity_key": m.entity_key,
+                "content": m.content,
+                "importance_score": m.importance_score
+            })
     except Exception as e_st:
-        logger.warning(f"[SajenIntelligence] Load settings warning: {e_st}")
+        logger.warning(f"[SajenIntelligence] Load settings/memories warning: {e_st}")
 
     mcp = MCPClient()
     execution_time_ms = None
@@ -500,6 +515,7 @@ async def vibes_chat_endpoint(
             "user_role": user_role_str,
             "tenant_name": tenant_name_str,
             "settings": settings_dict,
+            "memories": active_memories_list,
             "history": payload.history or []
         })
         if mcp_res and "content" in mcp_res and len(mcp_res["content"]) > 0:
