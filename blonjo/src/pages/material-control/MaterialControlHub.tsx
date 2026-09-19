@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardHeader, CardTitle, CardContent } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
-import { LayoutGrid, Package, History, Plus, ArrowRight, Boxes, FileText, DollarSign, AlertTriangle, BarChart2 } from 'lucide-react';
+import { LayoutGrid, Package, History, Plus, ArrowRight, Boxes, FileText, DollarSign, AlertTriangle, BarChart2, PackageCheck } from 'lucide-react';
 import { fetchClient } from '../../api/client';
 
 export default function MaterialControlHub() {
@@ -48,6 +48,15 @@ export default function MaterialControlHub() {
       path: '/material-control/purchases',
       color: 'text-emerald-500',
       bg: 'bg-emerald-50 dark:bg-emerald-950/30'
+    },
+    {
+      title: 'Stock Opname & Rekonsiliasi',
+      desc: 'Input opname fisik via SmartNote atau Excel, cocokkan alias produk, dan eksekusi rekonsiliasi stok.',
+      btnText: 'Buka Stock Opname',
+      icon: PackageCheck,
+      path: '/material-control/stock-opname',
+      color: 'text-indigo-500',
+      bg: 'bg-indigo-50 dark:bg-indigo-950/30'
     },
     {
       title: t('menu_recommended_purchase'),
