@@ -33,6 +33,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.sajen-api.rule=Host(`blonjo.samkarsa.com`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.sajen-api.priority=100"
       - "traefik.http.routers.sajen-api.entrypoints=websecure"
       - "traefik.http.routers.sajen-api.tls.certresolver=myresolver"
       - "traefik.http.services.sajen-api.loadbalancer.server.port=8005"
@@ -87,6 +88,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.blonjo-ui.rule=Host(`blonjo.samkarsa.com`)"
+      - "traefik.http.routers.blonjo-ui.priority=1"
       - "traefik.http.routers.blonjo-ui.entrypoints=websecure"
       - "traefik.http.routers.blonjo-ui.tls.certresolver=myresolver"
       - "traefik.http.services.blonjo-ui.loadbalancer.server.port=7500"
