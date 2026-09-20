@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   FileText, Upload, CheckCircle2, AlertTriangle, RefreshCw, Calculator,
-  Layers, PackageCheck, HelpCircle, ArrowRight, Save, Database, Sparkles, FileSpreadsheet
+  Layers, PackageCheck, HelpCircle, ArrowRight, Save, Database, Sparkles, FileSpreadsheet, History as HistoryIcon, FileEdit
 } from 'lucide-react';
 import { fetchClient } from '../../api/client';
 import { toast } from 'sonner';
@@ -123,7 +123,7 @@ function MasterProductAutocomplete({ currentName, matchScore, categoryName, onSe
 }
 
 export default function StockOpnameHub() {
-  const [activeTab, setActiveTab] = useState<'smartnote' | 'excel'>('smartnote');
+  const [activeTab, setActiveTab] = useState<'smartnote' | 'excel' | 'history'>('smartnote');
   const [isMaintenanceStock, setIsMaintenanceStock] = useState<boolean>(false);
   const [loadingTenant, setLoadingTenant] = useState<boolean>(true);
 
@@ -135,11 +135,33 @@ export default function StockOpnameHub() {
   const [excelFile, setExcelFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState<boolean>(false);
 
+  // History State
+  const [historySessions, setHistorySessions] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
+
   // Result & Reconciliation State
   const [opnameResult, setOpnameResult] = useState<OpnameParseResponse | null>(null);
   const [editableItems, setEditableItems] = useState<ParsedOpnameItem[]>([]);
   const [reconciling, setReconciling] = useState<boolean>(false);
   const [reconciliationNotes, setReconciliationNotes] = useState<string>('');
+
+  const fetchHistory = async () => {
+    setLoadingHistory(true);
+    try {
+      const res = await fetchClient('/inventory/stock-opname/history');
+      setHistorySessions(res || []);
+    } catch {
+      setHistorySessions([]);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'history') {
+      fetchHistory();
+    }
+  }, [activeTab]);
 
   // 1. Fetch Maintenance Stock Mode
   useEffect(() => {
@@ -355,6 +377,17 @@ export default function StockOpnameHub() {
             <FileSpreadsheet className="w-4 h-4" />
             Upload File Excel (.xlsx / .csv)
           </button>
+          <button
+            onClick={() => setActiveTab('history')}
+            className={`pb-3 font-semibold text-sm flex items-center gap-2 border-b-2 transition-colors ${
+              activeTab === 'history'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400 font-bold'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+            }`}
+          >
+            <HistoryIcon className="w-4 h-4" />
+            Riwayat & Audit Log Opname
+          </button>
         </div>
 
         {/* Tab 1: SmartNote */}
@@ -418,6 +451,86 @@ export default function StockOpnameHub() {
                 Unggah & Proses File Excel
               </Button>
             </div>
+          </div>
+        )}
+
+        {/* TAB 3: History & Audit Log */}
+        {activeTab === 'history' && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                <HistoryIcon className="w-4 h-4 text-indigo-500" />
+                Daftar Sesi Rekonsiliasi Opname Historis
+              </h3>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={fetchHistory}
+                className="text-xs gap-1"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${loadingHistory ? 'animate-spin' : ''}`} />
+                Segarkan Data
+              </Button>
+            </div>
+
+            {loadingHistory ? (
+              <div className="p-8 text-center text-xs text-slate-400">Memuat riwayat opname...</div>
+            ) : historySessions.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-400 border border-dashed rounded-xl">
+                Belum ada riwayat sesi opname yang dikonfirmasi.
+              </div>
+            ) : (
+              <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl">
+                <table className="w-full text-xs text-left text-slate-700 dark:text-slate-300">
+                  <thead className="bg-slate-100 dark:bg-slate-800 font-bold uppercase text-[11px] text-slate-600 dark:text-slate-400">
+                    <tr>
+                      <th className="p-3">ID Sesi</th>
+                      <th className="p-3">Tanggal Opname</th>
+                      <th className="p-3 text-center">Jumlah Barang</th>
+                      <th className="p-3 text-right">Total Nilai Fisik</th>
+                      <th className="p-3 text-right">Total Selisih Rp</th>
+                      <th className="p-3">Catatan</th>
+                      <th className="p-3 text-center">Aksi</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-medium">
+                    {historySessions.map((session) => (
+                      <tr key={session.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                        <td className="p-3 font-mono font-bold text-indigo-600 dark:text-indigo-400">#{session.id}</td>
+                        <td className="p-3 font-semibold">{session.opname_date}</td>
+                        <td className="p-3 text-center font-bold">{session.total_items} barang</td>
+                        <td className="p-3 text-right font-mono">Rp {(session.total_physical_amount || 0).toLocaleString('id-ID')}</td>
+                        <td className={`p-3 text-right font-mono font-bold ${
+                          session.total_variance_amount < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'
+                        }`}>
+                          Rp {(session.total_variance_amount || 0).toLocaleString('id-ID')}
+                        </td>
+                        <td className="p-3 text-slate-500 max-w-xs truncate">{session.notes || '-'}</td>
+                        <td className="p-3 text-center">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setOpnameResult({
+                                tanggal_opname: session.opname_date,
+                                total_items: session.total_items,
+                                items: session.items || []
+                              });
+                              setEditableItems(session.items || []);
+                              toast.success(`Sesi Opname #${session.id} dimuat ke Tabel Review & Edit.`);
+                            }}
+                            className="text-[11px] gap-1 px-2.5 py-1 text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50"
+                          >
+                            <FileEdit className="w-3.5 h-3.5" />
+                            Buka & Edit
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
       </div>

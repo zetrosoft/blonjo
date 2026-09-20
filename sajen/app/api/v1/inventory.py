@@ -138,7 +138,55 @@ def create_or_update_alias_mapping(
         return {"status": "success", "message": f"Alias '{payload.raw_pattern}' berhasil dipetakan ke '{payload.corrected_value}'."}
     except Exception as e:
         session.rollback()
-        raise HTTPException(status_code=400, detail=f"Gagal menyelaraskan alias: {str(e)}")
+@router.get("/stock-opname/history")
+@router.get("/stock-opname/history/")
+def get_stock_opname_history(
+    session: SessionDep,
+    current_user: CurrentUser,
+    limit: int = 50
+):
+    from app.models.inventory import StockOpnameSession
+    from sqlalchemy.orm import selectinload
+    try:
+        sessions = session.query(StockOpnameSession).options(
+            selectinload(StockOpnameSession.items)
+        ).filter(
+            StockOpnameSession.tenant_id == current_user.tenant_id
+        ).order_by(StockOpnameSession.id.desc()).limit(limit).all()
+
+        results = []
+        for s in sessions:
+            results.append({
+                "id": s.id,
+                "opname_date": str(s.opname_date),
+                "total_items": s.total_items,
+                "total_physical_amount": float(s.total_physical_amount or 0),
+                "total_variance_amount": float(s.total_variance_amount or 0),
+                "notes": s.notes,
+                "status": s.status,
+                "created_at": str(s.created_at),
+                "items": [
+                    {
+                        "alias_input": item.alias_input,
+                        "product_id": item.product_id,
+                        "official_item_name": item.official_item_name,
+                        "category_name": item.category_name or "Umum",
+                        "match_score": 1.0,
+                        "physical_qty": float(item.physical_qty or 0),
+                        "system_qty": float(item.system_qty or 0),
+                        "variance_qty": float(item.variance_qty or 0),
+                        "unit": item.unit,
+                        "harga_beli": float(item.harga_beli or 0),
+                        "total_harga": float(item.total_harga or 0),
+                        "variance_amount": float(item.variance_amount or 0)
+                    }
+                    for item in s.items
+                ]
+            })
+        return results
+    except Exception as e:
+        logger.error(f"Error fetching stock opname history: {e}")
+        return []
 
 
 

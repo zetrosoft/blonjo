@@ -239,3 +239,49 @@ class StockDiscard(Base):
 
     tenant = relationship("Tenant")
     product = relationship("Product")
+
+
+class StockOpnameSession(Base):
+    """
+    Riwayat Sesi Stock Opname yang Telah Dikonfirmasi.
+    """
+    __tablename__ = "stock_opname_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(Integer, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    opname_date = Column(Date, default=date.today, nullable=False)
+    total_items = Column(Integer, default=0, nullable=False)
+    total_physical_amount = Column(Numeric(15, 2), default=0.00, nullable=False)
+    total_variance_amount = Column(Numeric(15, 2), default=0.00, nullable=False)
+    notes = Column(String(255), nullable=True)
+    status = Column(String(20), default="CONFIRMED", nullable=False)
+    created_at = Column(Date, default=date.today, nullable=False)
+
+    tenant = relationship("Tenant")
+    user = relationship("User")
+    items = relationship("StockOpnameSessionItem", back_populates="session", cascade="all, delete-orphan")
+
+
+class StockOpnameSessionItem(Base):
+    """
+    Detail Barang Per Sesi Stock Opname Historis.
+    """
+    __tablename__ = "stock_opname_session_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("stock_opname_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="SET NULL"), nullable=True, index=True)
+    alias_input = Column(String(100), nullable=True)
+    official_item_name = Column(String(100), nullable=False)
+    category_name = Column(String(100), nullable=True)
+    physical_qty = Column(Numeric(15, 2), nullable=False)
+    system_qty = Column(Numeric(15, 2), nullable=False)
+    variance_qty = Column(Numeric(15, 2), nullable=False)
+    unit = Column(String(20), nullable=False, default="pcs")
+    harga_beli = Column(Numeric(15, 2), nullable=False, default=0.00)
+    total_harga = Column(Numeric(15, 2), nullable=False, default=0.00)
+    variance_amount = Column(Numeric(15, 2), nullable=False, default=0.00)
+
+    session = relationship("StockOpnameSession", back_populates="items")
+    product = relationship("Product")

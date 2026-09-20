@@ -11,7 +11,10 @@ from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 
-from app.models.inventory import Product, ProductCategory, TenantInventory, InventoryLog
+from app.models.inventory import (
+    Product, ProductCategory, TenantInventory, InventoryLog,
+    StockOpnameSession, StockOpnameSessionItem
+)
 from app.models.tenant import Tenant
 from app.models.ocr import OCRAliasMapping
 
@@ -470,6 +473,44 @@ def execute_stock_reconciliation(
             learn_product_alias(db, tenant_id, alias_input, official_name)
 
         updated_count += 1
+
+    # 3. Rekam Histori Sesi Opname ke stock_opname_sessions & stock_opname_session_items
+    try:
+        total_physical = sum(Decimal(str(item.get("total_harga", 0))) for item in opname_data)
+        total_variance = sum(Decimal(str(item.get("variance_amount", 0))) for item in opname_data)
+
+        session_record = StockOpnameSession(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            opname_date=date.today(),
+            total_items=len(opname_data),
+            total_physical_amount=total_physical,
+            total_variance_amount=total_variance,
+            notes=notes or f"Opname Tanggal {date.today()}",
+            status="CONFIRMED"
+        )
+        db.add(session_record)
+        db.flush()
+
+        for item in opname_data:
+            p_id = item.get("product_id")
+            session_item = StockOpnameSessionItem(
+                session_id=session_record.id,
+                product_id=p_id,
+                alias_input=item.get("alias_input"),
+                official_item_name=item.get("official_item_name", "Produk"),
+                category_name=item.get("category_name", "Umum"),
+                physical_qty=Decimal(str(item.get("physical_qty", 0))),
+                system_qty=Decimal(str(item.get("system_qty", 0))),
+                variance_qty=Decimal(str(item.get("variance_qty", 0))),
+                unit=item.get("unit", "pcs"),
+                harga_beli=Decimal(str(item.get("harga_beli", 0))),
+                total_harga=Decimal(str(item.get("total_harga", 0))),
+                variance_amount=Decimal(str(item.get("variance_amount", 0)))
+            )
+            db.add(session_item)
+    except Exception as e_session:
+        logger.warning(f"[StockOpname] Session history log warning: {e_session}")
 
     db.commit()
 
