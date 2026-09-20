@@ -78,10 +78,6 @@ function MasterProductAutocomplete({ currentName, matchScore, categoryName, onSe
         className="w-full p-1.5 text-xs font-semibold border rounded-lg bg-white dark:bg-slate-950 border-slate-300 dark:border-slate-700 text-indigo-600 dark:text-indigo-400 focus:ring-2 focus:ring-indigo-500"
         placeholder="Cari Master DB Produk..."
       />
-      <div className="text-[10px] text-slate-400 mt-0.5 flex justify-between">
-        <span>Match: {Math.round(matchScore * 100)}%</span>
-        <span>{categoryName}</span>
-      </div>
 
       {isOpen && (
         <div className="absolute z-50 left-0 right-0 mt-1 max-h-52 overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl py-1 text-xs">

@@ -58,7 +58,7 @@ def match_product_by_alias_or_name(db: Session, tenant_id: int, raw_name: str) -
     Menggunakan Engine Normalizer Tunggal (app.services.ocr_normalizer._find_best_match).
     
     Urutan Prioritas:
-    1. Cek ocr_alias_mappings (Memori alias terbukti/disetujui pengguna) via _find_best_match.
+    1. Cek ocr_alias_mappings (Memori alias terbukti/disetujui pengguna) via Pass 1 Exact & Pass 2 Fuzzy.
     2. Exact Match di Master Product DB.
     3. ILIKE Partial Match.
     4. Trigram Similarity.
@@ -67,9 +67,9 @@ def match_product_by_alias_or_name(db: Session, tenant_id: int, raw_name: str) -
     if not clean_name:
         return None, 0.0, None
 
-    from app.services.ocr_normalizer import _find_best_match
+    from app.services.ocr_normalizer import _find_best_match, _normalize_key
 
-    # 1. Cek ocr_alias_mappings DAHULU via _find_best_match (Prioritas #1 Utama)
+    # 1. Cek ocr_alias_mappings DAHULU (Prioritas #1 Utama)
     try:
         alias_list = db.query(OCRAliasMapping).filter(
             or_(OCRAliasMapping.tenant_id == tenant_id, OCRAliasMapping.tenant_id.is_(None)),
@@ -77,13 +77,24 @@ def match_product_by_alias_or_name(db: Session, tenant_id: int, raw_name: str) -
         ).order_by(OCRAliasMapping.confidence_count.desc()).all()
 
         if alias_list:
-            matched_corr_val = _find_best_match(clean_name, alias_list, threshold=0.70)
+            norm_clean = _normalize_key(clean_name)
+            # Pass 1: Exact normalized pattern match
+            for a in alias_list:
+                if a.raw_pattern.lower().strip() == clean_name.lower() or _normalize_key(a.raw_pattern) == norm_clean:
+                    prod_alias = db.query(Product).filter(
+                        func.lower(Product.name) == a.corrected_value.lower().strip()
+                    ).first()
+                    if prod_alias:
+                        return prod_alias, 0.99, clean_name
+
+            # Pass 2: Fuzzy matching via ocr_normalizer._find_best_match
+            matched_corr_val = _find_best_match(clean_name, alias_list, threshold=0.65)
             if matched_corr_val:
                 prod_alias = db.query(Product).filter(
-                    func.lower(Product.name) == matched_corr_val.lower()
+                    func.lower(Product.name) == matched_corr_val.lower().strip()
                 ).first()
                 if prod_alias:
-                    return prod_alias, 0.99, clean_name
+                    return prod_alias, 0.95, clean_name
     except Exception as e_alias:
         logger.warning(f"[StockOpname] Alias lookup warning: {e_alias}")
 
@@ -365,9 +376,9 @@ def parse_stock_opname_excel(db: Session, tenant_id: int, file_bytes: bytes, fil
                 if item_data:
                     items.append(item_data)
 
-    except Exception as e_xl:
-        logger.error(f"[StockOpname] Excel parsing error: {e_xl}")
-        raise ValueError(f"Gagal membaca file Excel: {str(e_xl)}")
+    except Exception as e_excel:
+        logger.error(f"[StockOpname] Error parsing Excel file {filename}: {e_excel}")
+        raise HTTPException(status_code=400, detail=f"Gagal memproses file Excel: {str(e_excel)}")
 
     return {
         "tanggal_opname": opname_date_str,
@@ -385,6 +396,7 @@ def execute_stock_reconciliation(
 ) -> Dict[str, Any]:
     """
     Eksekusi Rekonsiliasi Stok Final (Manual Confirm).
+    Mendukung Auto-Create Master Product Baru dan Idempotent Re-Upload Session.
     
     Logika Dual-Mode:
     1. is_maintenance_stock = false:
@@ -394,6 +406,7 @@ def execute_stock_reconciliation(
        - Memperbarui stok produk di tenant_inventories sesuai Qty Fisik.
        - Mencatat inventory_logs penyesuaian (adjustment/reconciliation).
     """
+    import time
     tenant = db.query(Tenant).get(tenant_id)
     is_maintenance = tenant.maintenance_stock if tenant else False
 
@@ -401,13 +414,43 @@ def execute_stock_reconciliation(
     zeroed_count = 0
     adjusted_logs_count = 0
 
+    # 1. AUTO-CREATE MASTER PRODUCT & AUTO-LEARN ALIAS
     opname_product_ids = set()
     for item in opname_data:
         p_id = item.get("product_id")
+        alias_input = str(item.get("alias_input", "")).strip()
+        official_name = str(item.get("official_item_name", "")).strip()
+
+        # Otomatis buat Master Product baru jika product_id belum ada tetapi official_name diisi!
+        if not p_id and official_name:
+            existing_prod = db.query(Product).filter(
+                func.lower(Product.name) == official_name.lower()
+            ).first()
+
+            if existing_prod:
+                p_id = existing_prod.id
+                item["product_id"] = p_id
+            else:
+                new_sku = f"PRD-AUTO-{int(time.time())}-{updated_count + 1}"
+                new_prod = Product(
+                    sku=new_sku,
+                    name=official_name,
+                    base_unit=str(item.get("unit", "pcs")).strip() or "pcs"
+                )
+                db.add(new_prod)
+                db.flush()
+                p_id = new_prod.id
+                item["product_id"] = p_id
+                logger.info(f"[StockOpname] Auto-created new Master Product: {official_name} (ID: {p_id})")
+
         if p_id:
             opname_product_ids.add(p_id)
 
-    # 1. PERLAKUAN KHUSUS is_maintenance_stock = False
+        # Otomatis pelajari alias (Alias Input -> Official Item Name)
+        if alias_input and official_name:
+            learn_product_alias(db, tenant_id, alias_input, official_name)
+
+    # 2. PERLAKUAN KHUSUS is_maintenance_stock = False
     # Jika mode non-tracked stock & first recount -> Nolkan stok produk yang tidak terdaftar di opname!
     if not is_maintenance:
         unlisted_inventories = db.query(TenantInventory).filter(
@@ -428,7 +471,7 @@ def execute_stock_reconciliation(
                 u_inv.static_stock = Decimal("0.00")
                 zeroed_count += 1
 
-    # 2. UPDATE STOK PRODUK SESUAI DAFTAR OPNAME
+    # 3. UPDATE STOK PRODUK SESUAI DAFTAR OPNAME
     for item in opname_data:
         p_id = item.get("product_id")
         if not p_id:
@@ -470,31 +513,45 @@ def execute_stock_reconciliation(
             db.add(adj_log)
             adjusted_logs_count += 1
 
-        # Pembelajaran Otomatis Alias Produk (Auto-Learn Mapping Lintas Lini)
-        alias_input = str(item.get("alias_input", "")).strip()
-        official_name = str(item.get("official_item_name", "")).strip()
-        if alias_input and official_name:
-            learn_product_alias(db, tenant_id, alias_input, official_name)
-
         updated_count += 1
 
-    # 3. Rekam Histori Sesi Opname ke stock_opname_sessions & stock_opname_session_items
+    # 4. REKAM/UPDATE HISTORI SESI OPNAME (Deteksi Idempotent Re-Upload vs Sesi Baru)
     try:
         total_physical = sum(Decimal(str(item.get("total_harga", 0))) for item in opname_data)
         total_variance = sum(Decimal(str(item.get("variance_amount", 0))) for item in opname_data)
 
-        session_record = StockOpnameSession(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            opname_date=date.today(),
-            total_items=len(opname_data),
-            total_physical_amount=total_physical,
-            total_variance_amount=total_variance,
-            notes=notes or f"Opname Tanggal {date.today()}",
-            status="CONFIRMED"
-        )
-        db.add(session_record)
-        db.flush()
+        # Cek apakah ada Sesi Opname tenant ini pada tanggal hari ini (Deteksi Re-Upload)
+        existing_today_session = db.query(StockOpnameSession).filter(
+            StockOpnameSession.tenant_id == tenant_id,
+            StockOpnameSession.opname_date == date.today()
+        ).order_by(StockOpnameSession.id.desc()).first()
+
+        if existing_today_session:
+            # UPDATE Sesi Saja (Re-Upload Data Hari Ini)
+            session_record = existing_today_session
+            session_record.total_items = len(opname_data)
+            session_record.total_physical_amount = total_physical
+            session_record.total_variance_amount = total_variance
+            session_record.notes = notes or f"Re-upload Opname Tanggal {date.today()}"
+            
+            # Hapus items lama sesi ini lalu re-insert item terbaru
+            db.query(StockOpnameSessionItem).filter(
+                StockOpnameSessionItem.session_id == session_record.id
+            ).delete()
+        else:
+            # Sesi Baru (Upload Baru)
+            session_record = StockOpnameSession(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                opname_date=date.today(),
+                total_items=len(opname_data),
+                total_physical_amount=total_physical,
+                total_variance_amount=total_variance,
+                notes=notes or f"Opname Tanggal {date.today()}",
+                status="CONFIRMED"
+            )
+            db.add(session_record)
+            db.flush()
 
         for item in opname_data:
             p_id = item.get("product_id")
