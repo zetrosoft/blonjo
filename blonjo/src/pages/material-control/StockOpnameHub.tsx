@@ -301,6 +301,8 @@ export default function StockOpnameHub() {
     const updated = [...editableItems];
     const target = { ...updated[index] };
 
+    // Preservasi teks mentah alias_input agar auto-learning alias menyimpan (Teks Mentah -> Nama Resmi)
+    target.alias_input = target.alias_input || target.official_item_name;
     target.product_id = selectedProd.id;
     target.official_item_name = selectedProd.name;
     target.category_name = selectedProd.category_name || 'Umum';

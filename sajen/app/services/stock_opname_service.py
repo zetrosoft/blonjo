@@ -55,40 +55,44 @@ def learn_product_alias(db: Session, tenant_id: int, raw_alias: str, official_it
 def match_product_by_alias_or_name(db: Session, tenant_id: int, raw_name: str) -> Tuple[Optional[Product], float, Optional[str]]:
     """
     Mencocokkan Alias Item Name ke Master Product di DB.
-    Memeriksa: 1. Exact Match -> 2. ocr_alias_mappings -> 3. ILIKE -> 4. Trigram Similarity.
-    Mengembalikan: (Product_Object, Match_Score, Matched_Alias_Pattern)
+    Menggunakan Engine Normalizer Tunggal (app.services.ocr_normalizer._find_best_match).
+    
+    Urutan Prioritas:
+    1. Cek ocr_alias_mappings (Memori alias terbukti/disetujui pengguna) via _find_best_match.
+    2. Exact Match di Master Product DB.
+    3. ILIKE Partial Match.
+    4. Trigram Similarity.
     """
-    clean_name = raw_name.strip()
+    clean_name = re.sub(r'^(?:\d+[\.\)]|•|-|\*)\s*', '', raw_name.strip()).strip()
     if not clean_name:
         return None, 0.0, None
 
-    # 1. Exact match di master product
+    from app.services.ocr_normalizer import _find_best_match
+
+    # 1. Cek ocr_alias_mappings DAHULU via _find_best_match (Prioritas #1 Utama)
+    try:
+        alias_list = db.query(OCRAliasMapping).filter(
+            or_(OCRAliasMapping.tenant_id == tenant_id, OCRAliasMapping.tenant_id.is_(None)),
+            OCRAliasMapping.entity_type == 'product_name'
+        ).order_by(OCRAliasMapping.confidence_count.desc()).all()
+
+        if alias_list:
+            matched_corr_val = _find_best_match(clean_name, alias_list, threshold=0.70)
+            if matched_corr_val:
+                prod_alias = db.query(Product).filter(
+                    func.lower(Product.name) == matched_corr_val.lower()
+                ).first()
+                if prod_alias:
+                    return prod_alias, 0.99, clean_name
+    except Exception as e_alias:
+        logger.warning(f"[StockOpname] Alias lookup warning: {e_alias}")
+
+    # 2. Exact match di master product
     exact_prod = db.query(Product).filter(
         func.lower(Product.name) == clean_name.lower()
     ).first()
     if exact_prod:
         return exact_prod, 1.0, clean_name
-
-    # 2. Cek ocr_alias_mappings
-    try:
-        alias_sql = """
-            SELECT corrected_value 
-            FROM ocr_alias_mappings 
-            WHERE (tenant_id = :tenant_id OR tenant_id IS NULL)
-              AND entity_type = 'product_name'
-              AND (LOWER(raw_pattern) = LOWER(:clean_name) OR LOWER(:clean_name) LIKE '%' || LOWER(raw_pattern) || '%')
-            ORDER BY confidence_count DESC LIMIT 1
-        """
-        res = db.execute(alias_sql, {"tenant_id": tenant_id, "clean_name": clean_name}).fetchone()
-        if res and res[0]:
-            corrected_val = res[0]
-            prod_alias = db.query(Product).filter(
-                func.lower(Product.name) == corrected_val.lower()
-            ).first()
-            if prod_alias:
-                return prod_alias, 0.98, clean_name
-    except Exception as e_alias:
-        logger.warning(f"[StockOpname] Alias lookup warning: {e_alias}")
 
     # 3. ILIKE Partial Match
     ilike_prod = db.query(Product).filter(
