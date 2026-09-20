@@ -53,7 +53,7 @@ class ReconciliationApplyRequest(BaseModel):
 def parse_smartnote_opname(
     payload: SmartNoteOpnameRequest,
     session: SessionDep,
-    current_user: User = Depends(check_role([UserRole.ADMIN, UserRole.MANAGER, UserRole.STAFF]))
+    current_user: User = Depends(check_role([UserRole.ADMIN, UserRole.MANAGER, UserRole.CASHIER]))
 ):
     from app.services.stock_opname_service import parse_stock_opname_smartnote
     try:
@@ -68,7 +68,7 @@ def parse_smartnote_opname(
 async def upload_excel_opname(
     session: SessionDep,
     file: UploadFile = File(...),
-    current_user: User = Depends(check_role([UserRole.ADMIN, UserRole.MANAGER, UserRole.STAFF]))
+    current_user: User = Depends(check_role([UserRole.ADMIN, UserRole.MANAGER, UserRole.CASHIER]))
 ):
     from app.services.stock_opname_service import parse_stock_opname_excel
     try:
@@ -78,6 +78,10 @@ async def upload_excel_opname(
     except Exception as e:
         logger.error(f"Error uploading Excel opname: {e}")
         raise HTTPException(status_code=400, detail=f"Gagal memproses file Excel: {str(e)}")
+
+class AliasMappingCreateRequest(BaseModel):
+    raw_pattern: str
+    corrected_value: str
 
 @router.post("/reconciliation/apply")
 @router.post("/reconciliation/apply/")
@@ -99,6 +103,42 @@ def apply_stock_reconciliation(
     except Exception as e:
         logger.error(f"Error executing stock reconciliation: {e}")
         raise HTTPException(status_code=500, detail=f"Gagal mengeksekusi rekonsiliasi stok: {str(e)}")
+
+@router.get("/alias-mappings")
+@router.get("/alias-mappings/")
+def get_alias_mappings(
+    session: SessionDep,
+    current_user: CurrentUser,
+    search: Optional[str] = None,
+    limit: int = 100
+):
+    from app.models.ocr import OCRAliasMapping
+    from sqlalchemy import or_
+    query = session.query(OCRAliasMapping).filter(
+        or_(OCRAliasMapping.tenant_id == current_user.tenant_id, OCRAliasMapping.tenant_id.is_(None)),
+        OCRAliasMapping.entity_type == 'product_name'
+    )
+    if search:
+        query = query.filter(
+            OCRAliasMapping.raw_pattern.ilike(f"%{search}%") | OCRAliasMapping.corrected_value.ilike(f"%{search}%")
+        )
+    return query.order_by(OCRAliasMapping.confidence_count.desc()).limit(limit).all()
+
+@router.post("/alias-mappings")
+@router.post("/alias-mappings/")
+def create_or_update_alias_mapping(
+    payload: AliasMappingCreateRequest,
+    session: SessionDep,
+    current_user: User = Depends(check_role([UserRole.ADMIN, UserRole.MANAGER]))
+):
+    from app.services.stock_opname_service import learn_product_alias
+    try:
+        learn_product_alias(session, current_user.tenant_id, payload.raw_pattern, payload.corrected_value)
+        session.commit()
+        return {"status": "success", "message": f"Alias '{payload.raw_pattern}' berhasil dipetakan ke '{payload.corrected_value}'."}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=f"Gagal menyelaraskan alias: {str(e)}")
 
 
 

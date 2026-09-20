@@ -11,10 +11,43 @@ from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
 
-from app.models.product import Product, ProductCategory, TenantInventory, InventoryLog
+from app.models.inventory import Product, ProductCategory, TenantInventory, InventoryLog
 from app.models.tenant import Tenant
+from app.models.ocr import OCRAliasMapping
 
 logger = logging.getLogger("sajen.stock_opname")
+
+def learn_product_alias(db: Session, tenant_id: int, raw_alias: str, official_item_name: str) -> None:
+    """
+    Menyimpan atau memperbarui pasangan (Alias Input -> Nama Resmi Produk) ke ocr_alias_mappings.
+    Digunakan lintas modul (Stock Opname, OCR, POS, MCP Copilot).
+    """
+    clean_raw = raw_alias.strip()
+    clean_corr = official_item_name.strip()
+    if not clean_raw or not clean_corr or len(clean_raw) < 2:
+        return
+
+    try:
+        existing = db.query(OCRAliasMapping).filter(
+            or_(OCRAliasMapping.tenant_id == tenant_id, OCRAliasMapping.tenant_id.is_(None)),
+            OCRAliasMapping.entity_type == 'product_name',
+            func.lower(OCRAliasMapping.raw_pattern) == clean_raw.lower()
+        ).first()
+
+        if existing:
+            existing.corrected_value = clean_corr
+            existing.confidence_count += 1
+        else:
+            new_alias = OCRAliasMapping(
+                tenant_id=tenant_id,
+                entity_type='product_name',
+                raw_pattern=clean_raw,
+                corrected_value=clean_corr,
+                confidence_count=1
+            )
+            db.add(new_alias)
+    except Exception as e_alias:
+        logger.warning(f"[StockOpname] Auto-learn alias error: {e_alias}")
 
 def match_product_by_alias_or_name(db: Session, tenant_id: int, raw_name: str) -> Tuple[Optional[Product], float, Optional[str]]:
     """
@@ -113,7 +146,7 @@ def get_latest_purchase_info(db: Session, tenant_id: int, product_id: int) -> Tu
     return Decimal("0.00"), default_unit
 
 
-def parse_stock_opname_smartnote(db: Session, tenant_id: int, content: string) -> Dict[str, Any]:
+def parse_stock_opname_smartnote(db: Session, tenant_id: int, content: str) -> Dict[str, Any]:
     """
     Mengurai teks SmartNote / Markdown Tabel Stock Opname.
     
@@ -267,7 +300,7 @@ def process_single_opname_item(
             TenantInventory.product_id == prod.id
         ).first()
         if t_inv:
-            system_qty = float(t_inv.quantity or 0.0)
+            system_qty = float(t_inv.static_stock or 0.0)
 
     variance_qty = qty_val - system_qty
     variance_amount = Decimal(str(variance_qty)) * final_price
@@ -376,18 +409,16 @@ def execute_stock_reconciliation(
         ).all()
 
         for u_inv in unlisted_inventories:
-            if u_inv.quantity and Decimal(str(u_inv.quantity)) != 0:
+            if u_inv.static_stock and Decimal(str(u_inv.static_stock)) != 0:
                 # Log penyesuaian penolkan stok
                 zero_log = InventoryLog(
                     product_id=u_inv.product_id,
                     log_type='out',
-                    quantity=u_inv.quantity,
-                    price_per_unit=u_inv.last_purchase_price or 0,
-                    reference_no=f"RECON-ZERO-{datetime.now().strftime('%Y%m%d%H%M')}",
-                    notes=f"Penolkan stok otomatis rekonsiliasi opname (non-tracked mode)"
+                    quantity=u_inv.static_stock,
+                    price_per_unit=u_inv.last_purchase_price or 0
                 )
                 db.add(zero_log)
-                u_inv.quantity = Decimal("0.00")
+                u_inv.static_stock = Decimal("0.00")
                 zeroed_count += 1
 
     # 2. UPDATE STOK PRODUK SESUAI DAFTAR OPNAME
@@ -404,20 +435,20 @@ def execute_stock_reconciliation(
             TenantInventory.product_id == p_id
         ).first()
 
-        old_qty = Decimal(str(t_inv.quantity)) if (t_inv and t_inv.quantity) else Decimal("0.00")
+        old_qty = Decimal(str(t_inv.static_stock)) if (t_inv and t_inv.static_stock) else Decimal("0.00")
         diff_qty = physical_qty - old_qty
 
         if not t_inv:
             t_inv = TenantInventory(
                 tenant_id=tenant_id,
                 product_id=p_id,
-                quantity=physical_qty,
+                static_stock=physical_qty,
                 last_purchase_price=harga_beli,
                 moving_average_cost=harga_beli
             )
             db.add(t_inv)
         else:
-            t_inv.quantity = physical_qty
+            t_inv.static_stock = physical_qty
             if harga_beli > 0:
                 t_inv.last_purchase_price = harga_beli
 
@@ -427,12 +458,16 @@ def execute_stock_reconciliation(
                 product_id=p_id,
                 log_type=log_type,
                 quantity=abs(diff_qty),
-                price_per_unit=harga_beli,
-                reference_no=f"RECON-{datetime.now().strftime('%Y%m%d%H%M')}",
-                notes=notes or f"Rekonsiliasi opname fisik ({physical_qty}) vs sistem ({old_qty})"
+                price_per_unit=harga_beli
             )
             db.add(adj_log)
             adjusted_logs_count += 1
+
+        # Pembelajaran Otomatis Alias Produk (Auto-Learn Mapping Lintas Lini)
+        alias_input = str(item.get("alias_input", "")).strip()
+        official_name = str(item.get("official_item_name", "")).strip()
+        if alias_input and official_name:
+            learn_product_alias(db, tenant_id, alias_input, official_name)
 
         updated_count += 1
 

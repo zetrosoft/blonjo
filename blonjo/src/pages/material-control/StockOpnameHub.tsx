@@ -28,19 +28,107 @@ interface OpnameParseResponse {
   items: ParsedOpnameItem[];
 }
 
+interface MasterProductAutocompleteProps {
+  currentName: string;
+  matchScore: number;
+  categoryName: string;
+  onSelectProduct: (product: any) => void;
+}
+
+function MasterProductAutocomplete({ currentName, matchScore, categoryName, onSelectProduct }: MasterProductAutocompleteProps) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState(currentName);
+  const [options, setOptions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setQuery(currentName);
+  }, [currentName]);
+
+  const searchProducts = async (term: string) => {
+    if (!term || term.trim().length < 1) {
+      setOptions([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetchClient(`/inventory/products?search=${encodeURIComponent(term.trim())}&limit=15`);
+      setOptions(res || []);
+    } catch {
+      setOptions([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="relative min-w-[210px]">
+      <input
+        type="text"
+        value={query}
+        onFocus={() => {
+          setIsOpen(true);
+          searchProducts(query);
+        }}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          searchProducts(e.target.value);
+          setIsOpen(true);
+        }}
+        className="w-full p-1.5 text-xs font-semibold border rounded-lg bg-white dark:bg-slate-950 border-slate-300 dark:border-slate-700 text-indigo-600 dark:text-indigo-400 focus:ring-2 focus:ring-indigo-500"
+        placeholder="Cari Master DB Produk..."
+      />
+      <div className="text-[10px] text-slate-400 mt-0.5 flex justify-between">
+        <span>Match: {Math.round(matchScore * 100)}%</span>
+        <span>{categoryName}</span>
+      </div>
+
+      {isOpen && (
+        <div className="absolute z-50 left-0 right-0 mt-1 max-h-52 overflow-y-auto bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl py-1 text-xs">
+          {loading && <div className="p-2 text-slate-400 text-center text-[11px]">Mencari produk...</div>}
+          {!loading && options.length === 0 && (
+            <div className="p-2 text-slate-400 text-center text-[11px]">Tidak ada produk cocok</div>
+          )}
+          {!loading && options.map((prod) => (
+            <div
+              key={prod.id}
+              onClick={() => {
+                onSelectProduct(prod);
+                setQuery(prod.name);
+                setIsOpen(false);
+              }}
+              className="px-3 py-2 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 cursor-pointer flex justify-between items-center border-b border-slate-100 dark:border-slate-800/50 last:border-0"
+            >
+              <div>
+                <div className="font-bold text-slate-800 dark:text-slate-100">{prod.name}</div>
+                <div className="text-[10px] text-slate-400">SKU: {prod.sku} | Unit: {prod.base_unit}</div>
+              </div>
+              <div className="text-right text-[11px] font-mono text-indigo-600 dark:text-indigo-400">
+                Rp {(prod.purchase_price || 0).toLocaleString('id-ID')}
+              </div>
+            </div>
+          ))}
+          <div className="p-1 border-t border-slate-100 dark:border-slate-800 text-right">
+            <button
+              onClick={() => setIsOpen(false)}
+              className="text-[10px] text-slate-400 hover:text-slate-600 font-semibold px-2 py-0.5"
+            >
+              Tutup
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function StockOpnameHub() {
   const [activeTab, setActiveTab] = useState<'smartnote' | 'excel'>('smartnote');
   const [isMaintenanceStock, setIsMaintenanceStock] = useState<boolean>(false);
   const [loadingTenant, setLoadingTenant] = useState<boolean>(true);
 
   // SmartNote State
-  const [smartnoteContent, setSmartnoteContent] = useState<string>(
-    `Tanggal Opname : ${new Date().toISOString().substring(0, 10)} 17:00:00\n` +
-    `| no | Item Names | qty | unit | Harga Beli | Total Harga |\n` +
-    `| 1 | Beras Premium Siip | 10 | karung | 140000 | 1400000 |\n` +
-    `| 2 | Minyak Fortune | 25 | pouch | 16500 | 412500 |\n` +
-    `| 3 | Gula Nusakita | 50 | kg | 15000 | 750000 |`
-  );
+  const [smartnoteContent, setSmartnoteContent] = useState<string>('');
   const [parsing, setParsing] = useState<boolean>(false);
 
   // Excel Upload State
@@ -187,6 +275,30 @@ export default function StockOpnameHub() {
     }
   };
 
+  const handleSelectProduct = (index: number, selectedProd: any) => {
+    const updated = [...editableItems];
+    const target = { ...updated[index] };
+
+    target.product_id = selectedProd.id;
+    target.official_item_name = selectedProd.name;
+    target.category_name = selectedProd.category_name || 'Umum';
+    target.match_score = 1.0;
+    
+    if (selectedProd.purchase_price && parseFloat(selectedProd.purchase_price) > 0) {
+      target.harga_beli = parseFloat(selectedProd.purchase_price);
+      target.total_harga = roundToTwo(target.physical_qty * target.harga_beli);
+      target.variance_amount = roundToTwo(target.variance_qty * target.harga_beli);
+    }
+    if (selectedProd.current_stock !== undefined) {
+      target.system_qty = parseFloat(selectedProd.current_stock) || 0;
+      target.variance_qty = roundToTwo(target.physical_qty - target.system_qty);
+      target.variance_amount = roundToTwo(target.variance_qty * target.harga_beli);
+    }
+
+    updated[index] = target;
+    setEditableItems(updated);
+  };
+
   const grandTotalPhysicalRp = editableItems.reduce((sum, item) => sum + item.total_harga, 0);
   const totalVarianceAmountRp = editableItems.reduce((sum, item) => sum + item.variance_amount, 0);
 
@@ -217,29 +329,6 @@ export default function StockOpnameHub() {
         )}
       </div>
 
-      {/* Dynamic Mode Notice Alert */}
-      {!loadingTenant && !isMaintenanceStock ? (
-        <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-start gap-3 text-amber-900 dark:text-amber-200 text-sm">
-          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-          <div>
-            <span className="font-bold">Mode Non-Tracked Stock Aktif (`is_maintenance_stock = false`):</span>
-            <p className="text-xs text-amber-800 dark:text-amber-300 mt-1">
-              Sistem kasir cepat toko Anda tidak memotong kuantitas per unit saat penjualan. Saat eksekusi rekonsiliasi opname pertama kali, seluruh produk yang <span className="font-semibold underline">TIDAK tercantum</span> dalam daftar SmartNote/Excel akan <strong>otomatis dinolkan (reset to 0)</strong> di database!
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-start gap-3 text-indigo-900 dark:text-indigo-200 text-sm">
-          <Sparkles className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5" />
-          <div>
-            <span className="font-bold">Mode Tracked Stock Aktif (`is_maintenance_stock = true`):</span>
-            <p className="text-xs text-indigo-800 dark:text-indigo-300 mt-1">
-              Sistem mengukur perbandingan stok fisik (*actual*) vs stok sistem (*recorded*). Anda dapat meninjau dan mengedit data hasil opname di tabel Editable Mode di bawah sebelum konfirmasi manual.
-            </p>
-          </div>
-        </div>
-      )}
-
       {/* Input Section Card */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm">
         {/* Navigation Tabs */}
@@ -248,58 +337,44 @@ export default function StockOpnameHub() {
             onClick={() => setActiveTab('smartnote')}
             className={`pb-3 font-semibold text-sm flex items-center gap-2 border-b-2 transition-colors ${
               activeTab === 'smartnote'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400 font-bold'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
             }`}
           >
             <FileText className="w-4 h-4" />
-            Input SmartNote Teks
+            SmartNote Text Input
           </button>
           <button
             onClick={() => setActiveTab('excel')}
             className={`pb-3 font-semibold text-sm flex items-center gap-2 border-b-2 transition-colors ${
               activeTab === 'excel'
-                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400 dark:border-indigo-400 font-bold'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
             }`}
           >
             <FileSpreadsheet className="w-4 h-4" />
-            Upload File Excel / CSV
+            Upload File Excel (.xlsx / .csv)
           </button>
         </div>
 
-        {/* TAB 1: SmartNote Text Input */}
+        {/* Tab 1: SmartNote */}
         {activeTab === 'smartnote' && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2">
-                <span>Data Teks SmartNote / Tabel Opname:</span>
-                <span className="text-xs text-slate-400 font-normal">(Minimal input: Alias Item Name, Qty, Unit)</span>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-2">
+                Teks SmartNote / Tabel Opname Fisik:
               </label>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setSmartnoteContent(
-                  `Tanggal Opname : ${new Date().toISOString().substring(0, 10)} 17:00:00\n` +
-                  `| no | Item Names | qty | unit | Harga Beli | Total Harga |\n` +
-                  `| 1 | Beras Premium Siip | 10 | karung | 140000 | 1400000 |\n` +
-                  `| 2 | Minyak Fortune | 25 | pouch | 16500 | 412500 |\n` +
-                  `| 3 | Gula Nusakita | 50 | kg | 15000 | 750000 |`
-                )}
-                className="text-xs gap-1"
-              >
-                <RefreshCw className="w-3 h-3" />
-                Muat Template Standar
-              </Button>
+              <textarea
+                value={smartnoteContent}
+                onChange={(e) => setSmartnoteContent(e.target.value)}
+                rows={7}
+                className="w-full p-4 rounded-xl border bg-slate-50 dark:bg-slate-950 border-slate-300 dark:border-slate-700 text-xs font-mono text-slate-800 dark:text-slate-200 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                placeholder="Ketik daftar barang opname..."
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                Minimal kolom: Alias Item Name, Qty, Unit. Sistem otomatis mencocokkan alias ke Master DB & membaca harga beli terakhir.
+              </p>
             </div>
-
-            <textarea
-              rows={7}
-              value={smartnoteContent}
-              onChange={(e) => setSmartnoteContent(e.target.value)}
-              placeholder="Contoh format:\nTanggal Opname : 2026-09-19 17:00:00\n| no | Item Names | qty | unit | Harga Beli | Total Harga |\n| 1 | Beras Premium Siip | 10 | karung | 140000 | 1400000 |"
-              className="w-full p-4 rounded-xl font-mono text-sm border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-            />
 
             <div className="flex justify-end">
               <Button
@@ -307,8 +382,8 @@ export default function StockOpnameHub() {
                 disabled={parsing}
                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold gap-2 shadow-md shadow-indigo-500/20"
               >
-                {parsing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Calculator className="w-4 h-4" />}
-                Proses SmartNote Opname
+                {parsing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                Parse & Cocokkan SmartNote
               </Button>
             </div>
           </div>
@@ -382,7 +457,7 @@ export default function StockOpnameHub() {
                 <tr>
                   <th className="p-3">#</th>
                   <th className="p-3">Alias Input</th>
-                  <th className="p-3">Master Produk DB</th>
+                  <th className="p-3">Master Produk DB (Editable Autocomplete)</th>
                   <th className="p-3 text-center">Qty Fisik</th>
                   <th className="p-3 text-center">Stok Sistem</th>
                   <th className="p-3 text-center">Selisih (+/-)</th>
@@ -397,10 +472,12 @@ export default function StockOpnameHub() {
                     <td className="p-3">{idx + 1}</td>
                     <td className="p-3 font-semibold text-slate-900 dark:text-slate-100">{item.alias_input}</td>
                     <td className="p-3">
-                      <div>
-                        <span className="font-semibold text-indigo-600 dark:text-indigo-400">{item.official_item_name}</span>
-                        <div className="text-[10px] text-slate-400">Match: {Math.round(item.match_score * 100)}% | {item.category_name}</div>
-                      </div>
+                      <MasterProductAutocomplete
+                        currentName={item.official_item_name}
+                        matchScore={item.match_score}
+                        categoryName={item.category_name}
+                        onSelectProduct={(prod) => handleSelectProduct(idx, prod)}
+                      />
                     </td>
 
                     {/* Editable Physical Qty */}
