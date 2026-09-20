@@ -406,7 +406,7 @@ def execute_stock_reconciliation(
        - Memperbarui stok produk di tenant_inventories sesuai Qty Fisik.
        - Mencatat inventory_logs penyesuaian (adjustment/reconciliation).
     """
-    import time
+    import uuid
     tenant = db.query(Tenant).get(tenant_id)
     is_maintenance = tenant.maintenance_stock if tenant else False
 
@@ -431,7 +431,7 @@ def execute_stock_reconciliation(
                 p_id = existing_prod.id
                 item["product_id"] = p_id
             else:
-                new_sku = f"PRD-AUTO-{int(time.time())}-{updated_count + 1}"
+                new_sku = f"PRD-{uuid.uuid4().hex[:8].upper()}"
                 new_prod = Product(
                     sku=new_sku,
                     name=official_name,
@@ -441,7 +441,7 @@ def execute_stock_reconciliation(
                 db.flush()
                 p_id = new_prod.id
                 item["product_id"] = p_id
-                logger.info(f"[StockOpname] Auto-created new Master Product: {official_name} (ID: {p_id})")
+                logger.info(f"[StockOpname] Auto-created new Master Product: {official_name} (SKU: {new_sku}, ID: {p_id})")
 
         if p_id:
             opname_product_ids.add(p_id)
