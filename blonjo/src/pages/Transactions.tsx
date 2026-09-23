@@ -167,6 +167,9 @@ export default function Transactions() {
       <DuplicateWarningDialog
         isOpen={Boolean((smartNote.parsedResult as any)?.is_duplicate)}
         onClose={handleFullReset}
+        onProceed={() => {
+          smartNote.updateParsed({ is_duplicate: false });
+        }}
         parsedResult={smartNote.parsedResult}
       />
     </div>

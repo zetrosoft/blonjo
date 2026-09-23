@@ -360,6 +360,7 @@ def get_ocr_task_detail(
             setattr(task, "duplicate_warning", dup_check.get("duplicate_warning"))
         else:
             setattr(task, "is_duplicate", False)
+            setattr(task, "duplicate_warning", None)
 
     if task.extracted_data:
         from app.services.ocr_normalizer import apply_ocr_entity_aliases

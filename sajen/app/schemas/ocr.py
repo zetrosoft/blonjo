@@ -20,6 +20,7 @@ class OCRTaskResponse(BaseModel):
     error_message: Optional[str] = None
     corrected_data: Optional[Any] = None
     is_duplicate: Optional[bool] = False
+    duplicate_warning: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 

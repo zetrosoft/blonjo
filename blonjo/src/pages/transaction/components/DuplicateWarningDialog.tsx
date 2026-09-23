@@ -2,19 +2,21 @@ import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../../../components/ui/dialog';
 import { Button } from '../../../components/ui/button';
-import { AlertCircle, RefreshCw, Image as ImageIcon } from 'lucide-react';
+import { AlertCircle, RefreshCw, Image as ImageIcon, CheckCircle2 } from 'lucide-react';
 import { formatRp } from '../../../lib/utils';
 import type { ParsedTransaction } from '../../../lib/smartParser';
 
 interface DuplicateWarningDialogProps {
   isOpen: boolean;
   onClose: () => void;
+  onProceed?: () => void;
   parsedResult: ParsedTransaction | null;
 }
 
 export function DuplicateWarningDialog({
   isOpen,
   onClose,
+  onProceed,
   parsedResult
 }: DuplicateWarningDialogProps) {
   const { t } = useTranslation();
@@ -75,15 +77,26 @@ export function DuplicateWarningDialog({
           </div>
         </div>
 
-        <DialogFooter className="pt-3 shrink-0 border-t border-border/40 mt-auto">
+        <DialogFooter className="pt-3 shrink-0 border-t border-border/40 mt-auto flex flex-col sm:flex-row gap-2">
           <Button
             type="button"
+            variant="outline"
             onClick={handleClose}
-            className="w-full h-11 gap-2 bg-rose-600 hover:bg-rose-700 text-white font-semibold text-sm shadow-lg shadow-rose-600/20"
+            className="w-full sm:w-auto h-11 gap-2 border-rose-500/30 hover:bg-rose-500/10 text-rose-300 font-medium text-sm order-2 sm:order-1"
           >
             <RefreshCw className="w-4 h-4" />
             {t('btn_cancel')}
           </Button>
+          {onProceed && (
+            <Button
+              type="button"
+              onClick={onProceed}
+              className="w-full sm:flex-1 h-11 gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm shadow-lg shadow-emerald-600/20 order-1 sm:order-2"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              {t('tx_dup_proceed_anyway', 'Bukan Duplikat, Lanjutkan')}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

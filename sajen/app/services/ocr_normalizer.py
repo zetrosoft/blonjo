@@ -1,6 +1,7 @@
 import re
 import difflib
 import logging
+from datetime import datetime, date, timedelta
 from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
@@ -8,6 +9,55 @@ from sqlalchemy import or_
 from app.models.ocr import OCRAliasMapping
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_date_safe(date_val: Any) -> Optional[date]:
+    """
+    Mengonversi berbagai variasi format tanggal string dari OCR ke objek datetime.date.
+    Mendukung format: YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY, DD-MM-YY, DD/MM/YY, YYYY/MM/DD, dsb.
+    """
+    if not date_val:
+        return None
+    if isinstance(date_val, date) and not isinstance(date_val, datetime):
+        return date_val
+    if isinstance(date_val, datetime):
+        return date_val.date()
+    
+    clean = str(date_val).strip()
+    if not clean:
+        return None
+
+    # Normalisasi pemisah
+    clean_std = clean.replace("/", "-").replace(".", "-")
+    
+    # 1. Coba format standar langsung
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d-%m-%y"):
+        try:
+            return datetime.strptime(clean_std, fmt).date()
+        except ValueError:
+            pass
+            
+    # 2. Pola regex jika tanggal menyatu dengan jam atau teks lain
+    match_iso = re.search(r'(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})', clean)
+    if match_iso:
+        try:
+            y, m, d = int(match_iso.group(1)), int(match_iso.group(2)), int(match_iso.group(3))
+            return date(y, m, d)
+        except ValueError:
+            pass
+
+    match_dmy = re.search(r'(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})', clean)
+    if match_dmy:
+        try:
+            d, m, y = int(match_dmy.group(1)), int(match_dmy.group(2)), int(match_dmy.group(3))
+            if y < 100:
+                y = 2000 + y
+            return date(y, m, d)
+        except ValueError:
+            pass
+
+    return None
+
 
 
 # Standar Mapping UOM Distributor Indonesia
@@ -468,11 +518,13 @@ def find_semantic_basket_duplicate(
             or (parsed_data.get("summary") or {}).get("grand_total")
             or 0.0
         )
-        cand_date = (
+        cand_date_raw = (
             (parsed_data.get("transaction") or {}).get("date")
+            or (parsed_data.get("transaction") or {}).get("tanggal")
             or parsed_data.get("transaction_date")
             or ""
         )
+        cand_date_obj = _parse_date_safe(cand_date_raw)
 
         cand_items_raw = parsed_data.get("items") or parsed_data.get("item_belanja") or []
         cand_item_names = set()
@@ -497,22 +549,42 @@ def find_semantic_basket_duplicate(
                 res["matched_reference_no"] = q_ref.reference_no
                 res["matched_merchant"] = cand_merchant or "Supplier"
                 res["matched_total"] = float(q_ref.total_amount)
-                res["duplicate_warning"] = f"⚠️ DUPLIKASI NOTA RESMI: Faktur No. '{cand_ref}' ({res['matched_merchant']}, Total: Rp {res['matched_total']:,.0f}) sudah pernah tercatat."
+                matched_date_str = str(q_ref.transaction_date) if q_ref.transaction_date else "-"
+                res["duplicate_warning"] = (
+                    f"⚠️ DUPLIKASI NOTA RESMI: Faktur No. '{cand_ref}' ({res['matched_merchant']}, "
+                    f"Tanggal: {matched_date_str}, Total: Rp {res['matched_total']:,.0f}) sudah pernah tercatat."
+                )
                 return res
 
         # 3. Case B: Nominal + Item Basket Overlap & Supplier Matching
         if cand_total > 0:
             # Cari transaksi posted dengan total nominal identik atau rentang toleransi <= 1%
             tol = max(1000.0, cand_total * 0.01)
-            recent_txs = db.query(Transaction).filter(
+            query = db.query(Transaction).filter(
                 Transaction.tenant_id == tenant_id,
                 Transaction.transaction_type == TransactionType.PURCHASE,
                 Transaction.total_amount.between(cand_total - tol, cand_total + tol),
                 Transaction.status == TransactionStatus.POSTED
-            ).order_by(Transaction.id.desc()).limit(20).all()
+            )
+
+            # Jika tanggal nota kandidat terdeteksi valid, HANYA cari transaksi pada tanggal yang sama!
+            # Pembelian dengan item dan qty sama di tanggal berbeda adalah hal lumrah dan BUKAN duplikat.
+            if cand_date_obj:
+                query = query.filter(Transaction.transaction_date == cand_date_obj)
+            else:
+                # Jika tanggal nota TIDAK terbaca oleh AI Vision, batasi pencarian HANYA dalam jendela 3 hari terakhir
+                # untuk menghindari false positive terhadap transaksi berminggu-minggu / berbulan-bulan lalu.
+                cutoff_date = date.today() - timedelta(days=3)
+                query = query.filter(Transaction.transaction_date >= cutoff_date)
+
+            recent_txs = query.order_by(Transaction.id.desc()).limit(20).all()
 
             # Bandingkan terhadap transaksi yang sudah diposting
             for tx in recent_txs:
+                # Validasi ekstra tanggal jika cand_date_obj ada
+                if cand_date_obj and tx.transaction_date and cand_date_obj != tx.transaction_date:
+                    continue
+
                 tx_desc = _clean_str(tx.description or "")
                 tx_contact_name = _clean_str(tx.contact.name) if tx.contact else ""
                 tx_supplier = tx_contact_name or tx_desc
@@ -554,18 +626,30 @@ def find_semantic_basket_duplicate(
                     basket_sim = (2.0 * matches) / (len(cand_item_names) + len(tx_items))
 
                 # Kriteria Duplikat:
-                # 1. Total cocok + Keranjang item cocok >= 40%
-                # 2. Total cocok + Merchant cocok (jika nota tidak memiliki daftar item rinci)
-                if basket_sim >= 0.40 or (merchant_match and not cand_item_names):
+                # Jika tanggal nota tidak diketahui (cand_date_obj is None), perketat ambang batas:
+                # Harus basket_sim >= 0.70 atau (merchant_match dan basket_sim >= 0.50).
+                # Jika tanggal sama persis (cand_date_obj == tx.transaction_date):
+                # basket_sim >= 0.40 atau (merchant_match dan not cand_item_names).
+                is_dup_detected = False
+                if cand_date_obj:
+                    if basket_sim >= 0.40 or (merchant_match and not cand_item_names):
+                        is_dup_detected = True
+                else:
+                    if basket_sim >= 0.70 or (merchant_match and basket_sim >= 0.50) or (merchant_match and not cand_item_names and abs(tx_total - cand_total) < 1.0):
+                        is_dup_detected = True
+
+                if is_dup_detected:
                     res["is_duplicate"] = True
                     res["confidence_score"] = max(basket_sim, 0.85 if merchant_match else 0.80)
                     res["matched_type"] = "item_basket_and_total" if basket_sim >= 0.40 else "merchant_and_total"
                     res["matched_reference_no"] = tx.reference_no
                     res["matched_merchant"] = cand_merchant or tx_supplier or "Supplier"
                     res["matched_total"] = tx_total
+                    matched_date_str = str(tx.transaction_date) if tx.transaction_date else "-"
                     res["duplicate_warning"] = (
                         f"⚠️ DUPLIKASI PEMBELIAN TERDETEKSI (AI Basket Similarity: {basket_sim*100:.0f}%): "
-                        f"Struk dari '{res['matched_merchant']}' (Total: Rp {tx_total:,.0f}) sudah pernah tercatat pada Transaksi {tx.reference_no}."
+                        f"Struk dari '{res['matched_merchant']}' (Tanggal: {matched_date_str}, Total: Rp {tx_total:,.0f}) "
+                        f"sudah pernah tercatat pada Transaksi {tx.reference_no}."
                     )
                     return res
 
@@ -573,3 +657,4 @@ def find_semantic_basket_duplicate(
         logger.warning(f"[OCR Semantic Duplicate Matcher] Error evaluasi duplikat: {e}")
 
     return res
+

@@ -247,7 +247,7 @@ export function useOcrUpload(
           setTimeout(() => onParse(text, isDup ? {
             is_duplicate: true,
             duplicate_task_id: task.id,
-            duplicate_warning: task.duplicate_warning || `File '${task.file_name}' terdeteksi 100% duplikat di database.`
+            duplicate_warning: task.duplicate_warning || (task.extracted_data && task.extracted_data.duplicate_warning) || `Berkas '${task.file_name}' memiliki indikasi kesamaan dengan transaksi yang sudah ada.`
           } : undefined), 500);
         } else if (task.status === 'failed') {
           stopPolling();
@@ -349,7 +349,7 @@ export function useOcrUpload(
     setTimeout(() => onParse(text, isDup ? {
       is_duplicate: true,
       duplicate_task_id: task.id,
-      duplicate_warning: task.duplicate_warning || `File '${task.file_name}' terdeteksi 100% duplikat di database.`
+      duplicate_warning: task.duplicate_warning || (task.extracted_data && task.extracted_data.duplicate_warning) || `Berkas '${task.file_name}' memiliki indikasi kesamaan dengan transaksi yang sudah ada.`
     } : undefined), 500);
   }, [setNoteText, onParse]);
 
