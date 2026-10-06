@@ -517,7 +517,7 @@ def _detect_type(text_lower: str) -> Optional[str]:
     if any(kw in text_lower for kw in KEYWORDS_RETUR):
         return None
 
-    # Spesifik non-operasional dulu
+    # 1. Non-operasional spesifik
     if any(kw in text_lower for kw in KEYWORDS_INCOME):
         return "income"
     if any(kw in text_lower for kw in KEYWORDS_CASH_COUNT):
@@ -526,38 +526,39 @@ def _detect_type(text_lower: str) -> Optional[str]:
         return "capital_reclassification"
     if any(kw in text_lower for kw in KEYWORDS_CUSTOMER_WITHDRAWAL):
         return "customer_withdrawal"
-    if any(kw in text_lower for kw in KEYWORDS_CUSTOMER_DEPOSIT):
-        return "customer_deposit"
     if any(kw in text_lower for kw in KEYWORDS_CAPITAL):
         if any(kw in text_lower for kw in ["tarik", "pengembalian", "penarikan", "prive", "withdraw", "ambil"]):
             return "capital_withdrawal"
         return "capital"
 
-    # Deteksi utilitas, BBM & biaya operasional spesifik terlebih dahulu
+    # 2. Deteksi struktur item: apakah input memiliki rincian barang fisik?
+    has_item_details = bool(_ITEM_DETAIL_RE.search(text_lower))
+
+    # 3. Customer Deposit HANYA untuk setoran uang muka/titipan tanpa penyerahan barang fisik
+    if not has_item_details:
+        if any(kw in text_lower for kw in KEYWORDS_CUSTOMER_DEPOSIT):
+            return "customer_deposit"
+
+    # 4. Deteksi utilitas & operasional (BBM, Listrik, PDAM, Sewa, Gaji)
     if any(kw in text_lower for kw in ["listrik", "pln", "token", "pdam", "internet", "wifi", "indihome", "speedy", "telepon", "pulsa", "bensin", "bbm", "pertalite", "pertamax", "solar", "spbu", "biaya operasional", "operasional", "pengeluaran toko", "biaya toko", "biaya kantor"]):
         return "operational"
 
+    # 5. Klasifikasi Berdasarkan Invarian Struktur Data
+    if has_item_details:
+        # Jika ada daftar rincian barang fisik dan bukan utilitas, PASTI transaksi pembelian stok dagangan
+        return "purchase"
+
+    # 6. Ringkasan Global Tanpa Barang (Sales vs Expense vs Purchase)
     is_sales    = any(kw in text_lower for kw in KEYWORDS_SALES)
     is_expense  = any(kw in text_lower for kw in KEYWORDS_EXPENSE)
     is_purchase = any(kw in text_lower for kw in KEYWORDS_PURCHASE)
 
-    # Expense lebih spesifik menang atas purchase jika keduanya ada
-    # (mis: "beli bensin" → expense, bukan purchase)
-    if is_expense and is_purchase:
+    if is_expense and not is_sales:
         return "expense"
-
-    # Sales vs expense/purchase — jika sales terdeteksi, prioritaskan
-    if is_sales and not is_purchase and not is_expense:
+    if is_sales and not is_expense and not is_purchase:
         return "sales"
-
-    # Sales + expense (misal "terima uang bayar ongkir") → ambigu → LLM
-    if is_sales and (is_expense or is_purchase):
-        return None
-
     if is_purchase:
         return "purchase"
-    if is_expense:
-        return "expense"
 
     return None
 

@@ -426,7 +426,7 @@ async def vibes_chat_endpoint(
     from app.services.mcp_client import MCPClient
     from app.services.ai_engine import call_ai_freetext
     from app.services.ai_context import get_rag_context
-    from app.models.chat import VibeChatSession, VibeChatMessage
+    from app.models.chat import VibeChatSession, VibeChatMessage, VibesMemory
     
     # 0. RESOLVE OR CREATE CHAT SESSION IN DB
     active_session = None
@@ -726,6 +726,168 @@ async def chat_feedback_endpoint(
         "message": "Feedback dan pembelajaran toko berhasil disimpan.",
         "vote": payload.vote
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 🔒 FONDASI KEAMANAN & KONTRAK CHAT-DRIVEN CRUD (PHASE 3)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class ActionExecutionItem(BaseModel):
+    product_id: int | None = None
+    custom_product_name: str | None = None
+    qty: float
+    unit_price: float
+    subtotal: float | None = None
+    unit: str | None = None
+
+class ActionExecutionRequest(BaseModel):
+    action_type: str  # "CREATE_PURCHASE_PLAN_DRAFT" atau "REGISTER_PRODUCT_ALIAS"
+    items: list[ActionExecutionItem] | None = None
+    planned_date: date | None = None
+    notes: str | None = None
+    raw_pattern: str | None = None
+    corrected_value: str | None = None
+    entity_type: str = "product_name"
+
+@router.post("/action/execute")
+def execute_insight_action(
+    payload: ActionExecutionRequest,
+    db: Session = Depends(deps.get_db),
+    current_user: deps.CurrentUser = None
+):
+    """
+    Fondasi Keamanan & Kontrak Chat-Driven CRUD (Phase 3).
+    Mengeksekusi mutasi data bisnis yang diajukan oleh VibesChat Intelligence dengan
+    prinsip Human-in-the-Loop & RBAC Protection.
+    """
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    
+    # 🔒 RBAC Guard: Hanya Owner/Superuser dan Admin/Manager yang berhak memutasi data toko
+    from app.models.user import UserRole
+    if not current_user.is_superuser and current_user.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        raise HTTPException(
+            status_code=403,
+            detail="Akses Ditolak: Hanya Pemilik Toko (Owner/Admin) yang berwenang mengeksekusi aksi mutasi data."
+        )
+
+    tenant_id = current_user.tenant_id
+
+    # 🛒 Handler 1: CREATE_PURCHASE_PLAN_DRAFT (Simpan Rencana Belanja ke Draf PO)
+    if payload.action_type.upper() in ["CREATE_PURCHASE_PLAN_DRAFT", "CREATE_DRAFT_PO"]:
+        from app.models.inventory import PurchasePlan, PurchasePlanItem
+        
+        if not payload.items or len(payload.items) == 0:
+            raise HTTPException(status_code=400, detail="Daftar item belanja tidak boleh kosong.")
+        
+        total_amount = Decimal("0.00")
+        plan_date = payload.planned_date or date.today()
+
+        new_plan = PurchasePlan(
+            tenant_id=tenant_id,
+            status="DRAFT",
+            total_amount=Decimal("0.00"),
+            planned_date=plan_date,
+            created_at=date.today()
+        )
+        db.add(new_plan)
+        db.flush() # Ambil new_plan.id
+
+        created_items_count = 0
+        for itm in payload.items:
+            qty_dec = Decimal(str(itm.qty))
+            price_dec = Decimal(str(itm.unit_price))
+            subtotal_dec = Decimal(str(itm.subtotal)) if itm.subtotal is not None else (qty_dec * price_dec)
+            total_amount += subtotal_dec
+
+            plan_item = PurchasePlanItem(
+                purchase_plan_id=new_plan.id,
+                product_id=itm.product_id,
+                custom_product_name=itm.custom_product_name,
+                qty=qty_dec,
+                unit_price=price_dec,
+                subtotal=subtotal_dec,
+                is_purchased=False
+            )
+            db.add(plan_item)
+            created_items_count += 1
+
+        new_plan.total_amount = total_amount
+        db.commit()
+        db.refresh(new_plan)
+
+        logger.info(f"[ActionExecute] Draf PurchasePlan #{new_plan.id} dibuat oleh user {current_user.id} ({created_items_count} items, Total: {total_amount})")
+
+        return {
+            "success": True,
+            "action_type": "CREATE_PURCHASE_PLAN_DRAFT",
+            "message": f"Draf Rencana Belanja #{new_plan.id} berhasil disimpan dengan {created_items_count} item.",
+            "data": {
+                "plan_id": new_plan.id,
+                "total_amount": float(new_plan.total_amount),
+                "items_count": created_items_count,
+                "status": "DRAFT",
+                "redirect_url": "/procurement/orders"
+            }
+        }
+
+    # 🏷️ Handler 2: REGISTER_PRODUCT_ALIAS (Daftarkan Alias Cepat Baru ke OCR Mappings)
+    elif payload.action_type.upper() in ["REGISTER_PRODUCT_ALIAS", "REGISTER_ALIAS"]:
+        from app.models.ocr import OCRAliasMapping
+        
+        if not payload.raw_pattern or not payload.corrected_value:
+            raise HTTPException(status_code=400, detail="raw_pattern dan corrected_value wajib diisi.")
+        
+        clean_raw = payload.raw_pattern.strip().lower()
+        clean_corrected = payload.corrected_value.strip()
+
+        # Cek apakah pemetaan sudah ada
+        existing_alias = db.query(OCRAliasMapping).filter(
+            or_(OCRAliasMapping.tenant_id == tenant_id, OCRAliasMapping.tenant_id.is_(None)),
+            OCRAliasMapping.entity_type == payload.entity_type,
+            func.lower(OCRAliasMapping.raw_pattern) == clean_raw
+        ).first()
+
+        if existing_alias:
+            existing_alias.corrected_value = clean_corrected
+            existing_alias.confidence_count += 1
+            db.commit()
+            return {
+                "success": True,
+                "action_type": "REGISTER_PRODUCT_ALIAS",
+                "message": f"Alias '{clean_raw}' diperbarui ke '{clean_corrected}'.",
+                "data": {
+                    "raw_pattern": clean_raw,
+                    "corrected_value": clean_corrected,
+                    "confidence_count": existing_alias.confidence_count
+                }
+            }
+        else:
+            new_alias = OCRAliasMapping(
+                tenant_id=tenant_id,
+                entity_type=payload.entity_type,
+                raw_pattern=clean_raw,
+                corrected_value=clean_corrected,
+                confidence_count=1
+            )
+            db.add(new_alias)
+            db.commit()
+            return {
+                "success": True,
+                "action_type": "REGISTER_PRODUCT_ALIAS",
+                "message": f"Alias '{clean_raw}' berhasil didaftarkan ke '{clean_corrected}'.",
+                "data": {
+                    "raw_pattern": clean_raw,
+                    "corrected_value": clean_corrected,
+                    "confidence_count": 1
+                }
+            }
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Tipe aksi '{payload.action_type}' tidak didukung sistem."
+        )
 
 
 

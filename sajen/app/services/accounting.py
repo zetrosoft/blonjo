@@ -65,7 +65,16 @@ def check_tax_exempt_via_vector(items: list) -> bool:
         print(f"Error checking tax exemption: {e}")
         return True # Safe fallback
 
-def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: TransactionType, amount: Decimal, is_tax_exempt: bool = True, payment_method: str | None = None, description: str | None = None) -> list[dict]:
+def get_auto_journal_entries(
+    db: Session, 
+    tenant_id: int | None, 
+    trans_type: TransactionType, 
+    amount: Decimal, 
+    is_tax_exempt: bool = True, 
+    payment_method: str | None = None, 
+    description: str | None = None,
+    due_date: date | None = None
+) -> list[dict]:
     """
     Generate dynamic journal entries based on JournalMapping master data.
     Supports multi-pair (compound) entries and specialized logic for CASH_COUNT.
@@ -247,7 +256,12 @@ def get_auto_journal_entries(db: Session, tenant_id: int | None, trans_type: Tra
             target_account = account
             
             # 1. Redirect Tempo / Kredit / Hutang
-            if payment_method and payment_method.lower() in ["hutang", "tempo", "kredit"]:
+            is_tempo = (
+                (payment_method and any(kw in payment_method.lower() for kw in ["hutang", "tempo", "kredit", "utang", "credit", "invoice", "tagihan"]))
+                or bool(due_date)
+                or bool(re.search(r'\b(tempo|hutang|utang|kredit|credit|invoice|tagihan|top\s*\d+)\b', (description or "").lower()))
+            )
+            if is_tempo:
                 if account and (account.code.startswith("1-11") or account.code.startswith("1-10")):
                     if trans_type == TransactionType.PURCHASE and line.side == "credit":
                         # Redirect to Hutang Dagang (2-1101)
@@ -1575,3 +1589,294 @@ def adjust_summary_sales_hpp(db: Session, tenant_id: int, transaction_date: date
             db.add(JournalEntry(transaction_id=summary_tx.id, account_id=inv_acc.id, debit=Decimal('0.00'), credit=cogs_amount))
 
         db.flush()
+
+
+def fulfill_sales_delivery(
+    db: Session,
+    transaction_id: int,
+    tenant_id: int,
+    delivery_date: date,
+    user_id: int | None = None,
+    notes: str | None = None
+) -> Transaction:
+    """
+    Eksekusi Serah Terima Barang untuk Transaksi Penjualan (SALES / Customer Deposit):
+    Sesuai PSAK 72:
+    1. Pengakuan Pendapatan & Penghapusan Liabilitas Uang Muka:
+       - Debit: Akun 2-1402 (Uang Muka Penjualan)
+       - Kredit: Akun 4-1101 (Pendapatan Penjualan)
+    2. Pemotongan Stok Fisik & Pengakuan Beban Pokok Penjualan (HPP):
+       - Potong stok produk dari inventory_logs (log_type = 'out') jika stock maintenance aktif.
+       - Debit: Akun 5-1101 (HPP)
+       - Kredit: Akun 1-1301 (Persediaan Barang Dagang)
+    3. Update transaksi asal:
+       - payment_method = "lunas"
+       - due_date = None
+    """
+    from app.services.inventory import InventoryService
+    from app.services.pricing_engine import PricingEngine
+    from app.models.setting import AppSetting
+
+    original_tx = db.query(Transaction).filter(
+        Transaction.id == transaction_id,
+        Transaction.tenant_id == tenant_id
+    ).with_for_update().first()
+
+    if not original_tx:
+        raise HTTPException(status_code=404, detail="Transaksi penjualan tidak ditemukan.")
+
+    if original_tx.transaction_type != TransactionType.SALES:
+        raise HTTPException(status_code=400, detail="Hanya transaksi penjualan yang dapat diserahterimakan barangnya.")
+
+    if original_tx.payment_method == "lunas":
+        raise HTTPException(status_code=400, detail="Barang untuk transaksi penjualan ini sudah diserahterimakan / lunas.")
+
+    # 1. Cari atau buat Akun 2-1402 (Uang Muka Penjualan)
+    dp_acc = db.query(Account).filter(
+        Account.code == "2-1402",
+        or_(Account.tenant_id == tenant_id, Account.tenant_id == None)
+    ).first()
+    if not dp_acc:
+        dp_acc = Account(
+            tenant_id=tenant_id,
+            code="2-1402",
+            name="Uang Muka Penjualan",
+            account_type=AccountType.LIABILITY
+        )
+        db.add(dp_acc)
+        db.flush()
+
+    # 2. Cari Akun 4-1101 (Pendapatan Penjualan)
+    rev_acc = db.query(Account).filter(
+        Account.code == "4-1101",
+        or_(Account.tenant_id == tenant_id, Account.tenant_id == None)
+    ).first()
+    if not rev_acc:
+        rev_acc = db.query(Account).filter(
+            Account.code == "4-1000",
+            or_(Account.tenant_id == tenant_id, Account.tenant_id == None)
+        ).first()
+    if not rev_acc:
+        rev_acc = Account(
+            tenant_id=tenant_id,
+            code="4-1101",
+            name="Pendapatan Penjualan",
+            account_type=AccountType.REVENUE
+        )
+        db.add(rev_acc)
+        db.flush()
+
+    # 3. Cari Akun HPP (5-1101) dan Persediaan (1-1301)
+    hpp_acc = db.query(Account).filter(
+        Account.code == "5-1101",
+        or_(Account.tenant_id == tenant_id, Account.tenant_id == None)
+    ).first()
+    if not hpp_acc:
+        hpp_acc = db.query(Account).filter(
+            Account.code == "5-1000",
+            or_(Account.tenant_id == tenant_id, Account.tenant_id == None)
+        ).first()
+
+    inv_acc = db.query(Account).filter(
+        Account.code == "1-1301",
+        or_(Account.tenant_id == tenant_id, Account.tenant_id == None)
+    ).first()
+    if not inv_acc:
+        inv_acc = db.query(Account).filter(
+            Account.code == "1-3000",
+            or_(Account.tenant_id == tenant_id, Account.tenant_id == None)
+        ).first()
+
+    amount = original_tx.total_amount
+
+    # 4. Buat Transaksi Realisasi Serah Terima Barang & Pengakuan Pendapatan
+    ref_no = _generate_reference_no(db, TransactionType.SALES, tenant_id)
+    desc = f"Serah Terima Barang & Realisasi Pendapatan Nota {original_tx.reference_no or original_tx.id}"
+    if notes:
+        desc += f" ({notes})"
+
+    delivery_tx = Transaction(
+        tenant_id=tenant_id,
+        transaction_date=delivery_date,
+        reference_no=ref_no,
+        description=desc,
+        transaction_type=TransactionType.SALES,
+        status=TransactionStatus.POSTED,
+        total_amount=amount,
+        payment_method="lunas",
+        created_by_id=user_id
+    )
+    db.add(delivery_tx)
+    db.flush()
+
+    # Debit: Uang Muka Penjualan (2-1402) -> Menghapus liabilitas titipan pelanggan
+    db.add(JournalEntry(
+        transaction_id=delivery_tx.id,
+        account_id=dp_acc.id,
+        debit=amount,
+        credit=Decimal("0.00")
+    ))
+
+    # Kredit: Pendapatan Penjualan (4-1101) -> Mengakui pendapatan terealisasi
+    db.add(JournalEntry(
+        transaction_id=delivery_tx.id,
+        account_id=rev_acc.id,
+        debit=Decimal("0.00"),
+        credit=amount
+    ))
+
+    # 5. Potong Stok Fisik & Hitung HPP dari item barang pada transaksi asal
+    rate_setting = db.query(AppSetting).filter(AppSetting.tenant_id == tenant_id, AppSetting.key == "default_cogs_rate").first()
+    cogs_rate = Decimal(rate_setting.value) / 100 if rate_setting else Decimal('0.85')
+
+    total_cost_for_hpp = Decimal("0.00")
+    if original_tx.inventory_logs:
+        for log in original_tx.inventory_logs:
+            # Potong stok (static maintenance)
+            InventoryService.update_stock_after_transaction(
+                db=db,
+                tenant_id=tenant_id,
+                product_id=log.product_id,
+                qty_change=log.quantity,
+                log_type="out"
+            )
+            # Hitung HPP
+            current_hpp = PricingEngine.get_current_hpp(db, tenant_id, log.product_id)
+            if current_hpp == 0 and log.price_per_unit:
+                current_hpp = (Decimal(str(log.price_per_unit)) * cogs_rate).quantize(Decimal('0.00'))
+            total_cost_for_hpp += (Decimal(str(log.quantity)) * current_hpp)
+
+    # 6. Buat Jurnal HPP jika ada nilai pokok
+    if total_cost_for_hpp > 0 and hpp_acc and inv_acc:
+        db.add(JournalEntry(
+            transaction_id=delivery_tx.id,
+            account_id=hpp_acc.id,
+            debit=total_cost_for_hpp,
+            credit=Decimal("0.00")
+        ))
+        db.add(JournalEntry(
+            transaction_id=delivery_tx.id,
+            account_id=inv_acc.id,
+            debit=Decimal("0.00"),
+            credit=total_cost_for_hpp
+        ))
+
+    # 7. Update status transaksi asal menjadi lunas & hapus due_date
+    original_tx.payment_method = "lunas"
+    original_tx.due_date = None
+
+    db.commit()
+    db.refresh(original_tx)
+    return original_tx
+
+
+def settle_purchase_payable(
+    db: Session,
+    transaction_id: int,
+    payment_account_id: int,
+    payment_date: date,
+    user_id: int,
+    tenant_id: int,
+    po_reference_or_id: str | None = None
+) -> Transaction:
+    """
+    Eksekusi Pelunasan Utang Pembelian (PURCHASE) secara atomik.
+    Juga menyinkronkan status PurchasePlan (PO) terkait menjadi 'COMPLETED'.
+    """
+    from app.models.inventory import PurchasePlan
+
+    original_tx = db.query(Transaction).filter(
+        Transaction.id == transaction_id,
+        Transaction.tenant_id == tenant_id
+    ).with_for_update().first()
+
+    if not original_tx:
+        raise HTTPException(status_code=404, detail="Transaksi pembelian tidak ditemukan.")
+
+    if original_tx.transaction_type != TransactionType.PURCHASE:
+        raise HTTPException(status_code=400, detail="Hanya transaksi pembelian yang dapat dilunasi utangnya.")
+
+    if original_tx.payment_method == "lunas":
+        raise HTTPException(status_code=400, detail="Transaksi pembelian ini sudah lunas.")
+
+    utang_account = db.query(Account).filter(
+        Account.tenant_id == tenant_id,
+        Account.code == "2-1101"
+    ).first()
+    if not utang_account:
+        raise HTTPException(status_code=400, detail="Akun Utang Usaha (2-1101) tidak ditemukan untuk tenant ini.")
+
+    pay_account = db.query(Account).filter(
+        Account.tenant_id == tenant_id,
+        Account.id == payment_account_id
+    ).first()
+    if not pay_account or not pay_account.code.startswith("1-11"):
+        raise HTTPException(status_code=400, detail="Akun pembayaran harus berupa Kas/Bank.")
+
+    amount = original_tx.total_amount
+
+    # Guard: Periksa apakah nota asal memiliki kewajiban riil (Kredit pada Akun Utang 2-1101 atau 2-11xx)
+    has_ap_credit = any(
+        entry.account.code.startswith("2-11") and entry.credit > 0
+        for entry in original_tx.entries if entry.account
+    )
+
+    if not has_ap_credit:
+        # Nota asal ini dulunya dijurnal tunai (Kredit Kas), bukan kredit Utang Usaha.
+        # Cukup tandai 'lunas' dan hapus due_date tanpa memotong kas untuk kedua kalinya.
+        original_tx.payment_method = "lunas"
+        original_tx.due_date = None
+        db.commit()
+        db.refresh(original_tx)
+        return original_tx
+
+    # Buat Transaksi Pembayaran Utang
+    ref_no = _generate_reference_no(db, TransactionType.EXPENSE, tenant_id)
+    pay_tx = Transaction(
+        tenant_id=tenant_id,
+        transaction_date=payment_date,
+        reference_no=ref_no,
+        description=f"Pelunasan Utang untuk Nota {original_tx.reference_no or original_tx.id}",
+        transaction_type=TransactionType.EXPENSE,
+        status=TransactionStatus.POSTED,
+        total_amount=amount,
+        payment_method="cash",
+        created_by_id=user_id
+    )
+    db.add(pay_tx)
+    db.flush()
+
+    # Debit: Utang Usaha (mengurangi utang)
+    db.add(JournalEntry(
+        transaction_id=pay_tx.id,
+        account_id=utang_account.id,
+        debit=amount,
+        credit=Decimal("0.00")
+    ))
+
+    # Credit: Kas/Bank (mengurangi kas)
+    db.add(JournalEntry(
+        transaction_id=pay_tx.id,
+        account_id=pay_account.id,
+        debit=Decimal("0.00"),
+        credit=amount
+    ))
+
+    original_tx.payment_method = "lunas"
+
+    # Sinkronisasi status Purchase Plan jika ada PO terkait
+    target_ref = po_reference_or_id or original_tx.reference_no
+    if target_ref and target_ref.isdigit():
+        po = db.query(PurchasePlan).filter(
+            PurchasePlan.id == int(target_ref),
+            PurchasePlan.tenant_id == tenant_id
+        ).first()
+        if po:
+            po.status = "COMPLETED"
+            for it in po.items:
+                it.is_purchased = True
+
+    db.commit()
+    db.refresh(original_tx)
+    return original_tx
+

@@ -917,6 +917,7 @@ function ListRencanaBelanja() {
 
 export default function RecommendedPurchase() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'restock' | 'plans'>('restock');
 
   return (
@@ -927,7 +928,15 @@ export default function RecommendedPurchase() {
           <h1 className="text-2xl font-bold tracking-tight text-zinc-900 dark:text-zinc-50">{t('mc_rp_title')}</h1>
           <p className="text-sm text-muted-foreground mt-1">{t('mc_rp_subtitle')}</p>
         </div>
+        <Button
+          onClick={() => navigate('/material-control/purchase-plan')}
+          className="gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl shadow-md h-9 px-4"
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          {t('mc_plan_form_title')} (SmartNote AI)
+        </Button>
       </div>
+
 
       {/* Tabs */}
       <div className="flex gap-1 p-1 bg-zinc-100 dark:bg-zinc-900 rounded-lg w-fit">

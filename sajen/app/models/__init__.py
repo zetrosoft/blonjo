@@ -10,3 +10,4 @@ from app.models.ocr import OCRTask, OCRFeedback, OCRAliasMapping, SupplierParsin
 from app.models.log import AIParsingLog, AIModelQuota
 from app.models.cashflow import CashflowProjectionSnapshot
 from app.models.chat import VibeChatSession, VibeChatMessage
+from app.models.notification import Notification

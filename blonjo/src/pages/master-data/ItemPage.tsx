@@ -262,11 +262,12 @@ export default function ItemPage() {
     );
   };
 
-  const filteredItems = items.filter(item => 
-    item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.sku.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    item.category.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const searchTokens = searchQuery.toLowerCase().split(/\s+/).filter(Boolean);
+  const filteredItems = items.filter(item => {
+    if (searchTokens.length === 0) return true;
+    const target = `${item.name} ${item.sku} ${item.category}`.toLowerCase();
+    return searchTokens.every(token => target.includes(token));
+  });
 
   const handleAdd = () => {
     setEditingItem(null);

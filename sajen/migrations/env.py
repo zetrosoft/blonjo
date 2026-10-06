@@ -21,7 +21,10 @@ import app.models.log
 config = context.config
 
 # Overwrite the database URL from our config
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+alembic_db_url = settings.DATABASE_URL
+if alembic_db_url.startswith("postgresql://"):
+    alembic_db_url = alembic_db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+config.set_main_option("sqlalchemy.url", alembic_db_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

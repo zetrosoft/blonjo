@@ -152,7 +152,7 @@ export default function SupplierPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchClient('/inventory/contacts?contact_type=supplier');
+      const data = await fetchClient('/inventory/contacts?contact_type=supplier&limit=1000');
       if (Array.isArray(data)) {
         const mappedSuppliers: Supplier[] = data.map((supp: any) => ({
           id: supp.id,
@@ -265,12 +265,12 @@ export default function SupplierPage() {
     }
   };
 
-  const filteredSuppliers = suppliers.filter(supplier => 
-    supplier.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    supplier.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    supplier.phone.includes(searchQuery) ||
-    supplier.address.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const searchTokens = searchQuery.toLowerCase().split(/\s+/).filter(Boolean);
+  const filteredSuppliers = suppliers.filter(supplier => {
+    if (searchTokens.length === 0) return true;
+    const target = `${supplier.name} ${supplier.code} ${supplier.phone} ${supplier.address}`.toLowerCase();
+    return searchTokens.every(token => target.includes(token));
+  });
   const paginatedItems = filteredSuppliers.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
 

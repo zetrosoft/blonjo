@@ -95,3 +95,34 @@ class CashflowProjectionItem(BaseModel):
     accuracy_outflow_pct: Optional[float] = None
     is_capital_inflow: bool = False
     capital_inflow_amount: Decimal = Decimal("0.00")
+
+# ─── SMART PLAN PARSING SCHEMAS ─────────────────────────────────────
+
+class SmartPlanParseRequest(BaseModel):
+    text: str
+
+class SmartPlanParsedItem(BaseModel):
+    product_id: Optional[int] = None
+    custom_product_name: Optional[str] = None
+    product_name: str
+    sku: str
+    unit: str
+    qty: float
+    unit_price: float
+    subtotal: float
+    supplier_contact_id: Optional[int] = None
+    supplier_name: Optional[str] = None
+    last_purchase_date: Optional[str] = None
+    last_purchase_qty: Optional[float] = None
+    avg_interval_days: float = 7.0
+    elapsed_days: int = 0
+    daily_burn_rate: float = 0.0
+    estimated_stock: float = 0.0
+    depletion_status: str = "NORMAL"
+
+class SmartPlanParseResponse(BaseModel):
+    planned_date: str
+    contact_name: Optional[str] = None
+    summary_budget: float
+    items: List[SmartPlanParsedItem]
+

@@ -858,71 +858,24 @@ def autocomplete_semantic(
     if not query_words:
         return []
 
-    # 3. Validasi apakah ada kata dalam kueri yang merupakan awalan dari kosakata produk kita
-    is_valid_product_query = any(
-        any(v_w.startswith(q_w) for v_w in product_vocabulary) 
-        for q_w in query_words
-    )
-    if not is_valid_product_query:
-        # Jika kata yang diketik tidak bermakna nama barang yang kita miliki, jangan tampilkan dropdown
-        return []
+    # 3. Fast Text Matching (mencakup 100% produk di database, baik punya embedding maupun tidak)
+    from sqlalchemy import and_, or_
+    text_conditions = [
+        or_(Product.name.ilike(f"%{w}%"), Product.sku.ilike(f"%{w}%"))
+        for w in query_words
+    ]
+    matched_products = session.query(Product).filter(
+        and_(*text_conditions),
+        ~Product.name.ilike('potongan%')
+    ).limit(req.limit).all()
 
-    try:
-        query_vector = get_onnx_embedding(query_text, is_query=True)
-    except Exception as e:
-        logger.error(f"Local ONNX embedding generation failed: {e}")
-        query_vector = get_embedding(query_text)
-        
-    if not query_vector:
-        logger.warning("Embedding generation failed, falling back to standard text matching.")
-        products = session.query(Product).filter(
-            (Product.name.ilike(f"%{query_text}%") | Product.sku.ilike(f"%{query_text}%")) &
-            (~Product.name.ilike('potongan%'))
-        ).limit(req.limit).all()
-        
-        response_items = []
-        for p in products:
-            p_words = re.findall(r'\w+', p.name.lower())
-            # Validasi pencocokan awalan kata
-            if any(any(p_w.startswith(q_w) for p_w in p_words) for q_w in query_words):
-                response_items.append(
-                    AutocompleteItemResponse(
-                        id=p.id,
-                        sku=p.sku,
-                        name=p.name,
-                        category_id=p.category_id,
-                        current_stock=InventoryService.get_stock_level(session, current_user.tenant_id, p.id),
-                        sell_price=p.tenant_prices[0].amount if p.tenant_prices else 0.0,
-                        score=1.0
-                    )
-                )
-        return response_items
-
-    results = (
-        session.query(Product, Product.embedding.cosine_distance(query_vector).label("distance"))
-        .filter(Product.embedding.isnot(None))
-        .filter(~Product.name.ilike('potongan%'))
-        .order_by("distance")
-        .limit(req.limit * 3) # Ambil lebih banyak kandidat untuk difilter kata secara lokal
-        .all()
-    )
-
+    seen_ids = set()
     response_items = []
-    for p, distance in results:
-        score = 1.0 - float(distance) if distance is not None else 0.0
-        
-        # Batasi skor kemiripan agar tidak memunculkan hasil acak yang terlalu jauh
-        if score < 0.35:
-            continue
-            
-        p_words = re.findall(r'\w+', p.name.lower())
-        # Pastikan setidaknya ada kecocokan awalan salah satu kata pemicu
-        if not any(any(p_w.startswith(q_w) for p_w in p_words) for q_w in query_words):
-            continue
 
+    for p in matched_products:
+        seen_ids.add(p.id)
         stock = InventoryService.get_stock_level(session, current_user.tenant_id, p.id)
         sell_price = p.tenant_prices[0].amount if p.tenant_prices else 0.0
-        
         response_items.append(
             AutocompleteItemResponse(
                 id=p.id,
@@ -931,13 +884,47 @@ def autocomplete_semantic(
                 category_id=p.category_id,
                 current_stock=stock,
                 sell_price=sell_price,
-                score=score
+                score=1.0
             )
         )
-        if len(response_items) >= req.limit:
-            break
 
-    return response_items
+    # 4. Jika slot masih tersedia, coba perkaya dengan Semantic Search
+    if len(response_items) < req.limit:
+        query_vector = None
+        try:
+            query_vector = get_onnx_embedding(query_text, is_query=True)
+        except Exception:
+            pass
+
+        if query_vector:
+            sem_results = (
+                session.query(Product, Product.embedding.cosine_distance(query_vector).label("distance"))
+                .filter(Product.embedding.isnot(None))
+                .filter(~Product.name.ilike('potongan%'))
+                .filter(~Product.id.in_(list(seen_ids)) if seen_ids else True)
+                .order_by("distance")
+                .limit(req.limit - len(response_items))
+                .all()
+            )
+            for p, distance in sem_results:
+                score = 1.0 - float(distance) if distance is not None else 0.0
+                if score < 0.30:
+                    continue
+                stock = InventoryService.get_stock_level(session, current_user.tenant_id, p.id)
+                sell_price = p.tenant_prices[0].amount if p.tenant_prices else 0.0
+                response_items.append(
+                    AutocompleteItemResponse(
+                        id=p.id,
+                        sku=p.sku,
+                        name=p.name,
+                        category_id=p.category_id,
+                        current_stock=stock,
+                        sell_price=sell_price,
+                        score=score
+                    )
+                )
+
+    return response_items[:req.limit]
 
 @router.get("/logs", response_model=List[InventoryLogResponse])
 def get_inventory_logs(
@@ -961,11 +948,19 @@ def get_contacts(
     session: SessionDep,
     current_user: CurrentUser,
     contact_type: Optional[str] = None,
-    skip: int = 0, limit: int = 50
+    search: Optional[str] = None,
+    skip: int = 0, limit: int = 1000
 ):
     query = session.query(Contact).filter(Contact.tenant_id == current_user.tenant_id)
     if contact_type:
         query = query.filter(Contact.contact_type == contact_type)
+    if search:
+        s = f"%{search.strip()}%"
+        query = query.filter(
+            Contact.name.ilike(s) | 
+            Contact.phone.ilike(s) | 
+            Contact.address.ilike(s)
+        )
     
     contacts = query.order_by(Contact.name).offset(skip).limit(limit).all()
     

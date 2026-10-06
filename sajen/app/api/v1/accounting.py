@@ -15,6 +15,7 @@ from app.schemas.accounting import (
     JournalMappingCreate,
     JournalMappingResponse,
     TransactionPayoffRequest,
+    TransactionDeliveryRequest,
     TransactionRescheduleRequest,
     CompassSummaryResponse,
     MarketIntelligenceItem,
@@ -32,7 +33,9 @@ from app.services.accounting import (
     delete_transaction_draft,
     get_dashboard_summary,
     get_auto_journal_entries,
-    check_tax_exempt_via_vector
+    check_tax_exempt_via_vector,
+    fulfill_sales_delivery,
+    settle_purchase_payable
 )
 from app.services.ai_context import get_rag_context
 from app.services.ai_engine import call_ai_text
@@ -203,6 +206,16 @@ async def parse_transaction_note(
                 )
                 if is_summary:
                     final_parsed_data["items"] = []
+                    items = []
+
+            # ── DETERMINISTIC OVERRIDE: Item Structure & Supplier Guardrail ──
+            has_real_items = len(items) > 0 and any(float(it.get("unit_price") or 0) > 0 or float(it.get("qty") or 0) > 0 for it in items)
+            is_purchase_signal = any(kw in low_text for kw in ["faktur", "supplier", "suplier", "distributor", "vendor", "pt.", "cv.", "ud.", "toko grosir", "agen", "kulak", "belanja", "beli", "stok"])
+            
+            # Jika ada rincian item barang dan indikasi faktur/supplier, kunci ke purchase (cegah salah jadi penerimaan/DP)
+            if has_real_items and (is_purchase_signal or not is_operational_revenue):
+                if not is_retur_keyword and final_parsed_data.get("transaction_type") in ["sales", "income", "customer_deposit", "manual", None]:
+                    final_parsed_data["transaction_type"] = "purchase"
 
             # ── SAPU BERSIH: Sanitize Supplier Name & Description ──
             # 1. Ekstrak nama toko dari JSON mentah dalam input teks jika ada
@@ -451,6 +464,7 @@ async def parse_transaction_note(
                 Decimal(str(t_amount)),
                 is_tax_exempt=is_exempt,
                 payment_method=final_parsed_data.get("payment_method"),
+                due_date=final_parsed_data.get("due_date"),
                 description=text
             )
     except Exception as e:
@@ -912,13 +926,22 @@ def get_transactions(
     current_user: CurrentUser,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    search: Optional[str] = None,
     skip: int = 0,
-    limit: int = 100
+    limit: int = 1000
 ):
     """
-    Retrieve recent transactions for the active tenant.
+    Retrieve transactions for the active tenant with multi-criteria deep search.
     """
-    query = session.query(Transaction).filter(
+    from app.models.inventory import InventoryLog, Product, Contact
+    from sqlalchemy import or_, cast, String
+    from sqlalchemy.orm import selectinload
+
+    query = session.query(Transaction).options(
+        selectinload(Transaction.entries),
+        selectinload(Transaction.inventory_logs).selectinload(InventoryLog.product),
+        selectinload(Transaction.inventory_logs).selectinload(InventoryLog.contact)
+    ).filter(
         Transaction.tenant_id == current_user.tenant_id
     )
 
@@ -938,10 +961,30 @@ def get_transactions(
         except ValueError:
             pass
 
-    return query.order_by(
+    if search:
+        s = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                Transaction.description.ilike(s),
+                Transaction.reference_no.ilike(s),
+                cast(Transaction.total_amount, String).ilike(s),
+                Transaction.inventory_logs.any(
+                    or_(
+                        InventoryLog.product.has(Product.name.ilike(s)),
+                        InventoryLog.contact.has(Contact.name.ilike(s))
+                    )
+                )
+            )
+        )
+
+    base_query = query.order_by(
         Transaction.transaction_date.desc(),
         Transaction.id.desc()
-    ).offset(skip).limit(limit).all()
+    ).offset(skip)
+
+    if limit and limit > 0:
+        return base_query.limit(limit).all()
+    return base_query.all()
 
 @router.get("/transactions/general-ledger", response_model=GeneralLedgerResponse)
 def get_general_ledger(
@@ -1173,6 +1216,31 @@ def delete_transaction_api(
     invalidate_tenant_cache(current_user.tenant_id, ["products", "dashboard", "insights", "material_control"])
     return None
 
+@router.post("/transactions/{transaction_id}/deliver", response_model=TransactionResponse)
+def deliver_transaction_api(
+    transaction_id: int,
+    req: TransactionDeliveryRequest,
+    session: SessionDep,
+    current_user: User = Depends(check_role([UserRole.ADMIN, UserRole.MANAGER]))
+):
+    """
+    Eksekusi Serah Terima Barang untuk Transaksi Penjualan (SALES / Customer Deposit).
+    Mengakui pendapatan (PSAK 72), memotong stok fisik, membukukan HPP, dan menutup status kewajiban DP.
+    """
+    from app.core.redis import invalidate_tenant_cache
+
+    tx = fulfill_sales_delivery(
+        db=session,
+        transaction_id=transaction_id,
+        tenant_id=current_user.tenant_id,
+        delivery_date=req.delivery_date,
+        user_id=current_user.id,
+        notes=req.notes
+    )
+    invalidate_tenant_cache(current_user.tenant_id, ["products", "dashboard", "insights", "material_control", "transactions"])
+    return tx
+
+
 @router.post("/transactions/{transaction_id}/pay", response_model=TransactionResponse)
 def pay_transaction_api(
     transaction_id: int,
@@ -1181,12 +1249,10 @@ def pay_transaction_api(
     current_user: User = Depends(check_role([UserRole.ADMIN, UserRole.MANAGER]))
 ):
     """
-    Pay off an outstanding purchase debt.
-    Updates the payment method to 'lunas' and creates a matching payment journal.
+    Pay off an outstanding purchase debt or handle sales delivery gracefully.
     """
     from fastapi import HTTPException
-    from app.models.accounting import JournalEntry
-    from app.services.accounting import _generate_reference_no
+    from app.core.redis import invalidate_tenant_cache
     
     # 1. Fetch original transaction
     original_tx = session.query(Transaction).filter(
@@ -1196,67 +1262,32 @@ def pay_transaction_api(
     
     if not original_tx:
         raise HTTPException(status_code=404, detail="Transaction not found.")
-        
-    if original_tx.transaction_type != TransactionType.PURCHASE:
-        raise HTTPException(status_code=400, detail="Only purchase transactions can be paid off.")
-        
-    # 2. Get Utang Usaha Account (2-1101)
-    utang_account = session.query(Account).filter(
-        Account.tenant_id == current_user.tenant_id,
-        Account.code == "2-1101"
-    ).first()
-    if not utang_account:
-        raise HTTPException(status_code=400, detail="Akun Utang Usaha (2-1101) tidak ditemukan untuk tenant ini.")
-        
-    # 3. Get Payment Account (Kas / Bank)
-    pay_account = session.query(Account).filter(
-        Account.tenant_id == current_user.tenant_id,
-        Account.id == payoff.payment_account_id
-    ).first()
-    if not pay_account or not pay_account.code.startswith("1-11"):
-        raise HTTPException(status_code=400, detail="Akun pembayaran harus berupa Kas/Bank.")
-        
-    amount = original_tx.total_amount
-    
-    # 4. Create Payoff Transaction Journal
-    ref_no = _generate_reference_no(session, TransactionType.EXPENSE, current_user.tenant_id)
-    pay_tx = Transaction(
-        tenant_id=current_user.tenant_id,
-        transaction_date=payoff.payment_date,
-        reference_no=ref_no,
-        description=f"Pelunasan Utang untuk Nota {original_tx.reference_no or original_tx.id}",
-        transaction_type=TransactionType.EXPENSE,
-        status="posted",
-        total_amount=amount,
-        payment_method="cash",
-        created_by_id=current_user.id
+
+    # Graceful Routing: If this is a SALES transaction (e.g. DP / Customer Deposit),
+    # reroute directly to fulfill_sales_delivery instead of failing with 400!
+    if original_tx.transaction_type == TransactionType.SALES:
+        tx = fulfill_sales_delivery(
+            db=session,
+            transaction_id=transaction_id,
+            tenant_id=current_user.tenant_id,
+            delivery_date=payoff.payment_date,
+            user_id=current_user.id,
+            notes="Pelunasan via Serah Terima Barang"
+        )
+        invalidate_tenant_cache(current_user.tenant_id, ["products", "dashboard", "insights", "material_control", "transactions"])
+        return tx
+
+    # Settle standard Purchase Payable
+    tx = settle_purchase_payable(
+        db=session,
+        transaction_id=transaction_id,
+        payment_account_id=payoff.payment_account_id,
+        payment_date=payoff.payment_date,
+        user_id=current_user.id,
+        tenant_id=current_user.tenant_id
     )
-    session.add(pay_tx)
-    session.flush()
-    
-    # Debit: Utang Usaha (reducing debt)
-    entry_debit = JournalEntry(
-        transaction_id=pay_tx.id,
-        account_id=utang_account.id,
-        debit=amount,
-        credit=0.00
-    )
-    # Credit: Kas/Bank (reducing cash)
-    entry_credit = JournalEntry(
-        transaction_id=pay_tx.id,
-        account_id=pay_account.id,
-        debit=0.00,
-        credit=amount
-    )
-    session.add(entry_debit)
-    session.add(entry_credit)
-    
-    # 5. Mark original transaction as paid
-    original_tx.payment_method = "lunas"
-    
-    session.commit()
-    session.refresh(original_tx)
-    return original_tx
+    invalidate_tenant_cache(current_user.tenant_id, ["products", "dashboard", "insights", "material_control", "transactions"])
+    return tx
 
 
 @router.post("/transactions/{transaction_id}/reschedule", response_model=TransactionResponse)

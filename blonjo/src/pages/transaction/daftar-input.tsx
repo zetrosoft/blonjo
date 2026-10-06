@@ -57,7 +57,7 @@ export default function DaftarInputPage() {
   const loadTransactions = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await fetchClient(`/finance/transactions?start_date=${fromDate}&end_date=${toDate}&limit=250`);
+      const data = await fetchClient(`/finance/transactions?start_date=${fromDate}&end_date=${toDate}&limit=1000`);
       setTransactions(Array.isArray(data) ? data : []);
     } catch (err: any) {
       toast.error(t('toast_err_load_transactions', { error: err.message || err }));
@@ -157,17 +157,21 @@ export default function DaftarInputPage() {
     );
   };
 
-  const filteredTransactions = useMemo(() =>
-    transactions
-      .filter(tx => {
-        const matchSearch = (tx.reference_no?.toLowerCase() || '').includes(searchQuery.toLowerCase())
-          || tx.description.toLowerCase().includes(searchQuery.toLowerCase());
-        const matchType = typeFilter === 'all' || tx.transaction_type === typeFilter;
-        const matchDate = tx.transaction_date >= fromDate && tx.transaction_date <= toDate;
-        return matchSearch && matchType && matchDate;
-      }),
-    [transactions, searchQuery, typeFilter, fromDate, toDate],
-  );
+  const filteredTransactions = useMemo(() => {
+    const tokens = searchQuery.toLowerCase().split(/\s+/).filter(Boolean);
+    return transactions.filter(tx => {
+      const matchType = typeFilter === 'all' || tx.transaction_type === typeFilter;
+      const matchDate = tx.transaction_date >= fromDate && tx.transaction_date <= toDate;
+      if (!matchType || !matchDate) return false;
+      if (tokens.length === 0) return true;
+
+      const logProducts = (tx.inventory_logs || []).map(l => l.product?.name || '').join(' ');
+      const logContacts = (tx.inventory_logs || []).map(l => l.contact?.name || '').join(' ');
+      const searchTarget = `${tx.reference_no || ''} ${tx.description || ''} ${tx.contact?.name || ''} ${logProducts} ${logContacts} ${tx.total_amount || ''}`.toLowerCase();
+
+      return tokens.every(tok => searchTarget.includes(tok));
+    });
+  }, [transactions, searchQuery, typeFilter, fromDate, toDate]);
   const paginatedItems = filteredTransactions.slice((currentPage - 1) * rowsPerPage, currentPage * rowsPerPage);
 
 

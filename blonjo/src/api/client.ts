@@ -1,7 +1,7 @@
 import axios, { AxiosError, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import { useAuthStore } from '../store/auth';
-
-const API_URL = (import.meta as any).env?.VITE_API_URL || 'http://localhost:8005/api/v1';
+const API_URL = (import.meta as any).env?.VITE_API_URL || 
+  ((import.meta as any).env?.PROD ? '/api/v1' : 'http://localhost:8005/api/v1');
 
 // Custom error class to maintain compatibility if needed, though axios has its own
 export class ApiError extends Error {

@@ -104,7 +104,7 @@ export function SmartTextarea({
         if (Array.isArray(prodData)) {
           setProducts(prodData);
         }
-        const suppData: any = await apiClient.get('/inventory/contacts?contact_type=supplier&limit=200');
+        const suppData: any = await apiClient.get('/inventory/contacts?contact_type=supplier&limit=1000');
         if (Array.isArray(suppData)) {
           setSuppliers(suppData);
         }
@@ -157,7 +157,7 @@ export function SmartTextarea({
     const beforeTrigger = value.substring(0, matchStart);
     const after = value.substring(matchEnd);
     let replacement = '';
-    if (supplierName.toLowerCase().startsWith(triggerWord.toLowerCase())) {
+    if (!triggerWord || supplierName.toLowerCase().startsWith(triggerWord.toLowerCase())) {
       replacement = supplierName;
     } else {
       replacement = triggerWord + ' ' + supplierName;
@@ -185,80 +185,49 @@ export function SmartTextarea({
     
     let match: RegExpExecArray | null = null;
     
-    if ((match = itemRegex1.exec(textBeforeCursor)) !== null) {
-      const query = match[1].toLowerCase();
-      const matchStart = cursor - match[0].length;
-      const matchEnd = cursor;
-      
-      if (searchTimeoutRef.current) {
-        clearTimeout(searchTimeoutRef.current);
-      }
-      searchTimeoutRef.current = setTimeout(async () => {
-        try {
-          const res: any = await apiClient.post('/inventory/autocomplete-semantic', { query, limit: 50 });
-          if (Array.isArray(res)) {
-            const mapped = res.map(p => ({
-              type: 'product' as const,
-              id: p.id,
-              name: p.name,
-              current_stock: Number(p.current_stock),
-              matchStart,
-              matchEnd
-            }));
-            setSuggestions(mapped);
-            setActiveIndex(0);
-            if (ref.current) {
-              setCoords(getCaretCoordinates(ref.current, cursor));
-            }
-          }
-        } catch (err) {
-          console.error('Failed to fetch semantic suggestions:', err);
-        }
-      }, 150);
-      return;
-    }
-    
-    if ((match = itemRegex2.exec(textBeforeCursor)) !== null) {
-      const query = match[1].toLowerCase();
+    // 1. Explicit Item Trigger: \query or item query
+    if ((match = itemRegex1.exec(textBeforeCursor)) !== null || (match = itemRegex2.exec(textBeforeCursor)) !== null) {
+      const query = (match[1] || '').toLowerCase().trim();
       const matchStart = cursor - match[0].trimStart().length;
       const matchEnd = cursor;
       
-      if (searchTimeoutRef.current) {
-        clearTimeout(searchTimeoutRef.current);
+      const qTokens = query.split(/\s+/).filter(Boolean);
+      const filtered = products.filter(p => {
+        if (qTokens.length === 0) return true;
+        const target = `${p.name} ${p.sku || ''}`.toLowerCase();
+        return qTokens.every(tok => target.includes(tok));
+      }).slice(0, 30).map(p => ({
+        type: 'product' as const,
+        id: p.id,
+        name: p.name,
+        current_stock: Number(p.current_stock || p.stock || 0),
+        matchStart,
+        matchEnd
+      }));
+
+      setSuggestions(filtered);
+      setActiveIndex(0);
+      if (ref.current) {
+        setCoords(getCaretCoordinates(ref.current, cursor));
       }
-      searchTimeoutRef.current = setTimeout(async () => {
-        try {
-          const res: any = await apiClient.post('/inventory/autocomplete-semantic', { query, limit: 50 });
-          if (Array.isArray(res)) {
-            const mapped = res.map(p => ({
-              type: 'product' as const,
-              id: p.id,
-              name: p.name,
-              current_stock: Number(p.current_stock),
-              matchStart,
-              matchEnd
-            }));
-            setSuggestions(mapped);
-            setActiveIndex(0);
-            if (ref.current) {
-              setCoords(getCaretCoordinates(ref.current, cursor));
-            }
-          }
-        } catch (err) {
-          console.error('Failed to fetch semantic suggestions:', err);
-        }
-      }, 150);
       return;
     }
     
+    // 2. Explicit Supplier Trigger: toko query, supplier query, di query
     if ((match = supplierRegex.exec(textBeforeCursor)) !== null) {
       const triggerWord = match[1];
-      const query = match[2].toLowerCase();
+      const query = (match[2] || '').toLowerCase().trim();
       const matchStart = cursor - match[0].trimStart().length;
       const matchEnd = cursor;
       
+      const qTokens = query.split(/\s+/).filter(Boolean);
       const filtered = suppliers
-        .filter(s => s.name.toLowerCase().includes(query))
+        .filter(s => {
+          if (qTokens.length === 0) return true;
+          const target = `${s.name} ${s.code || ''}`.toLowerCase();
+          return qTokens.every(tok => target.includes(tok));
+        })
+        .slice(0, 30)
         .map(s => ({
           type: 'supplier' as const,
           id: s.id,
@@ -275,48 +244,55 @@ export function SmartTextarea({
       return;
     }
 
-    // Fallback: Trigger hanya jika kata sudah lengkap (diakhiri spasi) dan minimal 2 karakter
-    const lastWordRegex = /(?:^|[\s\n])([^\s\\]+)\s$/;
+    // 3. Fallback Instant Match: Kata terakhir (minimal 2 huruf) langsung dicocokkan ke Supplier & Produk
+    const lastWordRegex = /(?:^|[\s\n])([^\s\\]{2,})$/;
     if ((match = lastWordRegex.exec(textBeforeCursor)) !== null) {
-      const query = match[1].toLowerCase();
-      const stopWords = ['toko', 'supplier', 'di', 'item', 'dan', 'yang', 'untuk', 'dengan', 'pada', 'dari', 'ke', 'beli', 'jual', 'bayar', 'kas'];
+      const query = match[1].toLowerCase().trim();
+      const stopWords = ['dan', 'yang', 'untuk', 'dengan', 'pada', 'dari', 'ke', 'beli', 'jual', 'bayar', 'kas', 'rp', 'ribu', 'item', 'lunas', 'tempo', 'nota'];
       if (query.length >= 2 && !stopWords.includes(query)) {
-        const matchStart = cursor - match[1].length - 1;
+        const matchStart = cursor - match[1].length;
         const matchEnd = cursor;
         
-        if (searchTimeoutRef.current) {
-          clearTimeout(searchTimeoutRef.current);
-        }
-        searchTimeoutRef.current = setTimeout(async () => {
-          try {
-            const res: any = await apiClient.post('/inventory/autocomplete-semantic', { query, limit: 50 });
-            if (Array.isArray(res) && res.length > 0) {
-              const mapped = res.map(p => ({
-                type: 'product' as const,
-                id: p.id,
-                name: p.name,
-                current_stock: Number(p.current_stock),
-                matchStart,
-                matchEnd
-              }));
-              setSuggestions(mapped);
-              setActiveIndex(0);
-              if (ref.current) {
-                setCoords(getCaretCoordinates(ref.current, cursor));
-              }
-            } else {
-              setSuggestions([]);
-            }
-          } catch (err) {
-            console.error('Failed to fetch semantic suggestions:', err);
+        // Cek supplier yang cocok
+        const matchedSuppliers = suppliers
+          .filter(s => s.name.toLowerCase().includes(query))
+          .slice(0, 8)
+          .map(s => ({
+            type: 'supplier' as const,
+            id: s.id,
+            name: s.name,
+            trigger: '',
+            matchStart,
+            matchEnd
+          }));
+
+        // Cek produk yang cocok
+        const matchedProducts = products
+          .filter(p => p.name.toLowerCase().includes(query) || (p.sku && p.sku.toLowerCase().includes(query)))
+          .slice(0, 20)
+          .map(p => ({
+            type: 'product' as const,
+            id: p.id,
+            name: p.name,
+            current_stock: Number(p.current_stock || p.stock || 0),
+            matchStart,
+            matchEnd
+          }));
+
+        const combined = [...matchedSuppliers, ...matchedProducts];
+        if (combined.length > 0) {
+          setSuggestions(combined);
+          setActiveIndex(0);
+          if (ref.current) {
+            setCoords(getCaretCoordinates(ref.current, cursor));
           }
-        }, 150);
-        return;
+          return;
+        }
       }
     }
     
     setSuggestions([]);
-  }, [suppliers]);
+  }, [suppliers, products]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const ta = e.currentTarget;

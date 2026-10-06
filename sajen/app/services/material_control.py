@@ -1195,3 +1195,339 @@ def get_projection_accuracy(db: Session, tenant_id: int, days: int = 30) -> List
         })
 
     return result
+
+
+# ─── SMART NOTE PURCHASE PLAN PARSER & DEPLETION ESTIMATOR ─────────
+
+def parse_smart_purchase_plan(db: Session, tenant_id: int, text: str) -> dict:
+    """
+    Parse free-form / voice SmartNote for shopping plan.
+    Grounds entities to the tenant's actual purchase history.
+    Applies the 10% depletion rule:
+      At each purchase cycle (avg interval), stock remaining is assumed to be 10% of last purchase qty.
+      Daily burn rate = (0.90 * Q_last) / avg_interval_days
+      Estimated stock on plan date = max(0, Q_last - (daily_burn_rate * elapsed_days))
+      Recommended restock qty = max(1, Q_last - estimated_stock) [or Q_last if stock <= 10%]
+    """
+    import re
+    from datetime import date, timedelta
+    from sqlalchemy import func
+    from app.models.inventory import Product, ProductCategory, InventoryLog, TenantInventory, Contact
+    from app.models.accounting import Transaction, TransactionType
+
+
+    today = date.today()
+    clean_text = text.lower().strip()
+
+    # 1. Parse Planned Target Date
+    planned_date = today + timedelta(days=1) # default besok
+    if "lusa" in clean_text:
+        planned_date = today + timedelta(days=2)
+    elif "hari ini" in clean_text or "sekarang" in clean_text:
+        planned_date = today
+    elif "besok" in clean_text:
+        planned_date = today + timedelta(days=1)
+    else:
+        # Check weekday
+        days_of_week = ["senin", "selasa", "rabu", "kamis", "jumat", "sabtu", "minggu"]
+        for idx, day_name in enumerate(days_of_week):
+            if f"hari {day_name}" in clean_text or f" {day_name}" in clean_text:
+                current_weekday = today.weekday() # 0 = Senin
+                diff = idx - current_weekday
+                if diff <= 0:
+                    diff += 7
+                planned_date = today + timedelta(days=diff)
+                break
+        
+        # Check date numbers like "tanggal 15" or "tgl 15" or "2026-10-05"
+        iso_match = re.search(r'\b(20\d{2}-\d{2}-\d{2})\b', clean_text)
+        if iso_match:
+            try:
+                planned_date = date.fromisoformat(iso_match.group(1))
+            except Exception:
+                pass
+        else:
+            tgl_match = re.search(r'(?:tanggal|tgl)\s*(\d{1,2})', clean_text)
+            if tgl_match:
+                day_num = int(tgl_match.group(1))
+                if 1 <= day_num <= 31:
+                    try:
+                        target_m = today.month if day_num >= today.day else (today.month % 12 + 1)
+                        target_y = today.year if (day_num >= today.day or today.month < 12) else (today.year + 1)
+                        planned_date = date(target_y, target_m, day_num)
+                    except Exception:
+                        pass
+
+    # 2. Extract Supplier Mention (if any, e.g. "toko sumber rejeki", "supplier pak budi")
+    detected_supplier = None
+    supp_match = re.search(r'(?:toko|supplier|suplier)\s+([a-zA-Z0-9\s]+?)(?=(?:untuk|buat|pembelian|beli|item|barang|,|\.|$))', text, re.IGNORECASE)
+    if supp_match:
+        supp_name_candidate = supp_match.group(1).strip()
+        if len(supp_name_candidate) >= 3:
+            detected_supplier = db.query(Contact).filter(
+                Contact.tenant_id == tenant_id,
+                Contact.contact_type == 'supplier',
+                Contact.name.ilike(f"%{supp_name_candidate}%")
+            ).first()
+
+    # 3. Clean and Segment Commodities/Items from Text
+    item_section = re.sub(
+        r'^(?:buat|tolong\s+buatkan|buatkan)?\s*(?:rencana\s+belanja|purchase\s+plan|list\s+belanja|belanjaan|kulakan)?\s*(?:untuk|buat)?\s*(?:besok|lusa|hari\s+\w+|tanggal\s+\d+|tgl\s+\d+)?\s*(?:untuk|buat)?\s*(?:pembelian|beli|kulakan|order|restock|barang|item)?\s*(?:di\s+toko\s+[\w\s]+|dari\s+supplier\s+[\w\s]+)?\s*(?:yaitu|berupa|:|adalah)?',
+        '',
+        text,
+        flags=re.IGNORECASE
+    ).strip()
+
+    raw_tokens = re.split(r'[,;\n]+|\s+dan\s+|\s+serta\s+|\s+&\s+', item_section, flags=re.IGNORECASE)
+    
+    extracted_items = []
+    seen_product_ids = set()
+
+    # Category normalization mappings
+    category_alias_map = {
+        "beras": "BERAS",
+        "gula": "GULA",
+        "gandum": "GANDUM",
+        "terigu": "GANDUM",
+        "tepung": "GANDUM",
+        "minyak": "MINYAK",
+        "telur": "TELUR",
+        "telor": "TELUR",
+        "mie": "MIE INSTANT",
+        "indomie": "MIE INSTANT",
+        "rokok": "ROKOK",
+        "sabun": "SABUN CUCI",
+        "detergen": "SABUN CUCI",
+        "kopi": "TEH & KOPI",
+        "teh": "TEH & KOPI",
+        "snack": "SNACK",
+        "bumbu": "BUMBU",
+    }
+
+    for raw_tok in raw_tokens:
+        tok = raw_tok.strip()
+        if not tok or len(tok) < 2:
+            continue
+        
+        clean_tok = re.sub(r'^(?:pembelian|beli|tambah|ambil|order|restock|item)\s+', '', tok, flags=re.IGNORECASE).strip()
+        if not clean_tok:
+            continue
+
+        explicit_qty = None
+        explicit_unit = None
+        qty_match = re.search(r'(\d+(?:[.,]\d+)?)\s*([a-zA-Z]+)?', clean_tok)
+        cleaned_search_keyword = clean_tok
+        if qty_match:
+            try:
+                explicit_qty = float(qty_match.group(1).replace(',', '.'))
+                explicit_unit = qty_match.group(2) if qty_match.group(2) else None
+                cleaned_search_keyword = clean_tok.replace(qty_match.group(0), '').strip()
+                if not cleaned_search_keyword:
+                    cleaned_search_keyword = clean_tok
+            except Exception:
+                pass
+
+        matched_products_list = []
+        kw_lower = cleaned_search_keyword.lower().strip()
+
+        # Check if keyword corresponds to a Category or Commodity Group
+        target_category_name = None
+        for alias_k, cat_name in category_alias_map.items():
+            if alias_k == kw_lower or (len(kw_lower) <= len(alias_k) + 3 and alias_k in kw_lower):
+                target_category_name = cat_name
+                break
+
+        # A. If it's a Category (e.g. BERAS, GANDUM, GULA, MINYAK)
+        if target_category_name and explicit_qty is None:
+            # 1. Find the latest purchase transaction containing items in this category
+            latest_cat_tx = db.query(Transaction).join(InventoryLog).join(Product).join(Product.category).filter(
+                Transaction.tenant_id == tenant_id,
+                Transaction.transaction_type == TransactionType.PURCHASE,
+                InventoryLog.log_type == 'in',
+                func.upper(ProductCategory.name) == target_category_name.upper()
+            ).order_by(Transaction.transaction_date.desc()).first()
+
+            if latest_cat_tx:
+                # Find all products in this category that were purchased in this latest transaction
+                cat_prods = db.query(Product).join(InventoryLog).filter(
+                    InventoryLog.transaction_id == latest_cat_tx.id,
+                    InventoryLog.log_type == 'in'
+                ).all()
+
+                for cp in cat_prods:
+                    if cp.category and cp.category.name.upper() == target_category_name.upper():
+                        matched_products_list.append(cp)
+
+            if not matched_products_list or len(matched_products_list) < 2:
+                # Fallback: get other recently purchased products in this category (up to 3 items)
+                recent_prods = db.query(Product).join(InventoryLog).join(Transaction).join(Product.category).filter(
+                    Transaction.tenant_id == tenant_id,
+                    Transaction.transaction_type == TransactionType.PURCHASE,
+                    InventoryLog.log_type == 'in',
+                    func.upper(ProductCategory.name) == target_category_name.upper()
+                ).order_by(Transaction.transaction_date.desc()).limit(3).all()
+                for rp in recent_prods:
+                    if rp not in matched_products_list:
+                        matched_products_list.append(rp)
+
+        # B. If it's a sub-commodity group like "bawang"
+        elif "bawang" in kw_lower and explicit_qty is None:
+            # Look for recent purchases of bawang merah / bawang kating
+            bawang_prods = db.query(Product).join(InventoryLog).join(Transaction).filter(
+                Transaction.tenant_id == tenant_id,
+                Transaction.transaction_type == TransactionType.PURCHASE,
+                InventoryLog.log_type == 'in',
+                Product.name.ilike("%bawang%")
+            ).order_by(Transaction.transaction_date.desc()).all()
+            
+            # Deduplicate by product id and keep top 2-3 variants (e.g. Bawang Kating & Bawang Merah Brebes)
+            added_ids = set()
+            for bp in bawang_prods:
+                if bp.id not in added_ids and "goreng" not in bp.name.lower() and "bubuk" not in bp.name.lower():
+                    matched_products_list.append(bp)
+                    added_ids.add(bp.id)
+                if len(matched_products_list) >= 2:
+                    break
+
+        # C. Single item / specific product search (or when explicit qty was given)
+        if not matched_products_list:
+            past_single = db.query(Product).join(InventoryLog).join(Transaction).filter(
+                Transaction.tenant_id == tenant_id,
+                Transaction.transaction_type == TransactionType.PURCHASE,
+                InventoryLog.log_type == 'in',
+                Product.name.ilike(f"%{cleaned_search_keyword}%")
+            ).order_by(Transaction.transaction_date.desc()).first()
+
+            if past_single:
+                matched_products_list.append(past_single)
+            else:
+                generic_single = db.query(Product).filter(
+                    Product.name.ilike(f"%{cleaned_search_keyword}%")
+                ).first()
+                if generic_single:
+                    matched_products_list.append(generic_single)
+
+        # D. Process all matched products for this token
+        if matched_products_list:
+            for matched_product in matched_products_list:
+                if matched_product.id in seen_product_ids:
+                    continue
+                seen_product_ids.add(matched_product.id)
+
+                # Query all past purchase logs for this product to compute interval and last stats
+                logs = db.query(InventoryLog).join(Transaction).filter(
+                    Transaction.tenant_id == tenant_id,
+                    Transaction.transaction_type == TransactionType.PURCHASE,
+                    InventoryLog.product_id == matched_product.id,
+                    InventoryLog.log_type == 'in'
+                ).order_by(Transaction.transaction_date.asc()).all()
+
+                last_log = logs[-1] if logs else None
+                last_date = last_log.transaction.transaction_date if last_log and last_log.transaction else (today - timedelta(days=7))
+                last_qty = float(last_log.quantity) if last_log and last_log.quantity else 10.0
+                last_price = float(last_log.price_per_unit) if last_log and last_log.price_per_unit else 0.0
+
+                supplier_id = None
+                supplier_name = detected_supplier.name if detected_supplier else None
+                if not supplier_name and last_log:
+                    if getattr(last_log, 'contact_id', None) and last_log.contact:
+                        supplier_id = last_log.contact_id
+                        supplier_name = last_log.contact.name
+                    elif last_log.transaction and getattr(last_log.transaction, 'contact', None) and last_log.transaction.contact:
+                        supplier_id = last_log.transaction.contact.id
+                        supplier_name = last_log.transaction.contact.name
+
+                distinct_dates = sorted(list({log.transaction.transaction_date for log in logs if log.transaction and log.transaction.transaction_date}))
+                if len(distinct_dates) >= 2:
+                    total_span = (distinct_dates[-1] - distinct_dates[0]).days
+                    avg_interval = max(1.0, float(total_span) / float(len(distinct_dates) - 1))
+                else:
+                    avg_interval = 7.0
+                    if supplier_id:
+                        supp = db.query(Contact).get(supplier_id)
+                        if supp and supp.sales_visit_interval and supp.sales_visit_interval > 0:
+                            avg_interval = float(supp.sales_visit_interval)
+
+                elapsed_days = max(0, (planned_date - last_date).days)
+
+                # 10% Depletion Rule calculations
+                consumed_in_cycle = 0.90 * last_qty
+                daily_burn_rate = consumed_in_cycle / avg_interval
+                estimated_stock = max(0.0, last_qty - (daily_burn_rate * elapsed_days))
+
+                if explicit_qty is not None and len(matched_products_list) == 1:
+                    recommended_qty = explicit_qty
+                else:
+                    if estimated_stock <= (0.10 * last_qty):
+                        recommended_qty = last_qty
+                    else:
+                        recommended_qty = max(1.0, last_qty - estimated_stock)
+
+                unit_lower = (explicit_unit or matched_product.base_unit or "pcs").lower()
+                if unit_lower in ["sak", "box", "dus", "pcs", "pack", "karton", "lusin"]:
+                    recommended_qty = float(round(recommended_qty))
+                    if recommended_qty < 1:
+                        recommended_qty = 1.0
+                else:
+                    recommended_qty = round(recommended_qty, 2)
+
+                if estimated_stock <= (0.10 * last_qty):
+                    status_depletion = "CRITICAL"
+                elif estimated_stock <= (0.30 * last_qty):
+                    status_depletion = "LOW"
+                else:
+                    status_depletion = "NORMAL"
+
+                subtotal = recommended_qty * last_price
+
+                extracted_items.append({
+                    "product_id": matched_product.id,
+                    "custom_product_name": None,
+                    "product_name": matched_product.name,
+                    "sku": matched_product.sku or "N/A",
+                    "unit": explicit_unit or matched_product.base_unit or "pcs",
+                    "qty": recommended_qty,
+                    "unit_price": last_price,
+                    "subtotal": subtotal,
+                    "supplier_contact_id": supplier_id,
+                    "supplier_name": supplier_name or "-",
+                    "last_purchase_date": last_date.isoformat(),
+                    "last_purchase_qty": last_qty,
+                    "avg_interval_days": round(avg_interval, 1),
+                    "elapsed_days": elapsed_days,
+                    "daily_burn_rate": round(daily_burn_rate, 2),
+                    "estimated_stock": round(estimated_stock, 2),
+                    "depletion_status": status_depletion
+                })
+        else:
+            # Custom item fallback
+            extracted_items.append({
+                "product_id": None,
+                "custom_product_name": clean_tok,
+                "product_name": clean_tok,
+                "sku": "CUSTOM",
+                "unit": explicit_unit or "pcs",
+                "qty": explicit_qty if explicit_qty is not None else 1.0,
+                "unit_price": 0.0,
+                "subtotal": 0.0,
+                "supplier_contact_id": detected_supplier.id if detected_supplier else None,
+                "supplier_name": detected_supplier.name if detected_supplier else "-",
+                "last_purchase_date": None,
+                "last_purchase_qty": None,
+                "avg_interval_days": 7.0,
+                "elapsed_days": 0,
+                "daily_burn_rate": 0.0,
+                "estimated_stock": 0.0,
+                "depletion_status": "NEW"
+            })
+
+
+    total_budget = sum(it["subtotal"] for it in extracted_items)
+
+    return {
+        "planned_date": planned_date.isoformat(),
+        "contact_name": detected_supplier.name if detected_supplier else None,
+        "summary_budget": total_budget,
+        "items": extracted_items
+    }
+

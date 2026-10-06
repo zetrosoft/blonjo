@@ -202,6 +202,10 @@ class TransactionPayoffRequest(BaseModel):
     payment_account_id: int
     payment_date: date
 
+class TransactionDeliveryRequest(BaseModel):
+    delivery_date: date = Field(default_factory=date.today)
+    notes: Optional[str] = None
+
 class TransactionRescheduleRequest(BaseModel):
     due_date: date
 

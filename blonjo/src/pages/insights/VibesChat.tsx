@@ -15,8 +15,9 @@ import {
   Minimize2, ZoomIn, ZoomOut, RotateCcw, AlertTriangle, Image as ImageIcon,
   X, Pin, PinOff, Bookmark, BookmarkCheck, Lightbulb, Wallet, GitBranch,
   Layers, TrendingUp, Tag, Package, ExternalLink, Compass, Zap, MoreVertical,
-  Pencil, Database
+  Pencil, Database, ShoppingCart, CheckCircle2, PackageCheck, ShieldAlert
 } from 'lucide-react';
+import { useAuthStore } from '../../store/auth';
 import { UniversalPlotlyChart } from '../../components/UniversalPlotlyChart';
 import { Button } from '../../components/ui/button';
 import {
@@ -40,6 +41,7 @@ interface Message {
   prompt_used?: string;
   actions?: Array<{ label: string; path: string }>;
   suggestions?: string[];
+  action_proposal?: ActionProposalData | null;
 }
 
 interface ChatSession {
@@ -229,36 +231,6 @@ const GraphCodeBlock = React.memo<{ language: string; code: string }>(({ languag
               <Share2 className="w-3.5 h-3.5" />
               {titleMap[language.toLowerCase()] || language.toUpperCase()}
             </span>
-
-            {/* Switch Tab Visual / Code (Khusus Mermaid) */}
-            {isMermaid && !renderError && (
-              <div className="flex items-center bg-slate-200/70 dark:bg-slate-800/70 p-0.5 rounded-lg ml-1.5">
-                <button
-                  type="button"
-                  onClick={() => setViewMode('visual')}
-                  className={`flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-md transition-all ${
-                    viewMode === 'visual'
-                      ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                  }`}
-                >
-                  <Eye className="w-3 h-3" />
-                  <span>Visual</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('code')}
-                  className={`flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-md transition-all ${
-                    viewMode === 'code'
-                      ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-xs'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200'
-                  }`}
-                >
-                  <Code className="w-3 h-3" />
-                  <span>Kode</span>
-                </button>
-              </div>
-            )}
           </div>
 
           {/* Action Toolbar */}
@@ -353,14 +325,9 @@ const GraphCodeBlock = React.memo<{ language: string; code: string }>(({ languag
             )}
 
             {renderError ? (
-              <div className="w-full p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 space-y-2 text-xs">
-                <div className="flex items-center gap-1.5 font-semibold">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>Tidak dapat menampilkan visual diagram (sintaks output tidak kompatibel).</span>
-                </div>
-                <pre className="p-2.5 rounded-lg bg-slate-900 text-emerald-300 font-mono text-[11px] overflow-x-auto">
-                  {code}
-                </pre>
+              <div className="w-full p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 shrink-0" />
+                <span className="font-semibold">Visualisasi diagram sedang dioptimalkan...</span>
               </div>
             ) : svgContent ? (
               <div 
@@ -371,9 +338,9 @@ const GraphCodeBlock = React.memo<{ language: string; code: string }>(({ languag
             ) : null}
           </div>
         ) : (
-          <pre className="p-3.5 text-xs font-mono overflow-x-auto text-emerald-600 dark:text-emerald-300 bg-slate-900">
-            {code}
-          </pre>
+          <div className="p-4 flex items-center justify-center text-xs text-muted-foreground bg-slate-50/40 dark:bg-slate-950/40">
+            <span>Visualisasi diagram interaktif</span>
+          </div>
         )}
       </div>
 
@@ -526,6 +493,200 @@ const extractSuggestions = (content: string): { cleanContent: string; suggestion
   return { cleanContent, suggestions };
 };
 
+export interface ActionProposalData {
+  action_type: string;
+  title: string;
+  total_amount?: number;
+  items_count?: number;
+  items?: Array<{
+    product_id?: number;
+    custom_product_name?: string;
+    qty: number;
+    unit_price: number;
+    subtotal?: number;
+  }>;
+}
+
+// Helper: Extract Action Proposal from message content
+const extractActionProposal = (content: string): { cleanContent: string; proposal: ActionProposalData | null } => {
+  if (!content) return { cleanContent: '', proposal: null };
+  const match = /<!--\s*ACTION_PROPOSAL\s*-->([\s\S]*?)(?:<!--\s*\/?ACTION_PROPOSAL\s*-->|$)/i.exec(content);
+  if (!match) {
+    const fallbackClean = content.replace(/<!--\s*\/?ACTION_PROPOSAL\s*-->/gi, '').trim();
+    return { cleanContent: fallbackClean, proposal: null };
+  }
+  const cleanContent = content.replace(match[0], '').replace(/<!--\s*\/?ACTION_PROPOSAL\s*-->/gi, '').trim();
+  try {
+    let jsonStr = match[1].trim();
+    const firstBrace = jsonStr.indexOf('{');
+    const lastBrace = jsonStr.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1) {
+      jsonStr = jsonStr.substring(firstBrace, lastBrace + 1);
+      const parsed = JSON.parse(jsonStr);
+      return { cleanContent, proposal: parsed };
+    }
+  } catch (err) {
+    console.warn('[VibesChat] Parse action proposal warning:', err);
+  }
+  return { cleanContent, proposal: null };
+};
+
+const formatRupiah = (val: number): string => {
+  return new Intl.NumberFormat('id-ID', {
+    style: 'currency',
+    currency: 'IDR',
+    maximumFractionDigits: 0
+  }).format(val || 0);
+};
+
+/**
+ * 🎯 INTERACTIVE ACTION CARD (Human-in-the-Loop CRUD Foundation)
+ */
+const InteractiveActionCard: React.FC<{
+  proposal: ActionProposalData;
+  onNavigate: (path: string) => void;
+}> = ({ proposal, onNavigate }) => {
+  const user = useAuthStore((state) => state.user);
+  const canExecute = user?.is_superuser || user?.role === 'admin' || user?.role === 'manager';
+
+  const [status, setStatus] = useState<'idle' | 'executing' | 'success' | 'error'>('idle');
+  const [resultData, setResultData] = useState<any>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handleExecute = async () => {
+    if (!canExecute) return;
+    setStatus('executing');
+    setErrorMessage(null);
+
+    try {
+      const res = await apiClient.post('/api/v1/insights/action/execute', proposal);
+      if (res.data?.success) {
+        setStatus('success');
+        setResultData(res.data.data);
+      } else {
+        setStatus('error');
+        setErrorMessage(res.data?.message || 'Gagal mengeksekusi aksi proposal.');
+      }
+    } catch (err: any) {
+      console.error('[ActionCard] Execution error:', err);
+      setStatus('error');
+      const detailMsg = err.response?.data?.detail || err.message || 'Terjadi kesalahan sistem.';
+      setErrorMessage(detailMsg);
+    }
+  };
+
+  const totalAmount = proposal.total_amount || 0;
+  const itemsCount = proposal.items_count || proposal.items?.length || 0;
+
+  if (status === 'success' && resultData) {
+    return (
+      <div className="w-full my-3 p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 backdrop-blur-md text-emerald-900 dark:text-emerald-100 shadow-sm animate-in fade-in duration-300">
+        <div className="flex items-start gap-3">
+          <div className="p-2 rounded-xl bg-emerald-500 text-white shrink-0 shadow-xs">
+            <CheckCircle2 className="w-5 h-5" />
+          </div>
+          <div className="flex-1 space-y-1">
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-sm text-emerald-800 dark:text-emerald-200">
+                {resultData.status === 'DRAFT' ? 'Draf Rencana Belanja Berhasil Dibuat!' : 'Aksi Berhasil Dijalankan!'}
+              </h4>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 font-semibold">
+                PO #{resultData.plan_id}
+              </span>
+            </div>
+            <p className="text-xs text-emerald-700 dark:text-emerald-300">
+              {itemsCount} item telah tersimpan sebagai draf resmi (Total: {formatRupiah(totalAmount)}). Anda dapat meninjau kuantitas atau menyetujui di modul Pengadaan.
+            </p>
+            <div className="pt-2 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onNavigate(resultData.redirect_url || '/procurement/orders')}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white transition-all shadow-xs hover:scale-102 cursor-pointer"
+              >
+                <span>Buka Menu Pengadaan</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full my-3 p-4 md:p-4.5 rounded-2xl bg-white/95 dark:bg-slate-900/90 border border-indigo-200/90 dark:border-indigo-800/80 shadow-md backdrop-blur-xl animate-in fade-in duration-300">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white shadow-sm shadow-indigo-500/30">
+            <PackageCheck className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/80 px-2 py-0.5 rounded-md border border-indigo-200/60 dark:border-indigo-800/60">
+                Action Proposal (Human-in-the-Loop)
+              </span>
+            </div>
+            <h4 className="font-bold text-sm text-slate-800 dark:text-slate-100 mt-0.5">
+              {proposal.title || 'Simpan Draf Pesanan Pembelian'}
+            </h4>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 sm:text-right">
+          <div className="bg-slate-50 dark:bg-slate-800/60 px-3 py-1.5 rounded-xl border border-slate-200/60 dark:border-slate-700/60">
+            <span className="text-[10px] text-slate-500 dark:text-slate-400 block font-medium">Total Estimasi</span>
+            <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 font-mono">
+              {formatRupiah(totalAmount)}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="pt-3 flex flex-wrap items-center justify-between gap-2.5">
+        <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+          <ShoppingCart className="w-3.5 h-3.5 text-indigo-500" />
+          <span><b>{itemsCount}</b> komoditas siap dimasukkan ke rencana belanja</span>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {canExecute ? (
+            <button
+              type="button"
+              onClick={handleExecute}
+              disabled={status === 'executing'}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl transition-all shadow-sm shadow-indigo-500/20 hover:scale-102 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            >
+              {status === 'executing' ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <span>Menyimpan ke Database...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                  <span>Simpan sebagai Draf PO</span>
+                </>
+              )}
+            </button>
+          ) : (
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-amber-600 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2.5 py-1 rounded-lg">
+              <ShieldAlert className="w-3.5 h-3.5 shrink-0" />
+              <span>Hanya Owner/Admin yang berwenang menyimpan draf</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {status === 'error' && errorMessage && (
+        <div className="mt-2.5 p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
 interface ChatMessageItemProps {
   msg: Message;
   idx: number;
@@ -569,9 +730,10 @@ const ChatMessageItem = React.memo<ChatMessageItemProps>(({
   streamingMsgIndex
 }) => {
   const isUser = msg.role === 'user';
-  const actions = !isUser ? (msg.actions && msg.actions.length > 0 ? msg.actions : extractActions(displayContent).actions) : [];
-  const suggestions = !isUser ? (msg.suggestions && msg.suggestions.length > 0 ? msg.suggestions : extractSuggestions(displayContent).suggestions) : [];
-  const cleanContent = !isUser ? extractActions(extractSuggestions(displayContent).cleanContent).cleanContent : displayContent;
+  const { cleanContent: contentNoProposal, proposal } = !isUser ? extractActionProposal(displayContent) : { cleanContent: displayContent, proposal: null };
+  const actions = !isUser ? (msg.actions && msg.actions.length > 0 ? msg.actions : extractActions(contentNoProposal).actions) : [];
+  const suggestions = !isUser ? (msg.suggestions && msg.suggestions.length > 0 ? msg.suggestions : extractSuggestions(contentNoProposal).suggestions) : [];
+  const cleanContent = !isUser ? extractActions(extractSuggestions(contentNoProposal).cleanContent).cleanContent : displayContent;
 
   return (
     <div className={`flex flex-col gap-2 max-w-4xl mx-auto ${isUser ? 'items-end' : 'items-start'}`}>
@@ -752,6 +914,13 @@ const ChatMessageItem = React.memo<ChatMessageItemProps>(({
           </div>
         )}
       </div>
+ 
+      {/* 🎯 INTERACTIVE ACTION CARD (Fondasi CRUD - Hanya muncul saat ada proposal draf) */}
+      {!isUser && !isStreamingActive && proposal && (
+        <div className="pl-11 pr-2 w-full pt-1 animate-in fade-in duration-300">
+          <InteractiveActionCard proposal={proposal} onNavigate={onNavigate} />
+        </div>
+      )}
 
       {/* 🎯 CLICKABLE ACTION DEEP-LINKS (Aksi Langsung ke Modul Blonjo - Muncul LANGSUNG tanpa menunggu streaming) */}
       {!isUser && actions.length > 0 && (
@@ -1179,10 +1348,30 @@ export default function VibesChat() {
       // Adaptive chunking yang ergonomis & ramah CPU (28ms per tick)
       const chunkSize = totalLen > 1500 ? 24 : (totalLen > 800 ? 14 : (totalLen > 300 ? 8 : 4));
 
+      // ⚡ Smart Streamer Jump: Deteksi seluruh blok visual/grafik/diagram agar tidak di-stream per karakter
+      const visualBlockRanges: Array<{ start: number; end: number }> = [];
+      const blockRegex = /```(?:chart|plotly|mermaid|dot|graphml|cypher)[\s\S]*?```/gi;
+      let blockMatch;
+      while ((blockMatch = blockRegex.exec(targetText)) !== null) {
+        visualBlockRanges.push({
+          start: blockMatch.index,
+          end: blockMatch.index + blockMatch[0].length
+        });
+      }
+
       if (streamingTimerRef.current) clearInterval(streamingTimerRef.current);
 
       streamingTimerRef.current = setInterval(() => {
         charIndex += chunkSize;
+
+        // 🚀 Smart Streamer Jump: Jika kursor masuk ke rentang blok grafik/diagram, lompat langsung ke akhir blok
+        for (const range of visualBlockRanges) {
+          if (charIndex >= range.start && charIndex < range.end) {
+            charIndex = range.end;
+            break;
+          }
+        }
+
         if (charIndex >= totalLen) {
           clearInterval(streamingTimerRef.current);
           streamingTimerRef.current = null;

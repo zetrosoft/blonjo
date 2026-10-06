@@ -83,6 +83,12 @@ export default function Dashboard() {
   const [payoffDate, setPayoffDate] = useState(new Date().toISOString().split('T')[0]);
   const [processingPayoff, setProcessingPayoff] = useState(false);
 
+  // Delivery states (Serah Terima Barang - Sales DP)
+  const [deliveryOpen, setDeliveryOpen] = useState(false);
+  const [deliveryDate, setDeliveryDate] = useState(new Date().toISOString().split('T')[0]);
+  const [deliveryNotes, setDeliveryNotes] = useState('');
+  const [processingDelivery, setProcessingDelivery] = useState(false);
+
   const [chartLoading, setChartLoading] = useState(false);
 
   const loadDashboardData = async (days: number = chartDays, isSilent: boolean = false) => {
@@ -162,9 +168,15 @@ export default function Dashboard() {
     setActionMenuOpen(false);
   };
 
-  const handleOpenPayoff = () => {
+  const handleOpenAction = () => {
     setActionMenuOpen(false);
-    setPayoffOpen(true);
+    if (selectedTx?.transaction_type === 'sales' || selectedTx?.payment_method === 'customer_deposit') {
+      setDeliveryNotes('');
+      setDeliveryDate(new Date().toISOString().split('T')[0]);
+      setDeliveryOpen(true);
+    } else {
+      setPayoffOpen(true);
+    }
   };
 
   const handleConfirmPayoff = async () => {
@@ -186,6 +198,28 @@ export default function Dashboard() {
       toast.error(err.message || "Gagal memproses pelunasan");
     } finally {
       setProcessingPayoff(false);
+    }
+  };
+
+  const handleConfirmDelivery = async () => {
+    if (!selectedTx) return;
+    setProcessingDelivery(true);
+    try {
+      await fetchClient(`/finance/transactions/${selectedTx.id}/deliver`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          delivery_date: deliveryDate,
+          notes: deliveryNotes || undefined
+        })
+      });
+      toast.success("Serah terima barang & pengakuan pendapatan berhasil diproses!");
+      setDeliveryOpen(false);
+      loadDashboardData();
+    } catch (err: any) {
+      toast.error(err.message || "Gagal memproses serah terima barang");
+    } finally {
+      setProcessingDelivery(false);
     }
   };
 
@@ -747,13 +781,68 @@ export default function Dashboard() {
               <ReceiptText className="w-5 h-5 text-sky-500 dark:text-sky-400" />
               Lihat Detail
             </Button>
-            <Button variant="outline" onClick={handleOpenPayoff} className="h-20 flex flex-col gap-2 justify-center items-center font-bold border-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-500/5 hover:bg-emerald-100/50 dark:hover:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
+            <Button variant="outline" onClick={handleOpenAction} className="h-20 flex flex-col gap-2 justify-center items-center font-bold border-emerald-500/20 bg-emerald-50/50 dark:bg-emerald-500/5 hover:bg-emerald-100/50 dark:hover:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">
               <TrendingUp className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               {selectedTx?.payment_method === "customer_deposit" || selectedTx?.transaction_type === "sales" ? "Serah Terima Barang" : "Bayar / Lunasi"}
             </Button>
           </div>
           <DialogFooter className="mt-4">
             <Button variant="ghost" onClick={() => setActionMenuOpen(false)} className="text-xs">{t('btn_close')}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delivery (Serah Terima Barang) Confirm Dialog */}
+      <Dialog open={deliveryOpen} onOpenChange={setDeliveryOpen}>
+        <DialogContent className="sm:max-w-[425px] bg-white dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-850">
+          <DialogHeader>
+            <DialogTitle className="text-md font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+              Konfirmasi Serah Terima Barang
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Pengalihan kendali barang ke pelanggan, pemotongan stok fisik produk, dan pengakuan pendapatan penjualan (PSAK 72).
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-3">
+            <div className="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/40 border border-zinc-200 dark:border-border/30 space-y-1.5">
+              <div className="flex justify-between text-[11px]">
+                <span className="text-muted-foreground">Nota / Keterangan:</span>
+                <span className="font-bold text-zinc-900 dark:text-zinc-200 truncate max-w-[200px]">{selectedTx?.description}</span>
+              </div>
+              <div className="flex justify-between text-[11px]">
+                <span className="text-muted-foreground">Total Nilai Barang:</span>
+                <span className="font-black text-emerald-600 dark:text-emerald-400">{formatRp(selectedTx?.total_amount || 0)}</span>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Tanggal Serah Terima</label>
+              <input 
+                type="date" 
+                value={deliveryDate}
+                onChange={(e) => setDeliveryDate(e.target.value)}
+                className="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs rounded-lg p-2 focus:ring-1 focus:ring-primary outline-none text-zinc-900 dark:text-zinc-100"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-[10px] font-black uppercase tracking-wider text-muted-foreground">Catatan Tambahan (Opsional)</label>
+              <input 
+                type="text" 
+                placeholder="Contoh: Diterima langsung oleh pelanggan"
+                value={deliveryNotes}
+                onChange={(e) => setDeliveryNotes(e.target.value)}
+                className="w-full bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs rounded-lg p-2 focus:ring-1 focus:ring-primary outline-none text-zinc-900 dark:text-zinc-100"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setDeliveryOpen(false)} disabled={processingDelivery} className="text-xs">Batal</Button>
+            <Button onClick={handleConfirmDelivery} disabled={processingDelivery} className="bg-emerald-600 hover:bg-emerald-700 text-xs font-bold text-white">
+              {processingDelivery ? 'Memproses...' : 'Konfirmasi Serah Terima'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

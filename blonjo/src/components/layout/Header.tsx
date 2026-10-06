@@ -4,6 +4,7 @@ import { useAuthStore } from '../../store/auth';
 import { useTranslation } from 'react-i18next';
 import { ModeToggle } from '../theme-toggle';
 import { LanguageToggle } from '../lang-toggle';
+import { NotificationDropdown } from './NotificationDropdown';
 import { LogOut, User, Menu } from 'lucide-react';
 import { useTheme } from '../theme-provider';
 import {
@@ -288,11 +289,12 @@ export function Header({ onMenuClick }: HeaderProps) {
         </Breadcrumb>
       </div>
       
-      <div className="flex items-center space-x-4">
+      <div className="flex items-center space-x-3">
+        <NotificationDropdown />
         <LanguageToggle />
         <ModeToggle />
         
-        <div className="h-8 w-px bg-border mx-2"></div>
+        <div className="h-8 w-px bg-border mx-1"></div>
         
         <div className="flex items-center space-x-3">
           <div className="hidden md:flex flex-col items-end">

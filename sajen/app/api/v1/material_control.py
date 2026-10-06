@@ -8,7 +8,8 @@ from app.models.inventory import PurchasePlan, StockDiscard
 from app.schemas.material_control import (
     PurchasePlanCreate, PurchasePlanResponse,
     StockDiscardCreate, StockDiscardResponse,
-    CashflowProjectionItem, PurchasePlanExecuteRequest, PurchasePlanUpdate
+    CashflowProjectionItem, PurchasePlanExecuteRequest, PurchasePlanUpdate,
+    SmartPlanParseRequest, SmartPlanParseResponse
 )
 from app.services.material_control import (
     get_replenishment_recommendations,
@@ -20,10 +21,29 @@ from app.services.material_control import (
     record_stock_discard,
     generate_cashflow_projection,
     execute_purchase_plan_items,
-    get_projection_accuracy
+    get_projection_accuracy,
+    parse_smart_purchase_plan
 )
 
 router = APIRouter()
+
+# ─── SMART NOTE PLAN PARSING & ESTIMATION ENDPOINT ─────────────────
+
+@router.post("/smart-plan-parse", response_model=SmartPlanParseResponse)
+def parse_smart_note_plan(
+    payload: SmartPlanParseRequest,
+    session: SessionDep,
+    current_user: CurrentUser
+):
+    """
+    Parse natural text SmartNote for purchase plan and compute 10% depletion stock estimates.
+    """
+    return parse_smart_purchase_plan(
+        db=session,
+        tenant_id=current_user.tenant_id,
+        text=payload.text
+    )
+
 
 # ─── AUTO-REPLENISHMENT RECOMMENDATION ENDPOINT ────────────────────
 

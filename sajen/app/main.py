@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.v1 import auth, accounting, ocr, inventory, admin, roles, settings, users, reports, vibe, material_control, insights, dashboard, overview_v2, overview_kinetic
+from app.api.v1 import auth, accounting, ocr, inventory, admin, roles, settings, users, reports, vibe, material_control, insights, dashboard, overview_v2, overview_kinetic, notifications
 from app.core.config import settings as app_settings
 
 app = FastAPI(
@@ -53,6 +53,7 @@ app.include_router(insights.router, prefix="/api/v1/insights", tags=["Business I
 app.include_router(dashboard.router, prefix="/api/v1/dashboard", tags=["Dashboard Overview"])
 app.include_router(overview_v2.router, prefix="/api/v1/overview_v2", tags=["Overview v2"])
 app.include_router(overview_kinetic.router, prefix="/api/v1/overview_kinetic", tags=["Overview Kinetic"])
+app.include_router(notifications.router, prefix="/api/v1/notifications", tags=["Notifications"])
 
 @app.get("/api/health", tags=["System"])
 async def health_check():
